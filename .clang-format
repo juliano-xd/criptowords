@@ -1,41 +1,11 @@
----
-Language: Cpp
-BasedOnStyle: Google
-Standard: Latest
-ColumnLimit: 120
+BasedOnStyle: LLVM
 IndentWidth: 4
-TabWidth: 4
+ColumnLimit: 100
 UseTab: Never
-
-# Alinhamento e quebras de linha
-AlignAfterOpenBracket: Align
-AlignConsecutiveAssignments: None
-AlignConsecutiveDeclarations: None
-AlignEscapedNewlines: Right
-AlignOperands: AlignAfterOperator
-AllowShortBlocksOnASingleLine: Empty
-AllowShortCaseLabelsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: false
-
-# Espaçamento e chaves
 BreakBeforeBraces: Attach
-BreakBeforeBinaryOperators: None
-BreakBeforeTernaryOperators: true
-BreakInheritanceList: BeforeColon
-BreakConstructorInitializers: BeforeColon
-
-# Includes
-SortIncludes: CaseSensitive
-IncludeBlocks: Regroup
-
-# Ponteiros e referências
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+IndentCaseLabels: false
 PointerAlignment: Left
-ReferenceAlignment: Left
-
-# C++20 / C++23
-SpaceBeforeParens: ControlStatements
-SpacesInAngles: Never
-SpacesInSquareBrackets: false
-...
+SpaceAfterCStyleCast: true
+SortIncludes: true

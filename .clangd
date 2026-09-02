@@ -1,8 +1,5 @@
-Index:
-  Background: Skip
 CompileFlags:
   Add:
-    - -ferror-limit=0
     - -std=c++26
     - -O3
     - -march=native
