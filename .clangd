@@ -1,0 +1,9 @@
+CompileFlags:
+  Add:
+    - -std=c++26
+    - -O3
+    - -march=native
+    - -mbmi2
+    - -madx
+    - -Wall
+    - -Wextra
