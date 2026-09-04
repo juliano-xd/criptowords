@@ -239,7 +239,7 @@ class Bip39Deriver {
         uint8_t checksum[32];
         char result[64];
 
-        std::println("Seed byte 0: {:02x}", seed[0]); unsigned int md_len = 64;
+        unsigned int md_len = 64;
         HMAC(EVP_sha512(), "Bitcoin seed", 12, seed, 64, master_node, &md_len);
 
         std::memcpy(priv_key, master_node, 32);

@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (config.num_threads > 1) {
-        BruteForceEngine::run_parallel(config, plan);
+        BruteForceEngine::run_parallel_avx2(config, plan);
     } else {
         BruteForceEngine::run_sequential(config, plan);
     }
