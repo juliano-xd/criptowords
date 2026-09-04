@@ -128,7 +128,7 @@ class SHA256 {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
         0xc67178f2};
 
-    __attribute__((hot, optimize("O3,unroll-loops"))) void process_block(const uint8_t block[64]) {
+     void process_block(const uint8_t block[64]) {
         uint32_t W[64];
         for (int i = 0; i < 16; ++i) {
             W[i] = (uint32_t(block[i * 4]) << 24) | (uint32_t(block[i * 4 + 1]) << 16) |

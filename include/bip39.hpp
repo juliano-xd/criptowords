@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include "../keyhunt/sha3/sha3.h"
+// #include "../keyhunt/sha3/sha3.h"
 
 #ifndef BUILTIN_EXPECT
 #define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
@@ -53,17 +53,17 @@ class Bip39Deriver {
   private:
     static inline bool derive_child_key(const secp256k1_context* ctx, uint8_t* priv_key,
                                         uint8_t* chain_code, uint32_t index) noexcept {
-        array<uint8_t, 37> data;
+        uint8_t data[37] = {0};
         // uint8_t data[37];
 
         if (index & 0x80000000u) {
             data[0] = 0;
-            std::memcpy(data.data() + 1, priv_key, 32);
+            std::memcpy(data + 1, priv_key, 32);
         } else {
             secp256k1_pubkey pub;
             size_t pub_len = 33;
             (void) secp256k1_ec_pubkey_create(ctx, &pub, priv_key);
-            secp256k1_ec_pubkey_serialize(ctx, data.data(), &pub_len, &pub,
+            secp256k1_ec_pubkey_serialize(ctx, data, &pub_len, &pub,
                                           SECP256K1_EC_COMPRESSED);
         }
 
@@ -76,7 +76,7 @@ class Bip39Deriver {
         uint8_t I[64];
         unsigned int len = sizeof(I);
 
-        HMAC(EVP_sha512(), chain_code, 32, data.data(), 37, I, &len);
+        HMAC(EVP_sha512(), chain_code, 32, data, 37, I, &len);
 
         (void) secp256k1_ec_seckey_tweak_add(ctx, priv_key, I);
 
@@ -90,29 +90,29 @@ class Bip39Deriver {
                                           const std::flat_map<std::string, uint16_t>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
-        thread_local char buf[MAX_MNEMONIC_LEN];
+        char buf[MAX_MNEMONIC_LEN];
         size_t len = build_mnemonic_str(mnemonic_ids, wl, buf);
 
-        thread_local uint8_t seed[64];
-        thread_local uint8_t master_node[64];
-        thread_local uint8_t priv_key[32];
-        thread_local uint8_t chain_code[32];
+        uint8_t seed[64];
+        uint8_t master_node[64];
+        uint8_t priv_key[32];
+        uint8_t chain_code[32];
 
-        thread_local uint8_t pub_serialized[33];
-        thread_local uint8_t hash_buf[32];
-        thread_local uint8_t ripemd_buf[20];
-        thread_local uint8_t payload[25];
-        thread_local uint8_t checksum[32];
-        thread_local char result[64];
+        uint8_t pub_serialized[33];
+        uint8_t hash_buf[32];
+        uint8_t ripemd_buf[20];
+        uint8_t payload[25];
+        uint8_t checksum[32];
+        char result[64];
 
-        // thread_local secp256k1_context* ctx = nullptr;
+        // secp256k1_context* ctx = nullptr;
         // if (BUILTIN_EXPECT(!ctx, 0)) {
         //     ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
         // }
 
-        // thread_local array<uint8_t, 256> salt_buf;
-        thread_local std::array<uint8_t, 256> salt_buf = {'m', 'n', 'e', 'm', 'o', 'n', 'i', 'c'};
-        // thread_local uint8_t salt_buf[256];
+        // array<uint8_t, 256> salt_buf;
+        std::array<uint8_t, 256> salt_buf = {'m', 'n', 'e', 'm', 'o', 'n', 'i', 'c'};
+        // uint8_t salt_buf[256];
 
         std::memcpy(salt_buf.data(), "mnemonic", 8);
 
@@ -168,18 +168,18 @@ class Bip39Deriver {
                                           const std::flat_map<std::string, uint16_t>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
-        thread_local char buf[MAX_MNEMONIC_LEN];
+        char buf[MAX_MNEMONIC_LEN];
         size_t len = build_mnemonic_str(mnemonic_ids, wl, buf);
 
-        thread_local uint8_t seed[64];
-        thread_local uint8_t master_node[64];
-        thread_local uint8_t priv_key[32];
-        thread_local uint8_t chain_code[32];
+        uint8_t seed[64];
+        uint8_t master_node[64];
+        uint8_t priv_key[32];
+        uint8_t chain_code[32];
 
-        thread_local uint8_t pub_uncompressed[65];
-        thread_local uint8_t hash_buf[32];
+        uint8_t pub_uncompressed[65];
+        uint8_t hash_buf[32];
 
-        thread_local uint8_t salt_buf[256];
+        uint8_t salt_buf[256];
         std::memcpy(salt_buf, "mnemonic", 8);
         size_t salt_len = 8;
         if (passphrase && passphrase_len > 0) {
@@ -213,10 +213,7 @@ class Bip39Deriver {
         secp256k1_ec_pubkey_serialize(ctx, pub_uncompressed, &pub_len, &pubkey,
                                       SECP256K1_EC_UNCOMPRESSED);
 
-        SHA3_256_CTX keccak_ctx;
-        SHA3_256_Init(&keccak_ctx);
-        SHA3_256_Update(&keccak_ctx, pub_uncompressed + 1, 64);
-        SHA3_256_Final(hash_buf, &keccak_ctx);
+        crypto::Keccak256::hash(pub_uncompressed + 1, 64, hash_buf);
 
         char hex[43];
         hex[0] = '0';
@@ -232,25 +229,17 @@ class Bip39Deriver {
     static std::string derive_btc_address_from_seed(const secp256k1_context* ctx,
                                                     const uint8_t* seed, const char* passphrase,
                                                     size_t passphrase_len) {
-        thread_local uint8_t master_node[64];
-        thread_local uint8_t priv_key[32];
-        thread_local uint8_t chain_code[32];
-        thread_local uint8_t pub_serialized[33];
-        thread_local uint8_t hash_buf[32];
-        thread_local uint8_t ripemd_buf[20];
-        thread_local uint8_t payload[25];
-        thread_local uint8_t checksum[32];
-        thread_local char result[64];
+        uint8_t master_node[64];
+        uint8_t priv_key[32];
+        uint8_t chain_code[32];
+        uint8_t pub_serialized[33];
+        uint8_t hash_buf[32];
+        uint8_t ripemd_buf[20];
+        uint8_t payload[25];
+        uint8_t checksum[32];
+        char result[64];
 
-        thread_local uint8_t salt_buf[256];
-        std::memcpy(salt_buf, "mnemonic", 8);
-        size_t salt_len = 8;
-        if (passphrase && passphrase_len > 0) {
-            std::memcpy(salt_buf + 8, passphrase, passphrase_len);
-            salt_len += passphrase_len;
-        }
-
-        unsigned int md_len = 64;
+        std::println("Seed byte 0: {:02x}", seed[0]); unsigned int md_len = 64;
         HMAC(EVP_sha512(), "Bitcoin seed", 12, seed, 64, master_node, &md_len);
 
         std::memcpy(priv_key, master_node, 32);
@@ -291,19 +280,11 @@ class Bip39Deriver {
     static std::string derive_eth_address_from_seed(const secp256k1_context* ctx,
                                                     const uint8_t* seed, const char* passphrase,
                                                     size_t passphrase_len) {
-        thread_local uint8_t master_node[64];
-        thread_local uint8_t priv_key[32];
-        thread_local uint8_t chain_code[32];
-        thread_local uint8_t pub_uncompressed[65];
-        thread_local uint8_t hash_buf[32];
-
-        thread_local uint8_t salt_buf[256];
-        std::memcpy(salt_buf, "mnemonic", 8);
-        size_t salt_len = 8;
-        if (passphrase && passphrase_len > 0) {
-            std::memcpy(salt_buf + 8, passphrase, passphrase_len);
-            salt_len += passphrase_len;
-        }
+        uint8_t master_node[64];
+        uint8_t priv_key[32];
+        uint8_t chain_code[32];
+        uint8_t pub_uncompressed[65];
+        uint8_t hash_buf[32];
 
         unsigned int md_len = 64;
         HMAC(EVP_sha512(), "Bitcoin seed", 12, seed, 64, master_node, &md_len);
@@ -329,10 +310,7 @@ class Bip39Deriver {
         secp256k1_ec_pubkey_serialize(ctx, pub_uncompressed, &pub_len, &pubkey,
                                       SECP256K1_EC_UNCOMPRESSED);
 
-        SHA3_256_CTX keccak_ctx;
-        SHA3_256_Init(&keccak_ctx);
-        SHA3_256_Update(&keccak_ctx, pub_uncompressed + 1, 64);
-        SHA3_256_Final(hash_buf, &keccak_ctx);
+        crypto::Keccak256::hash(pub_uncompressed + 1, 64, hash_buf);
 
         char hex[43];
         hex[0] = '0';
