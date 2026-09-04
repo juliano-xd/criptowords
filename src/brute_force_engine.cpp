@@ -420,6 +420,14 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
     uint8_t seed[AVX2_BATCH][64];
     std::vector<uint16_t> mnemonic_batch[AVX2_BATCH];
 
+    uint8_t salt_buf[256];
+    std::memcpy(salt_buf, "mnemonic", 8);
+    size_t salt_len = 8;
+    if (!cfg.passphrase.empty()) {
+        std::memcpy(salt_buf + 8, cfg.passphrase.data(), cfg.passphrase.size());
+        salt_len += cfg.passphrase.size();
+    }
+
     if (search_mode == CoinTarget::BTC) {
         const std::string_view target = cfg.target;
         size_t local_tested = 0;
@@ -449,7 +457,7 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
 
             for (size_t b = 0; b < batch_size; ++b) {
                 crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                           reinterpret_cast<const uint8_t*>("mnemonic"), 8,
+                                           salt_buf, salt_len,
                                            cfg.pbkdf2_rounds, seed[b], 64);
             }
 
@@ -517,7 +525,7 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
 
             for (size_t b = 0; b < batch_size; ++b) {
                 crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                           reinterpret_cast<const uint8_t*>("mnemonic"), 8,
+                                           salt_buf, salt_len,
                                            cfg.pbkdf2_rounds, seed[b], 64);
             }
 
