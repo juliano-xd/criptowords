@@ -33,6 +33,7 @@ void decode_combo_index(size_t combo_idx, const size_t* w_sizes, size_t num_unkn
 
 void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemonics& opt) {
     const size_t num_unknowns = opt.unknown_positions.size();
+    const size_t num_combos = calculate_total_combinations(opt);
     if (num_unknowns == 0)
         return;
 
@@ -62,12 +63,26 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
     uint16_t* __restrict ids = current_mnemonic_ids.data();
 
     bool is_finished = false;
-    bool found = false;
-    uint64_t tested_count = 0;
-    uint64_t valid_count = 0;
+    std::atomic<bool> found{false};
+    std::atomic<uint64_t> tested_count{0};
+    std::atomic<uint64_t> valid_count{0};
     std::string derived_address;
 
     auto start_time = std::chrono::high_resolution_clock::now();
+
+    std::jthread progress_reporter([&]() {
+        while (!found.load(std::memory_order_relaxed) && tested_count.load(std::memory_order_relaxed) < num_combos) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            auto now = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = now - start_time;
+            double speed = (elapsed.count() > 0) ? (static_cast<double>(tested_count.load(std::memory_order_relaxed)) / elapsed.count()) : 0.0;
+            if (tested_count.load(std::memory_order_relaxed) < num_combos && !found.load(std::memory_order_relaxed)) {
+                std::print("\r    [~] Progresso: {} / {} chaves | Validas: {} | Velocidade: {:.2f} chaves/s   ", tested_count.load(std::memory_order_relaxed), num_combos, valid_count.load(std::memory_order_relaxed), speed);
+                std::fflush(stdout);
+            }
+        }
+        std::println("");
+    });
 
     auto advance_odometer = [&]() [[gnu::always_inline]] {
         int i = static_cast<int>(num_unknowns) - 1;
@@ -92,7 +107,8 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
     case CoinTarget::BTC: {
         while (!is_finished) {
             tested_count++;
-            if (cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids)) {
+            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+            if (is_valid) {
                 valid_count++;
                 if (target == cryptowords::Bip39Deriver::derive_btc_address(
                                   ctx, current_mnemonic_ids, cfg.wordlist, password.data(),
@@ -113,7 +129,8 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
 
         while (!is_finished) {
             tested_count++;
-            if (cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids)) {
+            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+            if (is_valid) {
                 valid_count++;
                 derived_address = cryptowords::Bip39Deriver::derive_eth_address(
                     ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size());
@@ -136,8 +153,8 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
 
     std::println("\n[=] ESTATÍSTICAS DA BUSCA");
     std::println("    [+] Tempo decorrido : {:.4f} segundos", diff.count());
-    std::println("    [+] Total testado   : {}", tested_count);
-    std::println("    [+] Checksums OK    : {}", valid_count);
+    std::println("    [+] Total testado   : {}", tested_count.load());
+    std::println("    [+] Checksums OK    : {}", valid_count.load());
     std::println("    [+] Velocidade      : {:.2f} chaves/s", keys_per_sec);
 
     std::println("\n=======================================================");
@@ -223,7 +240,8 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
 
             local_tested++;
 
-            if (cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids)) {
+            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+            if (is_valid) {
                 local_valid++;
 
                 std::string derived = cryptowords::Bip39Deriver::derive_btc_address(
@@ -255,7 +273,8 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
 
             local_tested++;
 
-            if (cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids)) {
+            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+            if (is_valid) {
                 local_valid++;
 
                 std::string derived = cryptowords::Bip39Deriver::derive_eth_address(
@@ -324,6 +343,21 @@ void BruteForceEngine::run_parallel(const AppConfig& cfg, const OptimizedMnemoni
                           success, result_mnemonic);
         });
     }
+
+    std::jthread progress_reporter([&]() {
+        while (!found.load(std::memory_order_relaxed) && tested_count.load(std::memory_order_relaxed) < total_combinations) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            uint64_t current = tested_count.load(std::memory_order_relaxed);
+            auto now = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = now - start_time;
+            double speed = (elapsed.count() > 0) ? (static_cast<double>(current) / elapsed.count()) : 0.0;
+            if (current < total_combinations && !found.load(std::memory_order_relaxed)) {
+                std::print("\r    [~] Progresso: {} / {} chaves | Validas: {} | Velocidade: {:.2f} chaves/s   ", current, total_combinations, valid_count.load(std::memory_order_relaxed), speed);
+                std::fflush(stdout);
+            }
+        }
+        std::println("");
+    });
 
     for (auto& w : workers) {
         w.join();
@@ -451,25 +485,22 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
                 break;
 
             for (size_t b = 0; b < batch_size; ++b) {
-                pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
-                                                                          cfg.wordlist, pw[b]);
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                           salt_buf, salt_len,
-                                           cfg.pbkdf2_rounds, seed[b], 64);
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
                 tested_count.fetch_add(1, std::memory_order_relaxed);
                 local_tested++;
 
-                if (cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b])) {
+                bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b]);
+                if (is_valid) {
                     local_valid++;
 
                     if (found.load(std::memory_order_acquire))
                         break;
+
+                    pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
+                                                                              cfg.wordlist, pw[b]);
+
+                    crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
+                                               salt_buf, salt_len,
+                                               cfg.pbkdf2_rounds, seed[b], 64);
 
                     std::string derived = cryptowords::Bip39Deriver::derive_btc_address_from_seed(
                         ctx, seed[b], password.data(), password.size());
@@ -519,25 +550,22 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
                 break;
 
             for (size_t b = 0; b < batch_size; ++b) {
-                pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
-                                                                          cfg.wordlist, pw[b]);
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                           salt_buf, salt_len,
-                                           cfg.pbkdf2_rounds, seed[b], 64);
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
                 tested_count.fetch_add(1, std::memory_order_relaxed);
                 local_tested++;
 
-                if (cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b])) {
+                bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b]);
+                if (is_valid) {
                     local_valid++;
 
                     if (found.load(std::memory_order_acquire))
                         break;
+
+                    pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
+                                                                              cfg.wordlist, pw[b]);
+
+                    crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
+                                               salt_buf, salt_len,
+                                               cfg.pbkdf2_rounds, seed[b], 64);
 
                     std::string derived = cryptowords::Bip39Deriver::derive_eth_address_from_seed(
                         ctx, seed[b], password.data(), password.size());
@@ -609,6 +637,21 @@ void BruteForceEngine::run_parallel_avx2(const AppConfig& cfg, const OptimizedMn
                                result_mutex, success, result_mnemonic);
         });
     }
+
+    std::jthread progress_reporter([&]() {
+        while (!found.load(std::memory_order_relaxed) && tested_count.load(std::memory_order_relaxed) < total_combinations) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            uint64_t current = tested_count.load(std::memory_order_relaxed);
+            auto now = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = now - start_time;
+            double speed = (elapsed.count() > 0) ? (static_cast<double>(current) / elapsed.count()) : 0.0;
+            if (current < total_combinations && !found.load(std::memory_order_relaxed)) {
+                std::print("\r    [~] Progresso: {} / {} chaves | Validas: {} | Velocidade: {:.2f} chaves/s   ", current, total_combinations, valid_count.load(std::memory_order_relaxed), speed);
+                std::fflush(stdout);
+            }
+        }
+        std::println("");
+    });
 
     for (auto& w : workers) {
         w.join();
@@ -869,6 +912,21 @@ void BruteForceEngine::run_parallel_gpu(const AppConfig& cfg, const OptimizedMne
                               result_mutex, success, result_mnemonic);
         });
     }
+
+    std::jthread progress_reporter([&]() {
+        while (!found.load(std::memory_order_relaxed) && tested_count.load(std::memory_order_relaxed) < total_combinations) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            uint64_t current = tested_count.load(std::memory_order_relaxed);
+            auto now = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = now - start_time;
+            double speed = (elapsed.count() > 0) ? (static_cast<double>(current) / elapsed.count()) : 0.0;
+            if (current < total_combinations && !found.load(std::memory_order_relaxed)) {
+                std::print("\r    [~] Progresso: {} / {} chaves | Validas: {} | Velocidade: {:.2f} chaves/s   ", current, total_combinations, valid_count.load(std::memory_order_relaxed), speed);
+                std::fflush(stdout);
+            }
+        }
+        std::println("");
+    });
 
     for (auto& w : workers) {
         w.join();
