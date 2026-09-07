@@ -1,3 +1,5 @@
+#include <secp256k1.h>
+#include "../include/bip39.hpp"
 #include "../include/brute_force_engine.hpp"
 #include "../include/cli_parser.hpp"
 #include "../include/gpu_engine.hpp"
@@ -54,6 +56,19 @@ int main(int argc, char* argv[]) {
     // ==========================================================
     // 6. MOTOR DE FORÇA BRUTA (Executa o hodômetro)
     // ==========================================================
+
+if (config.unknows == 0) {
+        std::println("\n[=] Nenhuma palavra desconhecida. Derivando endereço direto...");
+        secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+        
+        std::string derived = (config.coin == CoinTarget::BTC) ?
+            cryptowords::Bip39Deriver::derive_btc_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size()) :
+            cryptowords::Bip39Deriver::derive_eth_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size());
+            
+        std::println("    [+] Endereço derivado: {}", derived);
+        secp256k1_context_destroy(ctx);
+        return 0;
+    }
 
     // Tentar GPU primeiro se habilitado
     if (config.use_gpu) {

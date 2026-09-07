@@ -161,7 +161,7 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
     if (found) {
         std::string recovered_phrase;
         for (size_t i = 0; i < current_mnemonic_ids.size(); ++i) {
-            recovered_phrase += (cfg.wordlist.begin() + current_mnemonic_ids[i])->first;
+            recovered_phrase += cfg.wordlist[current_mnemonic_ids[i]];
             if (i < current_mnemonic_ids.size() - 1)
                 recovered_phrase += " ";
         }
@@ -231,72 +231,47 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
 
     const std::string_view password = cfg.passphrase;
     const CoinTarget search_mode = cfg.coin;
-
-    if (search_mode == CoinTarget::BTC) {
-        const std::string_view target = cfg.target;
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            local_tested++;
-
-            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
-            if (is_valid) {
-                local_valid++;
-
-                std::string derived = cryptowords::Bip39Deriver::derive_btc_address(
-                    ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size());
-                if (derived == target) {
-                    found.store(true, std::memory_order_release);
-                    tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                    valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                    std::lock_guard<std::mutex> lock(result_mutex);
-                    if (!success) {
-                        success = true;
-                        result_mnemonic = current_mnemonic_ids;
-                    }
-                    return;
-                }
-            }
-            if (!advance_local_odometer())
-                break;
-        }
-    } else {
-        std::string normalized_target(cfg.target);
-        for (char& c : normalized_target) {
-            c = std::tolower(static_cast<unsigned char>(c));
-        }
-
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            local_tested++;
-
-            bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
-            if (is_valid) {
-                local_valid++;
-
-                std::string derived = cryptowords::Bip39Deriver::derive_eth_address(
-                    ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size());
-                if (derived == normalized_target) {
-                    found.store(true, std::memory_order_release);
-                    tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                    valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                    std::lock_guard<std::mutex> lock(result_mutex);
-                    if (!success) {
-                        success = true;
-                        result_mnemonic = current_mnemonic_ids;
-                    }
-                    return;
-                }
-            }
-            if (!advance_local_odometer())
-                break;
-        }
+    
+    std::string target_str(cfg.target);
+    if (search_mode == CoinTarget::ETH) {
+        for (char& c : target_str) c = std::tolower(static_cast<unsigned char>(c));
     }
 
-    tested_count.fetch_add(local_tested, std::memory_order_relaxed);
+    while (local_tested < num_combos) {
+        if (found.load(std::memory_order_acquire))
+            break;
+
+        local_tested++;
+        if ((local_tested % 512) == 0) {
+            tested_count.fetch_add(512, std::memory_order_relaxed);
+        }
+
+        bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+        if (is_valid) {
+            local_valid++;
+
+            std::string derived = (search_mode == CoinTarget::BTC) ?
+                cryptowords::Bip39Deriver::derive_btc_address(ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size()) :
+                cryptowords::Bip39Deriver::derive_eth_address(ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size());
+                
+            if (derived == target_str) {
+                found.store(true, std::memory_order_release);
+                std::lock_guard<std::mutex> lock(result_mutex);
+                if (!success) {
+                    success = true;
+                    result_mnemonic = current_mnemonic_ids;
+                }
+                break;
+            }
+        }
+        if (!advance_local_odometer())
+            break;
+    }
+
+    size_t rem = local_tested % 512;
+    if (rem > 0) {
+        tested_count.fetch_add(rem, std::memory_order_relaxed);
+    }
     valid_count.fetch_add(local_valid, std::memory_order_relaxed);
 }
 
@@ -379,7 +354,7 @@ void BruteForceEngine::run_parallel(const AppConfig& cfg, const OptimizedMnemoni
     if (success) {
         std::string recovered_phrase;
         for (size_t i = 0; i < result_mnemonic.size(); ++i) {
-            recovered_phrase += (cfg.wordlist.begin() + result_mnemonic[i])->first;
+            recovered_phrase += cfg.wordlist[result_mnemonic[i]];
             if (i < result_mnemonic.size() - 1)
                 recovered_phrase += " ";
         }
@@ -452,7 +427,6 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
     char pw[AVX2_BATCH][256];
     size_t pw_len[AVX2_BATCH];
     uint8_t seed[AVX2_BATCH][64];
-    std::vector<uint16_t> mnemonic_batch[AVX2_BATCH];
 
     uint8_t salt_buf[256];
     std::memcpy(salt_buf, "mnemonic", 8);
@@ -462,133 +436,79 @@ void BruteForceEngine::worker_thread_avx2(const AppConfig& cfg, const OptimizedM
         salt_len += cfg.passphrase.size();
     }
 
-    if (search_mode == CoinTarget::BTC) {
-        const std::string_view target = cfg.target;
-        size_t local_tested = 0;
-        size_t local_valid = 0;
-
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            size_t batch_size = std::min(AVX2_BATCH, num_combos - local_tested);
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                mnemonic_batch[b] = current_mnemonic_ids;
-                if (b > 0 && !advance_local_odometer()) {
-                    batch_size = b;
-                    break;
-                }
-            }
-
-            if (batch_size == 0)
-                break;
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                tested_count.fetch_add(1, std::memory_order_relaxed);
-                local_tested++;
-
-                bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b]);
-                if (is_valid) {
-                    local_valid++;
-
-                    if (found.load(std::memory_order_acquire))
-                        break;
-
-                    pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
-                                                                              cfg.wordlist, pw[b]);
-
-                    crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                               salt_buf, salt_len,
-                                               cfg.pbkdf2_rounds, seed[b], 64);
-
-                    std::string derived = cryptowords::Bip39Deriver::derive_btc_address_from_seed(
-                        ctx, seed[b], password.data(), password.size());
-                    if (derived == target) {
-                        found.store(true, std::memory_order_release);
-                        tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                        std::lock_guard<std::mutex> lock(result_mutex);
-                        if (!success) {
-                            success = true;
-                            result_mnemonic = mnemonic_batch[b];
-                        }
-                        return;
-                    }
-                }
-            }
-
-            if (!advance_local_odometer())
-                break;
-        }
-
-        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-    } else {
-        std::string normalized_target(cfg.target);
-        for (char& c : normalized_target) {
-            c = std::tolower(static_cast<unsigned char>(c));
-        }
-
-        size_t local_tested = 0;
-        size_t local_valid = 0;
-
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            size_t batch_size = std::min(AVX2_BATCH, num_combos - local_tested);
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                mnemonic_batch[b] = current_mnemonic_ids;
-                if (b > 0 && !advance_local_odometer()) {
-                    batch_size = b;
-                    break;
-                }
-            }
-
-            if (batch_size == 0)
-                break;
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                tested_count.fetch_add(1, std::memory_order_relaxed);
-                local_tested++;
-
-                bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(mnemonic_batch[b]);
-                if (is_valid) {
-                    local_valid++;
-
-                    if (found.load(std::memory_order_acquire))
-                        break;
-
-                    pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(mnemonic_batch[b],
-                                                                              cfg.wordlist, pw[b]);
-
-                    crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b],
-                                               salt_buf, salt_len,
-                                               cfg.pbkdf2_rounds, seed[b], 64);
-
-                    std::string derived = cryptowords::Bip39Deriver::derive_eth_address_from_seed(
-                        ctx, seed[b], password.data(), password.size());
-                    if (derived == normalized_target) {
-                        found.store(true, std::memory_order_release);
-                        tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                        std::lock_guard<std::mutex> lock(result_mutex);
-                        if (!success) {
-                            success = true;
-                            result_mnemonic = mnemonic_batch[b];
-                        }
-                        return;
-                    }
-                }
-            }
-
-            if (!advance_local_odometer())
-                break;
-        }
-
-        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
+    std::string target_str(cfg.target);
+    if (search_mode == CoinTarget::ETH) {
+        for (char& c : target_str) c = std::tolower(static_cast<unsigned char>(c));
     }
+
+    size_t local_tested = 0;
+    size_t local_valid = 0;
+    
+    std::vector<std::vector<uint16_t>> valid_batch;
+    valid_batch.reserve(AVX2_BATCH);
+
+    auto process_batch = [&]() {
+        size_t batch_sz = valid_batch.size();
+        if (batch_sz == 0) return;
+        
+        if (batch_sz == AVX2_BATCH) {
+            for (size_t b = 0; b < AVX2_BATCH; ++b) {
+                pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(valid_batch[b], cfg.wordlist, pw[b]);
+                crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b], salt_buf, salt_len, cfg.pbkdf2_rounds, seed[b], 64);
+            }
+        } else {
+            for (size_t b = 0; b < batch_sz; ++b) {
+                pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(valid_batch[b], cfg.wordlist, pw[b]);
+                crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b], salt_buf, salt_len, cfg.pbkdf2_rounds, seed[b], 64);
+            }
+        }
+        
+        for (size_t b = 0; b < batch_sz; ++b) {
+            if (found.load(std::memory_order_acquire)) break;
+            
+            std::string derived = (search_mode == CoinTarget::BTC) ?
+                cryptowords::Bip39Deriver::derive_btc_address_from_seed(ctx, seed[b], password.data(), password.size()) :
+                cryptowords::Bip39Deriver::derive_eth_address_from_seed(ctx, seed[b], password.data(), password.size());
+                
+            if (derived == target_str) {
+                found.store(true, std::memory_order_release);
+                std::lock_guard<std::mutex> lock(result_mutex);
+                if (!success) {
+                    success = true;
+                    result_mnemonic = valid_batch[b];
+                }
+            }
+        }
+        valid_batch.clear();
+    };
+
+    while (local_tested < num_combos) {
+        if (found.load(std::memory_order_acquire)) break;
+        
+        local_tested++;
+        if ((local_tested % 512) == 0) {
+            tested_count.fetch_add(512, std::memory_order_relaxed);
+        }
+        
+        bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+        
+        if (is_valid) {
+            local_valid++;
+            valid_batch.push_back(current_mnemonic_ids);
+            if (valid_batch.size() == AVX2_BATCH) {
+                process_batch();
+            }
+        }
+        
+        if (!advance_local_odometer()) break;
+    }
+    process_batch();
+    
+    size_t rem = local_tested % 512;
+    if (rem > 0) {
+        tested_count.fetch_add(rem, std::memory_order_relaxed);
+    }
+    valid_count.fetch_add(local_valid, std::memory_order_relaxed);
 }
 
 void BruteForceEngine::run_parallel_avx2(const AppConfig& cfg, const OptimizedMnemonics& opt) {
@@ -673,7 +593,7 @@ void BruteForceEngine::run_parallel_avx2(const AppConfig& cfg, const OptimizedMn
     if (success) {
         std::string recovered_phrase;
         for (size_t i = 0; i < result_mnemonic.size(); ++i) {
-            recovered_phrase += (cfg.wordlist.begin() + result_mnemonic[i])->first;
+            recovered_phrase += cfg.wordlist[result_mnemonic[i]];
             if (i < result_mnemonic.size() - 1)
                 recovered_phrase += " ";
         }
@@ -743,128 +663,74 @@ void BruteForceEngine::worker_thread_gpu(const AppConfig& cfg, const OptimizedMn
     const CoinTarget search_mode = cfg.coin;
     constexpr size_t GPU_BATCH = 16;
 
-    std::vector<std::vector<uint16_t>> batch_ids(GPU_BATCH);
-    std::vector<std::vector<uint8_t>> seeds(GPU_BATCH);
-
-    if (search_mode == CoinTarget::BTC) {
-        const std::string_view target = cfg.target;
-        size_t local_tested = 0;
-        size_t local_valid = 0;
-
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            size_t batch_size = std::min(GPU_BATCH, num_combos - local_tested);
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                batch_ids[b] = current_mnemonic_ids;
-                if (b > 0 && !advance_local_odometer()) {
-                    batch_size = b;
-                    break;
-                }
-            }
-
-            if (batch_size == 0)
-                break;
-
-            seeds.resize(batch_size);
-            gpu::Engine* gpu_ptr = static_cast<gpu::Engine*>(cfg.gpu_engine);
-            if (!gpu_ptr->pbkdf2_batch_from_ids(batch_ids, cfg.wordlist, cfg.pbkdf2_rounds,
-                                                seeds)) {
-                break;
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                tested_count.fetch_add(1, std::memory_order_relaxed);
-                local_tested++;
-
-                if (cryptowords::Bip39Deriver::verify_checksum(batch_ids[b])) {
-                    local_valid++;
-
-                    if (found.load(std::memory_order_acquire))
-                        break;
-
-                    std::string derived = cryptowords::Bip39Deriver::derive_btc_address_from_seed(
-                        ctx, seeds[b].data(), password.data(), password.size());
-                    if (derived == target) {
-                        found.store(true, std::memory_order_release);
-                        tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                        std::lock_guard<std::mutex> lock(result_mutex);
-                        if (!success) {
-                            success = true;
-                            result_mnemonic = batch_ids[b];
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-    } else {
-        std::string normalized_target(cfg.target);
-        for (char& c : normalized_target) {
-            c = std::tolower(static_cast<unsigned char>(c));
-        }
-
-        size_t local_tested = 0;
-        size_t local_valid = 0;
-
-        while (local_tested < num_combos) {
-            if (found.load(std::memory_order_acquire))
-                break;
-
-            size_t batch_size = std::min(GPU_BATCH, num_combos - local_tested);
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                batch_ids[b] = current_mnemonic_ids;
-                if (b > 0 && !advance_local_odometer()) {
-                    batch_size = b;
-                    break;
-                }
-            }
-
-            if (batch_size == 0)
-                break;
-
-            seeds.resize(batch_size);
-            gpu::Engine* gpu_ptr = static_cast<gpu::Engine*>(cfg.gpu_engine);
-            if (!gpu_ptr->pbkdf2_batch_from_ids(batch_ids, cfg.wordlist, cfg.pbkdf2_rounds,
-                                                seeds)) {
-                break;
-            }
-
-            for (size_t b = 0; b < batch_size; ++b) {
-                tested_count.fetch_add(1, std::memory_order_relaxed);
-                local_tested++;
-
-                if (cryptowords::Bip39Deriver::verify_checksum(batch_ids[b])) {
-                    local_valid++;
-
-                    if (found.load(std::memory_order_acquire))
-                        break;
-
-                    std::string derived = cryptowords::Bip39Deriver::derive_eth_address_from_seed(
-                        ctx, seeds[b].data(), password.data(), password.size());
-                    if (derived == normalized_target) {
-                        found.store(true, std::memory_order_release);
-                        tested_count.fetch_add(local_tested, std::memory_order_relaxed);
-                        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
-                        std::lock_guard<std::mutex> lock(result_mutex);
-                        if (!success) {
-                            success = true;
-                            result_mnemonic = batch_ids[b];
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        valid_count.fetch_add(local_valid, std::memory_order_relaxed);
+    std::string target_str(cfg.target);
+    if (search_mode == CoinTarget::ETH) {
+        for (char& c : target_str) c = std::tolower(static_cast<unsigned char>(c));
     }
+
+    size_t local_tested = 0;
+    size_t local_valid = 0;
+    
+    std::vector<std::vector<uint16_t>> valid_batch;
+    valid_batch.reserve(GPU_BATCH);
+    std::vector<std::vector<uint8_t>> seeds;
+
+    auto process_batch = [&]() {
+        size_t batch_sz = valid_batch.size();
+        if (batch_sz == 0) return;
+        
+        seeds.resize(batch_sz);
+        gpu::Engine* gpu_ptr = static_cast<gpu::Engine*>(cfg.gpu_engine);
+        if (!gpu_ptr->pbkdf2_batch_from_ids(valid_batch, cfg.wordlist, cfg.pbkdf2_rounds, seeds)) {
+            return;
+        }
+        
+        for (size_t b = 0; b < batch_sz; ++b) {
+            if (found.load(std::memory_order_acquire)) break;
+            
+            std::string derived = (search_mode == CoinTarget::BTC) ?
+                cryptowords::Bip39Deriver::derive_btc_address_from_seed(ctx, seeds[b].data(), password.data(), password.size()) :
+                cryptowords::Bip39Deriver::derive_eth_address_from_seed(ctx, seeds[b].data(), password.data(), password.size());
+                
+            if (derived == target_str) {
+                found.store(true, std::memory_order_release);
+                std::lock_guard<std::mutex> lock(result_mutex);
+                if (!success) {
+                    success = true;
+                    result_mnemonic = valid_batch[b];
+                }
+            }
+        }
+        valid_batch.clear();
+    };
+
+    while (local_tested < num_combos) {
+        if (found.load(std::memory_order_acquire)) break;
+        
+        local_tested++;
+        if ((local_tested % 512) == 0) {
+            tested_count.fetch_add(512, std::memory_order_relaxed);
+        }
+        
+        bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
+        
+        if (is_valid) {
+            local_valid++;
+            valid_batch.push_back(current_mnemonic_ids);
+            if (valid_batch.size() == GPU_BATCH) {
+                process_batch();
+            }
+        }
+        
+        if (!advance_local_odometer()) break;
+    }
+    process_batch();
+    
+    size_t rem = local_tested % 512;
+    if (rem > 0) {
+        tested_count.fetch_add(rem, std::memory_order_relaxed);
+    }
+    valid_count.fetch_add(local_valid, std::memory_order_relaxed);
 }
 
 void BruteForceEngine::run_parallel_gpu(const AppConfig& cfg, const OptimizedMnemonics& opt,
@@ -948,7 +814,7 @@ void BruteForceEngine::run_parallel_gpu(const AppConfig& cfg, const OptimizedMne
     if (success) {
         std::string recovered_phrase;
         for (size_t i = 0; i < result_mnemonic.size(); ++i) {
-            recovered_phrase += (cfg.wordlist.begin() + result_mnemonic[i])->first;
+            recovered_phrase += cfg.wordlist[result_mnemonic[i]];
             if (i < result_mnemonic.size() - 1)
                 recovered_phrase += " ";
         }

@@ -32,7 +32,7 @@ class Engine {
                       std::vector<std::vector<uint8_t>>& seeds);
 
     bool pbkdf2_batch_from_ids(const std::vector<std::vector<uint16_t>>& mnemonic_ids,
-                               const std::flat_map<std::string, uint16_t>& wordlist, int iterations,
+                               const std::vector<std::string>& wordlist, int iterations,
                                std::vector<std::vector<uint8_t>>& seeds);
 
   private:

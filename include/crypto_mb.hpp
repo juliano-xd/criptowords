@@ -237,7 +237,7 @@ inline void pbkdf2_hmac_sha512_4way(const char* pw0, size_t pl0, const char* pw1
     // Same block2 for all 4 streams
     SHA512_MB::process_block(block2, block2, block2, block2, inner_mb);
 
-    // Extract4 inner hashes
+    // Extract inner hashes
     for (int s = 0; s < 4; ++s)
         SHA512_MB::finalize_single(inner_mb, s, U[s]);
 

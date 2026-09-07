@@ -62,7 +62,7 @@ void SearchOptimizer::print_report(const OptimizedMnemonics& opt, const AppConfi
     std::println("\n[=] PLANO DE BUSCA OTIMIZADO");
 
     auto get_word = [&cfg](uint16_t id) -> std::string_view {
-        return (cfg.wordlist.begin() + id)->first;
+        return cfg.wordlist[id];
     };
 
     size_t wheel_idx = 0;
