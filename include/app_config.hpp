@@ -22,7 +22,7 @@ struct AppConfig {
 
     static constexpr uint16_t UNKNOWN_WORD = 0xFFFF;
     std::vector<MnemonicSlot> mnemonics;
-    std::flat_map<std::string, uint16_t> wordlist;
+    std::vector<std::string> wordlist;
 
     std::string target;
     std::string passphrase;

@@ -413,7 +413,6 @@ pbkdf2_hmac_sha512(const char* password, size_t password_len, const uint8_t* sal
     }
     EVP_MD_CTX* ipad_ctx = EVP_MD_CTX_new();
     EVP_MD_CTX* opad_ctx = EVP_MD_CTX_new();
-    EVP_MD_CTX* iter_ctx = EVP_MD_CTX_new();
     EVP_DigestInit_ex(ipad_ctx, md, nullptr);
     EVP_DigestUpdate(ipad_ctx, ipad_block, 128);
     EVP_DigestInit_ex(opad_ctx, md, nullptr);

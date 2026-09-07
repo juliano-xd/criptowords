@@ -161,7 +161,7 @@ bool Engine::pbkdf2_batch(const std::vector<std::string>& mnemonics, int iterati
 }
 
 bool Engine::pbkdf2_batch_from_ids(const std::vector<std::vector<uint16_t>>& mnemonic_ids,
-                                   const std::flat_map<std::string, uint16_t>& wordlist,
+                                   const std::vector<std::string>& wordlist,
                                    int iterations, std::vector<std::vector<uint8_t>>& seeds) {
     std::vector<std::string> mnemonics_str;
     mnemonics_str.reserve(mnemonic_ids.size());
@@ -171,9 +171,7 @@ bool Engine::pbkdf2_batch_from_ids(const std::vector<std::vector<uint16_t>>& mne
         for (size_t i = 0; i < ids.size(); ++i) {
             if (i > 0)
                 m += ' ';
-            auto it = wordlist.begin();
-            std::advance(it, ids[i]);
-            m += it->first;
+            m += wordlist[ids[i]];
         }
         mnemonics_str.push_back(std::move(m));
     }

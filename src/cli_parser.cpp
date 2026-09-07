@@ -62,7 +62,7 @@ parse_constraint_map(std::string_view input) {
     return result;
 }
 
-static std::expected<std::flat_map<std::string, uint16_t>, std::string>
+static std::expected<std::vector<std::string>, std::string>
 load_wordlist(const std::string& lang) {
     std::string path = std::format("../wordlist/{}.txt", lang);
     std::ifstream f(path);
@@ -83,25 +83,7 @@ load_wordlist(const std::string& lang) {
         return std::unexpected(std::format("Wordlist vazia ou inválida: {}", path));
     }
 
-    if (!std::ranges::is_sorted(lines)) {
-        std::ranges::sort(lines);
-    }
-
-    std::vector<std::string> keys;
-    std::vector<uint16_t> values;
-    keys.reserve(lines.size());
-    values.reserve(lines.size());
-
-    uint16_t index = 0;
-    for (auto& w : lines) {
-        keys.push_back(std::move(w));
-        values.push_back(index++);
-    }
-
-    std::flat_map<std::string, uint16_t> wordlist(std::sorted_unique, std::move(keys),
-                                                  std::move(values));
-
-    return wordlist;
+    return lines;
 }
 
 // ============================================================================
@@ -239,11 +221,11 @@ std::expected<AppConfig, std::string> CLIParser::parse_and_validate(int argc, ch
         for (size_t i = 0; i < temp_mnemonic.size(); ++i) {
             const auto& w = temp_mnemonic[i];
             if (w != "?") {
-                if (!cfg.wordlist.contains(w)) {
+                if (std::find(cfg.wordlist.begin(), cfg.wordlist.end(), w) == cfg.wordlist.end()) {
                     return std::unexpected(
                         std::format("A palavra '{}' não existe na wordlist '{}'.", w, raw_lang));
                 }
-                cfg.mnemonics[i] = cfg.wordlist[w]; // Guarda o ID
+                cfg.mnemonics[i] = static_cast<uint16_t>(std::distance(cfg.wordlist.begin(), std::find(cfg.wordlist.begin(), cfg.wordlist.end(), w))); // Guarda o ID
                 cfg.unknows--;                      // Uma incógnita a menos!
             }
         }
@@ -271,10 +253,10 @@ std::expected<AppConfig, std::string> CLIParser::parse_and_validate(int argc, ch
         translated_allows.reserve(words.size());
 
         for (const auto& w : words) {
-            if (!cfg.wordlist.contains(w)) {
+            if (std::find(cfg.wordlist.begin(), cfg.wordlist.end(), w) == cfg.wordlist.end()) {
                 return std::unexpected(std::format("A palavra permitida '{}' não existe.", w));
             }
-            translated_allows.push_back(cfg.wordlist[w]);
+            translated_allows.push_back(static_cast<uint16_t>(std::distance(cfg.wordlist.begin(), std::find(cfg.wordlist.begin(), cfg.wordlist.end(), w))));
         }
 
         if (translated_allows.size() == 1) {

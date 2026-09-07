@@ -26,24 +26,23 @@ static constexpr size_t BIP39_WORDLIST_SIZE = 2048;
 class Bip39Deriver {
   public:
     static inline size_t build_mnemonic_str(const std::vector<uint16_t>& __restrict ids_vec,
-                                            const std::flat_map<std::string, uint16_t>& wl,
+                                            const std::vector<std::string>& wl,
                                             char* __restrict out_buf) noexcept {
         const size_t count = ids_vec.size();
         if (count == 0)
             return 0;
 
         const uint16_t* __restrict ids = ids_vec.data();
-        auto wl_begin = wl.begin();
         char* __restrict ptr = out_buf;
 
-        std::string_view w0 = (wl_begin + ids[0])->first;
-        __builtin_memcpy(ptr, w0.data(), 16);
+        std::string_view w0 = wl[ids[0]];
+        std::memcpy(ptr, w0.data(), w0.size());
         ptr += w0.size();
 
         for (size_t i = 1; i < count; ++i) {
             *ptr++ = ' ';
-            std::string_view w = (wl_begin + ids[i])->first;
-            __builtin_memcpy(ptr, w.data(), 16);
+            std::string_view w = wl[ids[i]];
+            std::memcpy(ptr, w.data(), w.size());
             ptr += w.size();
         }
 
@@ -54,7 +53,6 @@ class Bip39Deriver {
     static inline bool derive_child_key(const secp256k1_context* ctx, uint8_t* priv_key,
                                         uint8_t* chain_code, uint32_t index) noexcept {
         uint8_t data[37] = {0};
-        // uint8_t data[37];
 
         if (index & 0x80000000u) {
             data[0] = 0;
@@ -62,7 +60,8 @@ class Bip39Deriver {
         } else {
             secp256k1_pubkey pub;
             size_t pub_len = 33;
-            (void) secp256k1_ec_pubkey_create(ctx, &pub, priv_key);
+            if (!secp256k1_ec_pubkey_create(ctx, &pub, priv_key))
+                return false;
             secp256k1_ec_pubkey_serialize(ctx, data, &pub_len, &pub,
                                           SECP256K1_EC_COMPRESSED);
         }
@@ -78,7 +77,8 @@ class Bip39Deriver {
 
         HMAC(EVP_sha512(), chain_code, 32, data, 37, I, &len);
 
-        (void) secp256k1_ec_seckey_tweak_add(ctx, priv_key, I);
+        if (!secp256k1_ec_seckey_tweak_add(ctx, priv_key, I))
+            return false;
 
         std::memcpy(chain_code, I + 32, 32);
         return true;
@@ -87,7 +87,7 @@ class Bip39Deriver {
   public:
     static std::string derive_btc_address(const secp256k1_context* ctx,
                                           const std::vector<uint16_t>& mnemonic_ids,
-                                          const std::flat_map<std::string, uint16_t>& wl,
+                                          const std::vector<std::string>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
         char buf[MAX_MNEMONIC_LEN];
@@ -165,7 +165,7 @@ class Bip39Deriver {
 
     static std::string derive_eth_address(const secp256k1_context* ctx,
                                           const std::vector<uint16_t>& mnemonic_ids,
-                                          const std::flat_map<std::string, uint16_t>& wl,
+                                          const std::vector<std::string>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
         char buf[MAX_MNEMONIC_LEN];
