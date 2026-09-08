@@ -25,6 +25,7 @@ struct AppConfig {
     std::vector<std::string> wordlist;
 
     std::string target;
+    std::string separator = " ";
     std::string passphrase;
 
     void* gpu_engine = nullptr;

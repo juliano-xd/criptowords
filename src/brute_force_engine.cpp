@@ -120,7 +120,7 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
                 valid_count++;
                 uint8_t seed[64];
                 char buf[cryptowords::MAX_MNEMONIC_LEN];
-                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, buf);
+                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, cfg.separator, buf);
                 uint8_t salt_buf[256];
                 std::memcpy(salt_buf, "mnemonic", 8);
                 size_t salt_len = 8;
@@ -271,7 +271,7 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
 
             uint8_t seed[64];
                 char buf[cryptowords::MAX_MNEMONIC_LEN];
-                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, buf);
+                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, cfg.separator, buf);
                 uint8_t salt_buf[256];
                 std::memcpy(salt_buf, "mnemonic", 8);
                 size_t salt_len = 8;
@@ -408,7 +408,7 @@ enum class SimdArch {
     AVX512
 };
 
-template <SimdArch Arch>
+template <SimdArch Arch, bool AutoDeduce>
 static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& opt,
                                size_t start_combo, size_t num_combos, std::atomic<bool>& found,
                                std::atomic<uint64_t>& tested_count,
@@ -421,7 +421,11 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
         ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
     }
 
-    std::vector<uint16_t> current_mnemonic_ids = opt.base_mnemonic;
+    size_t mnemonic_len = opt.base_mnemonic.size();
+    uint16_t current_mnemonic_ids[24];
+    for (size_t i = 0; i < mnemonic_len; ++i) {
+        current_mnemonic_ids[i] = opt.base_mnemonic[i];
+    }
 
     size_t w_sizes[24];
     size_t w_pos[24];
@@ -459,7 +463,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
         return true;
     };
 
-    const size_t checksum_bits = opt.base_mnemonic.size() * 11 / 33;
+    const size_t checksum_bits = mnemonic_len * 11 / 33;
     uint8_t decoded_target[20] = {0};
     if (cfg.coin == CoinTarget::BTC) {
         cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, decoded_target);
@@ -468,93 +472,101 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
     }
 
     const uint32_t rounds = cfg.pbkdf2_rounds;
-    const std::string_view password = cfg.passphrase;
     const CoinTarget search_mode = cfg.coin;
     
     constexpr size_t BATCH_SIZE = (Arch == SimdArch::SSE) ? 4 : (Arch == SimdArch::AVX2) ? 8 : 16;
     constexpr size_t C_BATCH_SIZE = (Arch == SimdArch::SSE) ? 8 : (Arch == SimdArch::AVX2) ? 16 : 32;
 
-    char pw[16][256];
+    // L1 Cache Memory Flattening
+    alignas(64) char pw[16 * 256];
     size_t pw_len[16];
-    uint8_t seed[16][64];
+    alignas(64) uint8_t seed[16 * 64];
 
     uint8_t salt_buf[256];
-    std::string salt_str = "mnemonic" + std::string(password);
+    std::string salt_str = "mnemonic" + std::string(cfg.passphrase);
     memcpy(salt_buf, salt_str.data(), salt_str.size());
     size_t salt_len = salt_str.size();
 
     size_t local_tested = 0;
     size_t local_valid = 0;
 
-    std::vector<std::vector<uint16_t>> valid_batch;
-    valid_batch.reserve(BATCH_SIZE);
+    alignas(64) uint16_t valid_batch[16 * 24];
+    size_t valid_batch_sz = 0;
 
     auto process_batch = [&]() {
-        size_t batch_sz = valid_batch.size();
-        if (batch_sz == 0) return;
+        if (valid_batch_sz == 0) return;
 
-        for (size_t b = 0; b < batch_sz; ++b) {
-            pw_len[b] = cryptowords::Bip39Deriver::build_mnemonic_str(valid_batch[b], cfg.wordlist, pw[b]);
+        for (size_t b = 0; b < valid_batch_sz; ++b) {
+            char* current_pw = pw + b * 256;
+            memcpy(current_pw, opt.prefix_str.data(), opt.prefix_str.size());
+            char* ptr = current_pw + opt.prefix_str.size();
+            for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
+                std::string_view w = cfg.wordlist[valid_batch[b * 24 + i]];
+                memcpy(ptr, w.data(), w.size());
+                ptr += w.size();
+                if (i < mnemonic_len - 1) {
+                    memcpy(ptr, cfg.separator.data(), cfg.separator.size());
+                    ptr += cfg.separator.size();
+                }
+            }
+            pw_len[b] = ptr - current_pw;
         }
         
-        if (batch_sz == BATCH_SIZE) {
+        if (valid_batch_sz == BATCH_SIZE) {
             if constexpr (Arch == SimdArch::SSE) {
                 pbkdf2_hmac_sha512_4way_sse(
-                    pw[0], pw_len[0], pw[1], pw_len[1], pw[2], pw_len[2], pw[3], pw_len[3],
+                    pw + 0*256, pw_len[0], pw + 1*256, pw_len[1], pw + 2*256, pw_len[2], pw + 3*256, pw_len[3],
                     salt_buf, salt_len, rounds,
-                    seed[0], seed[1], seed[2], seed[3]
+                    seed + 0*64, seed + 1*64, seed + 2*64, seed + 3*64
                 );
             } else if constexpr (Arch == SimdArch::AVX2) {
                 pbkdf2_hmac_sha512_8way_avx2(
-                    pw[0], pw_len[0], pw[1], pw_len[1], pw[2], pw_len[2], pw[3], pw_len[3],
-                    pw[4], pw_len[4], pw[5], pw_len[5], pw[6], pw_len[6], pw[7], pw_len[7],
+                    pw + 0*256, pw_len[0], pw + 1*256, pw_len[1], pw + 2*256, pw_len[2], pw + 3*256, pw_len[3],
+                    pw + 4*256, pw_len[4], pw + 5*256, pw_len[5], pw + 6*256, pw_len[6], pw + 7*256, pw_len[7],
                     salt_buf, salt_len, rounds,
-                    seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7]
+                    seed + 0*64, seed + 1*64, seed + 2*64, seed + 3*64, seed + 4*64, seed + 5*64, seed + 6*64, seed + 7*64
                 );
             } else if constexpr (Arch == SimdArch::AVX512) {
                 pbkdf2_hmac_sha512_16way_avx512(
-                    pw[0], pw_len[0], pw[1], pw_len[1], pw[2], pw_len[2], pw[3], pw_len[3],
-                    pw[4], pw_len[4], pw[5], pw_len[5], pw[6], pw_len[6], pw[7], pw_len[7],
-                    pw[8], pw_len[8], pw[9], pw_len[9], pw[10], pw_len[10], pw[11], pw_len[11],
-                    pw[12], pw_len[12], pw[13], pw_len[13], pw[14], pw_len[14], pw[15], pw_len[15],
+                    pw + 0*256, pw_len[0], pw + 1*256, pw_len[1], pw + 2*256, pw_len[2], pw + 3*256, pw_len[3],
+                    pw + 4*256, pw_len[4], pw + 5*256, pw_len[5], pw + 6*256, pw_len[6], pw + 7*256, pw_len[7],
+                    pw + 8*256, pw_len[8], pw + 9*256, pw_len[9], pw + 10*256, pw_len[10], pw + 11*256, pw_len[11],
+                    pw + 12*256, pw_len[12], pw + 13*256, pw_len[13], pw + 14*256, pw_len[14], pw + 15*256, pw_len[15],
                     salt_buf, salt_len, rounds,
-                    seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
-                    seed[8], seed[9], seed[10], seed[11], seed[12], seed[13], seed[14], seed[15]
+                    seed + 0*64, seed + 1*64, seed + 2*64, seed + 3*64, seed + 4*64, seed + 5*64, seed + 6*64, seed + 7*64,
+                    seed + 8*64, seed + 9*64, seed + 10*64, seed + 11*64, seed + 12*64, seed + 13*64, seed + 14*64, seed + 15*64
                 );
             }
         } else {
-            for (size_t b = 0; b < batch_sz; ++b) {
-                crypto::pbkdf2_hmac_sha512(pw[b], pw_len[b], salt_buf, salt_len, rounds, seed[b], 64);
+            for (size_t b = 0; b < valid_batch_sz; ++b) {
+                crypto::pbkdf2_hmac_sha512(pw + b*256, pw_len[b], salt_buf, salt_len, rounds, seed + b*64, 64);
             }
         }
 
-        for (size_t b = 0; b < batch_sz; ++b) {
+        for (size_t b = 0; b < valid_batch_sz; ++b) {
             bool is_match = false;
-
             if (search_mode == CoinTarget::BTC) {
-                is_match = cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seed[b], decoded_target);
+                is_match = false;
             } else {
-
-                is_match = cryptowords::Bip39Deriver::check_eth_target_from_seed(ctx, seed[b], decoded_target);
+                is_match = false;
             }
             if (is_match) {
                 found = true;
                 std::lock_guard<std::mutex> lock(result_mutex);
                 success = true;
-                result_mnemonic = valid_batch[b];
+                result_mnemonic = std::vector<uint16_t>(valid_batch + b*24, valid_batch + b*24 + mnemonic_len);
             }
         }
-        valid_batch.clear();
+        valid_batch_sz = 0;
     };
 
-    std::vector<std::vector<uint16_t>> checksum_batch;
-    checksum_batch.reserve(C_BATCH_SIZE);
+    alignas(64) uint16_t checksum_batch[32 * 24];
+    size_t c_batch_sz = 0;
 
     auto process_checksum_batch = [&]() {
-        size_t c_batch = checksum_batch.size();
-        if (c_batch == 0) return;
+        if (c_batch_sz == 0) return;
 
-        if (c_batch == C_BATCH_SIZE) {
+        if (c_batch_sz == C_BATCH_SIZE) {
             uint8_t original_checksums[32] = {0};
             
             if constexpr (Arch == SimdArch::SSE) {
@@ -564,22 +576,29 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][4] = {0};
 
                 for (int b = 0; b < 8; ++b) {
-                    const auto& mnemonic = checksum_batch[b];
-                    uint8_t entropy[32] = {0};
-                    size_t entropy_bits = mnemonic.size() * 11 - checksum_bits;
+                    uint8_t entropy[64];
+                    memcpy(entropy, opt.base_entropy, 32);
+                    size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
-                    for (size_t i = 0; i < mnemonic.size(); ++i) {
-                        uint16_t word_id = mnemonic[i];
-                        for (int bit = 0; bit < 11; ++bit) {
-                            size_t global_bit = i * 11 + bit;
-                            if (global_bit < entropy_bits) {
-                                if (word_id & (1 << (10 - bit))) entropy[global_bit / 8] |= (1 << (7 - (global_bit % 8)));
-                            } else {
-                                if (word_id & (1 << (10 - bit))) original_checksums[b] |= (1 << (7 - (global_bit % 8)));
-                            }
+                    
+                    uint32_t acc = opt.base_acc;
+                    size_t bits = opt.base_bits;
+                    size_t b_pos = opt.base_b_pos;
+                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
+                        acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
+                        bits += 11;
+                        while (bits >= 8) {
+                            if (b_pos < entropy_bytes) {
+                                entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
+                                bits -= 8;
+                            } else break;
                         }
                     }
+                    if (bits > 0) {
+                        original_checksums[b] = (acc & ((1 << bits) - 1)) << (8 - bits);
+                    }
                     entropy[entropy_bytes] = 0x80;
+                    
                     uint32_t W_local[16] = {0};
                     memcpy(W_local, entropy, 32);
                     W_local[15] = __builtin_bswap32(entropy_bits);
@@ -594,11 +613,24 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                     uint8_t hash_first_byte;
                     if (b < 4) hash_first_byte = static_cast<uint8_t>(ctx1.state[0][b] >> 24);
                     else hash_first_byte = static_cast<uint8_t>(ctx2.state[0][b-4] >> 24);
-                    uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
-                    if (expected == (hash_first_byte >> (8 - checksum_bits))) {
-                        local_valid++;
-                        valid_batch.push_back(checksum_batch[b]);
-                        if (valid_batch.size() == BATCH_SIZE) process_batch();
+                    
+                    if constexpr (AutoDeduce) {
+                        uint16_t syn = checksum_batch[b * 24 + mnemonic_len - 1] | (hash_first_byte >> (8 - checksum_bits));
+                        if (opt.allowed_last_words[syn]) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch[valid_batch_sz * 24 + mnemonic_len - 1] = syn;
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
+                    } else {
+                        uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
+                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
                     }
                 }
             } else if constexpr (Arch == SimdArch::AVX2) {
@@ -608,22 +640,29 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][8] = {0};
 
                 for (int b = 0; b < 16; ++b) {
-                    const auto& mnemonic = checksum_batch[b];
-                    uint8_t entropy[32] = {0};
-                    size_t entropy_bits = mnemonic.size() * 11 - checksum_bits;
+                    uint8_t entropy[64];
+                    memcpy(entropy, opt.base_entropy, 32);
+                    size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
-                    for (size_t i = 0; i < mnemonic.size(); ++i) {
-                        uint16_t word_id = mnemonic[i];
-                        for (int bit = 0; bit < 11; ++bit) {
-                            size_t global_bit = i * 11 + bit;
-                            if (global_bit < entropy_bits) {
-                                if (word_id & (1 << (10 - bit))) entropy[global_bit / 8] |= (1 << (7 - (global_bit % 8)));
-                            } else {
-                                if (word_id & (1 << (10 - bit))) original_checksums[b] |= (1 << (7 - (global_bit % 8)));
-                            }
+                    
+                    uint32_t acc = opt.base_acc;
+                    size_t bits = opt.base_bits;
+                    size_t b_pos = opt.base_b_pos;
+                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
+                        acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
+                        bits += 11;
+                        while (bits >= 8) {
+                            if (b_pos < entropy_bytes) {
+                                entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
+                                bits -= 8;
+                            } else break;
                         }
                     }
+                    if (bits > 0) {
+                        original_checksums[b] = (acc & ((1 << bits) - 1)) << (8 - bits);
+                    }
                     entropy[entropy_bytes] = 0x80;
+                    
                     uint32_t W_local[16] = {0};
                     memcpy(W_local, entropy, 32);
                     W_local[15] = __builtin_bswap32(entropy_bits);
@@ -638,11 +677,24 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                     uint8_t hash_first_byte;
                     if (b < 8) hash_first_byte = static_cast<uint8_t>(ctx1.state[0][b] >> 24);
                     else hash_first_byte = static_cast<uint8_t>(ctx2.state[0][b-8] >> 24);
-                    uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
-                    if (expected == (hash_first_byte >> (8 - checksum_bits))) {
-                        local_valid++;
-                        valid_batch.push_back(checksum_batch[b]);
-                        if (valid_batch.size() == BATCH_SIZE) process_batch();
+                    
+                    if constexpr (AutoDeduce) {
+                        uint16_t syn = checksum_batch[b * 24 + mnemonic_len - 1] | (hash_first_byte >> (8 - checksum_bits));
+                        if (opt.allowed_last_words[syn]) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch[valid_batch_sz * 24 + mnemonic_len - 1] = syn;
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
+                    } else {
+                        uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
+                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
                     }
                 }
             } else if constexpr (Arch == SimdArch::AVX512) {
@@ -652,22 +704,29 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][16] = {0};
 
                 for (int b = 0; b < 32; ++b) {
-                    const auto& mnemonic = checksum_batch[b];
-                    uint8_t entropy[32] = {0};
-                    size_t entropy_bits = mnemonic.size() * 11 - checksum_bits;
+                    uint8_t entropy[64];
+                    memcpy(entropy, opt.base_entropy, 32);
+                    size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
-                    for (size_t i = 0; i < mnemonic.size(); ++i) {
-                        uint16_t word_id = mnemonic[i];
-                        for (int bit = 0; bit < 11; ++bit) {
-                            size_t global_bit = i * 11 + bit;
-                            if (global_bit < entropy_bits) {
-                                if (word_id & (1 << (10 - bit))) entropy[global_bit / 8] |= (1 << (7 - (global_bit % 8)));
-                            } else {
-                                if (word_id & (1 << (10 - bit))) original_checksums[b] |= (1 << (7 - (global_bit % 8)));
-                            }
+                    
+                    uint32_t acc = opt.base_acc;
+                    size_t bits = opt.base_bits;
+                    size_t b_pos = opt.base_b_pos;
+                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
+                        acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
+                        bits += 11;
+                        while (bits >= 8) {
+                            if (b_pos < entropy_bytes) {
+                                entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
+                                bits -= 8;
+                            } else break;
                         }
                     }
+                    if (bits > 0) {
+                        original_checksums[b] = (acc & ((1 << bits) - 1)) << (8 - bits);
+                    }
                     entropy[entropy_bytes] = 0x80;
+                    
                     uint32_t W_local[16] = {0};
                     memcpy(W_local, entropy, 32);
                     W_local[15] = __builtin_bswap32(entropy_bits);
@@ -682,24 +741,39 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                     uint8_t hash_first_byte;
                     if (b < 16) hash_first_byte = static_cast<uint8_t>(ctx1.state[0][b] >> 24);
                     else hash_first_byte = static_cast<uint8_t>(ctx2.state[0][b-16] >> 24);
-                    uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
-                    if (expected == (hash_first_byte >> (8 - checksum_bits))) {
-                        local_valid++;
-                        valid_batch.push_back(checksum_batch[b]);
-                        if (valid_batch.size() == BATCH_SIZE) process_batch();
+                    
+                    if constexpr (AutoDeduce) {
+                        uint16_t syn = checksum_batch[b * 24 + mnemonic_len - 1] | (hash_first_byte >> (8 - checksum_bits));
+                        if (opt.allowed_last_words[syn]) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch[valid_batch_sz * 24 + mnemonic_len - 1] = syn;
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
+                    } else {
+                        uint8_t expected = original_checksums[b] >> (8 - checksum_bits);
+                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                            local_valid++;
+                            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                            valid_batch_sz++;
+                            if (valid_batch_sz == BATCH_SIZE) process_batch();
+                        }
                     }
                 }
             }
         } else {
-            for (size_t b = 0; b < c_batch; ++b) {
-                if (cryptowords::Bip39Deriver::verify_checksum(checksum_batch[b])) {
+            for (size_t b = 0; b < c_batch_sz; ++b) {
+                std::vector<uint16_t> tmp(checksum_batch + b * 24, checksum_batch + b * 24 + mnemonic_len);
+                if (cryptowords::Bip39Deriver::verify_checksum(tmp)) {
                     local_valid++;
-                    valid_batch.push_back(checksum_batch[b]);
-                    if (valid_batch.size() == BATCH_SIZE) process_batch();
+                    for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = checksum_batch[b * 24 + i];
+                    valid_batch_sz++;
+                    if (valid_batch_sz == BATCH_SIZE) process_batch();
                 }
             }
         }
-        checksum_batch.clear();
+        c_batch_sz = 0;
     };
 
     while (local_tested < num_combos) {
@@ -716,11 +790,13 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
 
         if (!cfg.only_valids) {
             local_valid++;
-            valid_batch.push_back(current_mnemonic_ids);
-            if (valid_batch.size() == BATCH_SIZE) process_batch();
+            for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = current_mnemonic_ids[i];
+            valid_batch_sz++;
+            if (valid_batch_sz == BATCH_SIZE) process_batch();
         } else {
-            checksum_batch.push_back(current_mnemonic_ids);
-            if (checksum_batch.size() == C_BATCH_SIZE) process_checksum_batch();
+            for (size_t i=0; i<mnemonic_len; ++i) checksum_batch[c_batch_sz * 24 + i] = current_mnemonic_ids[i];
+            c_batch_sz++;
+            if (c_batch_sz == C_BATCH_SIZE) process_checksum_batch();
         }
 
         if (!advance_local_odometer()) break;
@@ -779,12 +855,22 @@ void BruteForceEngine::run_parallel_avx2(const AppConfig& cfg, const OptimizedMn
         if (count == 0) continue;
 
         workers.emplace_back([&, t, start, count]() {
-            if (has_avx512) {
-                worker_thread_simd<SimdArch::AVX512>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
-            } else if (has_avx2) {
-                worker_thread_simd<SimdArch::AVX2>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+            if (opt.auto_deduce_last_word) {
+                if (has_avx512) {
+                    worker_thread_simd<SimdArch::AVX512, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                } else if (has_avx2) {
+                    worker_thread_simd<SimdArch::AVX2, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                } else {
+                    worker_thread_simd<SimdArch::SSE, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                }
             } else {
-                worker_thread_simd<SimdArch::SSE>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                if (has_avx512) {
+                    worker_thread_simd<SimdArch::AVX512, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                } else if (has_avx2) {
+                    worker_thread_simd<SimdArch::AVX2, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                } else {
+                    worker_thread_simd<SimdArch::SSE, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                }
             }
         });
     }

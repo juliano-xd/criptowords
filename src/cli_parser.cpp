@@ -201,6 +201,11 @@ std::expected<AppConfig, std::string> CLIParser::parse_and_validate(int argc, ch
         return std::unexpected(wl_res.error());
     cfg.wordlist = std::move(wl_res.value());
 
+    if (raw_lang == "ja" || raw_lang == "japanese") {
+        cfg.separator = "\xE3\x80\x80";
+    }
+
+
     // Passo 4: Verifica o --mnemonics e preenche as posições base
     if (!raw_mnemonics.empty()) {
         auto words_view =
