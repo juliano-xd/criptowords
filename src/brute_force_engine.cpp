@@ -408,7 +408,7 @@ enum class SimdArch {
     AVX512
 };
 
-template <SimdArch Arch, bool AutoDeduce>
+template <SimdArch Arch, bool AutoDeduce, bool OnlyValids>
 static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& opt,
                                size_t start_combo, size_t num_combos, std::atomic<bool>& found,
                                std::atomic<uint64_t>& tested_count,
@@ -564,6 +564,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
     size_t c_batch_sz = 0;
 
     auto process_checksum_batch = [&]() {
+        if constexpr (!OnlyValids) return;
         if (c_batch_sz == 0) return;
 
         if (c_batch_sz == C_BATCH_SIZE) {
@@ -788,7 +789,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
             }
         }
 
-        if (!cfg.only_valids) {
+        if constexpr (!OnlyValids) {
             local_valid++;
             for (size_t i=0; i<mnemonic_len; ++i) valid_batch[valid_batch_sz * 24 + i] = current_mnemonic_ids[i];
             valid_batch_sz++;
@@ -855,22 +856,20 @@ void BruteForceEngine::run_parallel_avx2(const AppConfig& cfg, const OptimizedMn
         if (count == 0) continue;
 
         workers.emplace_back([&, t, start, count]() {
-            if (opt.auto_deduce_last_word) {
-                if (has_avx512) {
-                    worker_thread_simd<SimdArch::AVX512, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
-                } else if (has_avx2) {
-                    worker_thread_simd<SimdArch::AVX2, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+            if (cfg.only_valids) {
+                if (opt.auto_deduce_last_word) {
+                    if (has_avx512) worker_thread_simd<SimdArch::AVX512, true, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                    else if (has_avx2) worker_thread_simd<SimdArch::AVX2, true, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                    else worker_thread_simd<SimdArch::SSE, true, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
                 } else {
-                    worker_thread_simd<SimdArch::SSE, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                    if (has_avx512) worker_thread_simd<SimdArch::AVX512, false, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                    else if (has_avx2) worker_thread_simd<SimdArch::AVX2, false, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                    else worker_thread_simd<SimdArch::SSE, false, true>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
                 }
             } else {
-                if (has_avx512) {
-                    worker_thread_simd<SimdArch::AVX512, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
-                } else if (has_avx2) {
-                    worker_thread_simd<SimdArch::AVX2, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
-                } else {
-                    worker_thread_simd<SimdArch::SSE, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
-                }
+                if (has_avx512) worker_thread_simd<SimdArch::AVX512, false, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                else if (has_avx2) worker_thread_simd<SimdArch::AVX2, false, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                else worker_thread_simd<SimdArch::SSE, false, false>(cfg, opt, start, count, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
             }
         });
     }
