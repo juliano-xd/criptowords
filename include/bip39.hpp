@@ -27,6 +27,7 @@ class Bip39Deriver {
   public:
     static inline size_t build_mnemonic_str(const std::vector<uint16_t>& __restrict ids_vec,
                                             const std::vector<std::string>& wl,
+                                            const std::string& separator,
                                             char* __restrict out_buf) noexcept {
         const size_t count = ids_vec.size();
         if (count == 0)
@@ -91,7 +92,7 @@ class Bip39Deriver {
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
         char buf[MAX_MNEMONIC_LEN];
-        size_t len = build_mnemonic_str(mnemonic_ids, wl, buf);
+        size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);  // Note: For full dynamic support, caller should pass separator, but keeping " " as fallback for internal tests
 
         uint8_t seed[64];
         uint8_t master_node[64];
@@ -125,16 +126,10 @@ class Bip39Deriver {
 
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf.data(), salt_len, 2048, seed, 64);
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -177,7 +172,7 @@ class Bip39Deriver {
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0) {
         char buf[MAX_MNEMONIC_LEN];
-        size_t len = build_mnemonic_str(mnemonic_ids, wl, buf);
+        size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);  // Note: For full dynamic support, caller should pass separator, but keeping " " as fallback for internal tests
 
         uint8_t seed[64];
         uint8_t master_node[64];
@@ -197,16 +192,10 @@ class Bip39Deriver {
 
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, 2048, seed, 64);
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -255,16 +244,10 @@ class Bip39Deriver {
         uint8_t checksum[32];
         char result[64];
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -310,16 +293,10 @@ class Bip39Deriver {
         uint8_t pub_uncompressed[65];
         uint8_t hash_buf[32];
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -412,16 +389,10 @@ class Bip39Deriver {
         uint8_t hash_buf[32];
         uint8_t ripemd_buf[20];
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -453,16 +424,10 @@ class Bip39Deriver {
         uint8_t pub_uncompressed[65];
         uint8_t hash_buf[32];
 
-        unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(reinterpret_cast<const uint8_t*>("Bitcoin seed"), 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
