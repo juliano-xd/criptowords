@@ -26,6 +26,18 @@ int main(int argc, char* argv[]) {
     if (config.is_help_request) {
         std::print("{}", CLIParser::get_help_text());
         return 0;
+    }else if(config.unknows == 0){
+        std::println("\n[=] Nenhuma palavra desconhecida. Derivando endereço direto...");
+        secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+
+        OptimizedMnemonics plan = SearchOptimizer::build_plan(config);
+        std::string derived = (config.coin == CoinTarget::BTC) ?
+            cryptowords::Bip39Deriver::derive_btc_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size()) :
+            cryptowords::Bip39Deriver::derive_eth_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size());
+
+        std::println("    [+] Endereço derivado: {}", derived);
+        secp256k1_context_destroy(ctx);
+        return 0;
     }
 
     // 4. Feedback visual de que tudo deu certo
@@ -58,16 +70,7 @@ int main(int argc, char* argv[]) {
     // ==========================================================
 
 if (config.unknows == 0) {
-        std::println("\n[=] Nenhuma palavra desconhecida. Derivando endereço direto...");
-        secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-        
-        std::string derived = (config.coin == CoinTarget::BTC) ?
-            cryptowords::Bip39Deriver::derive_btc_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size()) :
-            cryptowords::Bip39Deriver::derive_eth_address(ctx, plan.base_mnemonic, config.wordlist, config.passphrase.data(), config.passphrase.size());
-            
-        std::println("    [+] Endereço derivado: {}", derived);
-        secp256k1_context_destroy(ctx);
-        return 0;
+
     }
 
     // Tentar GPU primeiro se habilitado
