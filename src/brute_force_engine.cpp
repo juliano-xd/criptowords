@@ -546,9 +546,9 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
         for (size_t b = 0; b < valid_batch_sz; ++b) {
             bool is_match = false;
             if (search_mode == CoinTarget::BTC) {
-                is_match = false;
+                is_match = cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seed + b*64, decoded_target);
             } else {
-                is_match = false;
+                is_match = cryptowords::Bip39Deriver::check_eth_target_from_seed(ctx, seed + b*64, decoded_target);
             }
             if (is_match) {
                 found = true;
