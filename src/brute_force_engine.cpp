@@ -86,6 +86,12 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
         std::println("");
     });
 
+        uint8_t decoded_target[20] = {0};
+    if (cfg.coin == CoinTarget::BTC) {
+        cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, decoded_target);
+    } else {
+        cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, decoded_target);
+    }
     auto advance_odometer = [&]() [[gnu::always_inline]] {
         int i = static_cast<int>(num_unknowns) - 1;
         while (true) {
@@ -112,9 +118,18 @@ void BruteForceEngine::run_sequential(const AppConfig& cfg, const OptimizedMnemo
             bool is_valid = (!cfg.only_valids) || cryptowords::Bip39Deriver::verify_checksum(current_mnemonic_ids);
             if (is_valid) {
                 valid_count++;
-                if (target == cryptowords::Bip39Deriver::derive_btc_address(
-                                  ctx, current_mnemonic_ids, cfg.wordlist, password.data(),
-                                  password.size())) {
+                uint8_t seed[64];
+                char buf[cryptowords::MAX_MNEMONIC_LEN];
+                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, buf);
+                uint8_t salt_buf[256];
+                std::memcpy(salt_buf, "mnemonic", 8);
+                size_t salt_len = 8;
+                if (password.size() > 0) {
+                    std::memcpy(salt_buf + 8, password.data(), password.size());
+                    salt_len += password.size();
+                }
+                crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, cfg.pbkdf2_rounds, seed, 64);
+                if (cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seed, decoded_target)) {
                     found = true;
                     break;
                 }
@@ -234,9 +249,11 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
     const std::string_view password = cfg.passphrase;
     const CoinTarget search_mode = cfg.coin;
     
-    std::string target_str(cfg.target);
-    if (search_mode == CoinTarget::ETH) {
-        for (char& c : target_str) c = std::tolower(static_cast<unsigned char>(c));
+    uint8_t decoded_target[20] = {0};
+    if (search_mode == CoinTarget::BTC) {
+        cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, decoded_target);
+    } else {
+        cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, decoded_target);
     }
 
     while (local_tested < num_combos) {
@@ -252,11 +269,24 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
         if (is_valid) {
             local_valid++;
 
-            std::string derived = (search_mode == CoinTarget::BTC) ?
-                cryptowords::Bip39Deriver::derive_btc_address(ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size()) :
-                cryptowords::Bip39Deriver::derive_eth_address(ctx, current_mnemonic_ids, cfg.wordlist, password.data(), password.size());
-                
-            if (derived == target_str) {
+            uint8_t seed[64];
+                char buf[cryptowords::MAX_MNEMONIC_LEN];
+                size_t len = cryptowords::Bip39Deriver::build_mnemonic_str(current_mnemonic_ids, cfg.wordlist, buf);
+                uint8_t salt_buf[256];
+                std::memcpy(salt_buf, "mnemonic", 8);
+                size_t salt_len = 8;
+                if (password.size() > 0) {
+                    std::memcpy(salt_buf + 8, password.data(), password.size());
+                    salt_len += password.size();
+                }
+                crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, cfg.pbkdf2_rounds, seed, 64);
+                bool is_match = false;
+                if (search_mode == CoinTarget::BTC) {
+                    is_match = cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seed, decoded_target);
+                } else {
+                    is_match = cryptowords::Bip39Deriver::check_eth_target_from_seed(ctx, seed, decoded_target);
+                }
+                if (is_match) {
                 found.store(true, std::memory_order_release);
                 std::lock_guard<std::mutex> lock(result_mutex);
                 if (!success) {
@@ -430,10 +460,11 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
     };
 
     const size_t checksum_bits = opt.base_mnemonic.size() * 11 / 33;
-    const std::string_view target = cfg.target;
-    std::string normalized_target = target.data();
-    if (cfg.coin == CoinTarget::ETH) {
-        std::transform(normalized_target.begin(), normalized_target.end(), normalized_target.begin(), ::tolower);
+    uint8_t decoded_target[20] = {0};
+    if (cfg.coin == CoinTarget::BTC) {
+        cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, decoded_target);
+    } else {
+        cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, decoded_target);
     }
 
     const uint32_t rounds = cfg.pbkdf2_rounds;
@@ -498,16 +529,15 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
         }
 
         for (size_t b = 0; b < batch_sz; ++b) {
-            std::string derived_address;
-            if (search_mode == CoinTarget::BTC) {
-                derived_address = cryptowords::Bip39Deriver::derive_btc_address_from_seed(
-                    ctx, seed[b], password.data(), password.size());
-            } else {
-                derived_address = cryptowords::Bip39Deriver::derive_eth_address_from_seed(
-                    ctx, seed[b], password.data(), password.size());
-            }
+            bool is_match = false;
 
-            if (derived_address == normalized_target) {
+            if (search_mode == CoinTarget::BTC) {
+                is_match = cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seed[b], decoded_target);
+            } else {
+
+                is_match = cryptowords::Bip39Deriver::check_eth_target_from_seed(ctx, seed[b], decoded_target);
+            }
+            if (is_match) {
                 found = true;
                 std::lock_guard<std::mutex> lock(result_mutex);
                 success = true;
@@ -857,9 +887,11 @@ void BruteForceEngine::worker_thread_gpu(const AppConfig& cfg, const OptimizedMn
     const CoinTarget search_mode = cfg.coin;
     constexpr size_t GPU_BATCH = 16;
 
-    std::string target_str(cfg.target);
-    if (search_mode == CoinTarget::ETH) {
-        for (char& c : target_str) c = std::tolower(static_cast<unsigned char>(c));
+    uint8_t decoded_target[20] = {0};
+    if (search_mode == CoinTarget::BTC) {
+        cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, decoded_target);
+    } else {
+        cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, decoded_target);
     }
 
     size_t local_tested = 0;
@@ -882,11 +914,13 @@ void BruteForceEngine::worker_thread_gpu(const AppConfig& cfg, const OptimizedMn
         for (size_t b = 0; b < batch_sz; ++b) {
             if (found.load(std::memory_order_acquire)) break;
             
-            std::string derived = (search_mode == CoinTarget::BTC) ?
-                cryptowords::Bip39Deriver::derive_btc_address_from_seed(ctx, seeds[b].data(), password.data(), password.size()) :
-                cryptowords::Bip39Deriver::derive_eth_address_from_seed(ctx, seeds[b].data(), password.data(), password.size());
-                
-            if (derived == target_str) {
+            bool is_match = false;
+                if (search_mode == CoinTarget::BTC) {
+                    is_match = cryptowords::Bip39Deriver::check_btc_target_from_seed(ctx, seeds[b].data(), decoded_target);
+                } else {
+                    is_match = cryptowords::Bip39Deriver::check_eth_target_from_seed(ctx, seeds[b].data(), decoded_target);
+                }
+                if (is_match) {
                 found.store(true, std::memory_order_release);
                 std::lock_guard<std::mutex> lock(result_mutex);
                 if (!success) {
