@@ -64,7 +64,7 @@ parse_constraint_map(std::string_view input) {
 
 static std::expected<std::vector<std::string>, std::string>
 load_wordlist(const std::string& lang) {
-    std::string path = std::format("../wordlist/{}.txt", lang);
+    std::string path = std::format("wordlist/{}.txt", lang);
     std::ifstream f(path);
 
     if (!f.is_open()) {

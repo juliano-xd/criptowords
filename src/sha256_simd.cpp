@@ -54,7 +54,7 @@ void sha256_transpose_avx512(const uint8_t* blocks[16], uint32_t W_out[16][16]) 
 // =========================================================================
 // IMPLEMENTAÇÃO SSE4.1 (4 Hashes)
 // =========================================================================
-__attribute__((target("sse4.1")))
+[[gnu::target("sse4.1")]]
 void sha256_transform_sse(SHA256_SSE_State* ctx, const uint32_t W_in[16][4]) {
     __m128i a = _mm_load_si128((__m128i*)ctx->state[0]);
     __m128i b = _mm_load_si128((__m128i*)ctx->state[1]);
@@ -66,12 +66,12 @@ void sha256_transform_sse(SHA256_SSE_State* ctx, const uint32_t W_in[16][4]) {
     __m128i h = _mm_load_si128((__m128i*)ctx->state[7]);
 
     #define ROR128(x, n) _mm_xor_si128(_mm_srli_epi32(x, n), _mm_slli_epi32(x, 32 - (n)))
-    auto CH  = [](__m128i x, __m128i y, __m128i z) { return _mm_xor_si128(z, _mm_and_si128(x, _mm_xor_si128(y, z))); };
-    auto MAJ = [](__m128i x, __m128i y, __m128i z) { return _mm_xor_si128(_mm_and_si128(x, y), _mm_and_si128(z, _mm_xor_si128(x, y))); };
-    auto S0  = [&](__m128i x) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 2), ROR128(x, 13)), ROR128(x, 22)); };
-    auto S1  = [&](__m128i x) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 6), ROR128(x, 11)), ROR128(x, 25)); };
-    auto s0  = [&](__m128i x) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 7), ROR128(x, 18)), _mm_srli_epi32(x, 3)); };
-    auto s1  = [&](__m128i x) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 17), ROR128(x, 19)), _mm_srli_epi32(x, 10)); };
+    auto CH  = [](__m128i x, __m128i y, __m128i z) __attribute__((target("sse4.1"))) { return _mm_xor_si128(z, _mm_and_si128(x, _mm_xor_si128(y, z))); };
+    auto MAJ = [](__m128i x, __m128i y, __m128i z) __attribute__((target("sse4.1"))) { return _mm_xor_si128(_mm_and_si128(x, y), _mm_and_si128(z, _mm_xor_si128(x, y))); };
+    auto S0  = [&](__m128i x) __attribute__((target("sse4.1"))) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 2), ROR128(x, 13)), ROR128(x, 22)); };
+    auto S1  = [&](__m128i x) __attribute__((target("sse4.1"))) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 6), ROR128(x, 11)), ROR128(x, 25)); };
+    auto s0  = [&](__m128i x) __attribute__((target("sse4.1"))) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 7), ROR128(x, 18)), _mm_srli_epi32(x, 3)); };
+    auto s1  = [&](__m128i x) __attribute__((target("sse4.1"))) { return _mm_xor_si128(_mm_xor_si128(ROR128(x, 17), ROR128(x, 19)), _mm_srli_epi32(x, 10)); };
     #undef ROR128
 
     __m128i W[64];
@@ -101,7 +101,7 @@ void sha256_transform_sse(SHA256_SSE_State* ctx, const uint32_t W_in[16][4]) {
 // =========================================================================
 // IMPLEMENTAÇÃO AVX2 (8 Hashes)
 // =========================================================================
-__attribute__((target("avx2")))
+[[gnu::target("avx2")]]
 void sha256_transform_avx2(SHA256_AVX2_State* ctx, const uint32_t W_in[16][8]) {
     __m256i a = _mm256_load_si256((__m256i*)ctx->state[0]);
     __m256i b = _mm256_load_si256((__m256i*)ctx->state[1]);
@@ -114,12 +114,12 @@ void sha256_transform_avx2(SHA256_AVX2_State* ctx, const uint32_t W_in[16][8]) {
 
 
     #define ROR256(x, n) _mm256_xor_si256(_mm256_srli_epi32(x, n), _mm256_slli_epi32(x, 32 - (n)))
-    auto CH  = [](__m256i x, __m256i y, __m256i z) { return _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z))); };
-    auto MAJ = [](__m256i x, __m256i y, __m256i z) { return _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y))); };
-    auto S0  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 2), ROR256(x, 13)), ROR256(x, 22)); };
-    auto S1  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 6), ROR256(x, 11)), ROR256(x, 25)); };
-    auto s0  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 7), ROR256(x, 18)), _mm256_srli_epi32(x, 3)); };
-    auto s1  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 17), ROR256(x, 19)), _mm256_srli_epi32(x, 10)); };
+    auto CH  = [](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) { return _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z))); };
+    auto MAJ = [](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y))); };
+    auto S0  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 2), ROR256(x, 13)), ROR256(x, 22)); };
+    auto S1  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 6), ROR256(x, 11)), ROR256(x, 25)); };
+    auto s0  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 7), ROR256(x, 18)), _mm256_srli_epi32(x, 3)); };
+    auto s1  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256(x, 17), ROR256(x, 19)), _mm256_srli_epi32(x, 10)); };
     #undef ROR256
 
     __m256i W[64];
@@ -149,5 +149,46 @@ void sha256_transform_avx2(SHA256_AVX2_State* ctx, const uint32_t W_in[16][8]) {
 // =========================================================================
 // IMPLEMENTAÇÃO AVX-512 (16 Hashes) - Uso de Rotação Nativa
 // =========================================================================
-__attribute__((target("avx512f,avx512vl")))
-void sha256_transform_avx512(SHA256_AVX512_State* ctx, const uint32_t W_in[16][16]) {}
+[[gnu::target("avx512f,avx512vl")]]
+void sha256_transform_avx512(SHA256_AVX512_State* ctx, const uint32_t W_in[16][16]) {
+    __m512i a = _mm512_load_si512((__m512i*)ctx->state[0]);
+    __m512i b = _mm512_load_si512((__m512i*)ctx->state[1]);
+    __m512i c = _mm512_load_si512((__m512i*)ctx->state[2]);
+    __m512i d = _mm512_load_si512((__m512i*)ctx->state[3]);
+    __m512i e = _mm512_load_si512((__m512i*)ctx->state[4]);
+    __m512i f = _mm512_load_si512((__m512i*)ctx->state[5]);
+    __m512i g = _mm512_load_si512((__m512i*)ctx->state[6]);
+    __m512i h = _mm512_load_si512((__m512i*)ctx->state[7]);
+
+    #define ROR512(x, n) _mm512_xor_si512(_mm512_srli_epi32(x, n), _mm512_slli_epi32(x, 32 - (n)))
+    auto CH  = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(z, _mm512_and_si512(x, _mm512_xor_si512(y, z))); };
+    auto MAJ = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_and_si512(x, y), _mm512_and_si512(z, _mm512_xor_si512(x, y))); };
+    auto S0  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 2), ROR512(x, 13)), ROR512(x, 22)); };
+    auto S1  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 6), ROR512(x, 11)), ROR512(x, 25)); };
+    auto s0  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 7), ROR512(x, 18)), _mm512_srli_epi32(x, 3)); };
+    auto s1  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 17), ROR512(x, 19)), _mm512_srli_epi32(x, 10)); };
+    #undef ROR512
+
+    __m512i W[64];
+    for (int t = 0; t < 16; t++) W[t] = _mm512_loadu_si512((__m512i*)W_in[t]);
+
+    for (int t = 16; t < 64; t++)
+        W[t] = _mm512_add_epi32(_mm512_add_epi32(W[t - 16], s0(W[t - 15])), _mm512_add_epi32(s1(W[t - 2]), W[t - 7]));
+
+    for (int t = 0; t < 64; t++) {
+        __m512i k_vec = _mm512_set1_epi32(K256[t]);
+        __m512i T1 = _mm512_add_epi32(h, _mm512_add_epi32(S1(e), _mm512_add_epi32(CH(e, f, g), _mm512_add_epi32(k_vec, W[t]))));
+        __m512i T2 = _mm512_add_epi32(S0(a), MAJ(a, b, c));
+        h = g; g = f; f = e; e = _mm512_add_epi32(d, T1);
+        d = c; c = b; b = a; a = _mm512_add_epi32(T1, T2);
+    }
+
+    _mm512_store_si512((__m512i*)ctx->state[0], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[0]), a));
+    _mm512_store_si512((__m512i*)ctx->state[1], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[1]), b));
+    _mm512_store_si512((__m512i*)ctx->state[2], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[2]), c));
+    _mm512_store_si512((__m512i*)ctx->state[3], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[3]), d));
+    _mm512_store_si512((__m512i*)ctx->state[4], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[4]), e));
+    _mm512_store_si512((__m512i*)ctx->state[5], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[5]), f));
+    _mm512_store_si512((__m512i*)ctx->state[6], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[6]), g));
+    _mm512_store_si512((__m512i*)ctx->state[7], _mm512_add_epi32(_mm512_load_si512((__m512i*)ctx->state[7]), h));
+}
