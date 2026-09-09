@@ -363,29 +363,44 @@ class HMAC_SHA512 {
             k_use = key;
             k_use_len = key_len;
         }
-        std::memset(ipad_, 0x36, 128);
-        std::memset(opad_, 0x5c, 128);
-        for (size_t i = 0; i < k_use_len; ++i) {
-            ipad_[i] ^= k_use[i];
-            opad_[i] ^= k_use[i];
+
+        uint8_t ipad[128], opad[128];
+        std::memset(ipad, 0x36, 128);
+        std::memset(opad, 0x5c, 128);
+
+        for (size_t i = 0; i < k_use_len; i++) {
+            ipad[i] ^= k_use[i];
+            opad[i] ^= k_use[i];
         }
-        inner_.update(ipad_, 128);
+
+        inner_.reset();
+        inner_.update(ipad, 128);
+
+        outer_base_.reset();
+        outer_base_.update(opad, 128);
     }
-    void update(const void* data, size_t len) {
+
+    void update(const uint8_t* data, size_t len) {
         inner_.update(data, len);
     }
-    void finalize(uint8_t out[64]) {
+
+    void finalize(uint8_t* out) {
         uint8_t inner_hash[64];
         inner_.finalize(inner_hash);
-        SHA512 outer;
-        outer.update(opad_, 128);
+
+        SHA512 outer = outer_base_; // Copy state
         outer.update(inner_hash, 64);
         outer.finalize(out);
     }
 
+    // Fast copy for reuse
+    void reset_inner() {
+        // Not easily doable without copying inner_base_
+    }
+
   private:
-    uint8_t ipad_[128], opad_[128];
     SHA512 inner_;
+    SHA512 outer_base_;
 };
 
 // ============================================================
@@ -394,9 +409,10 @@ class HMAC_SHA512 {
 __attribute__((hot, optimize("O3"))) inline void
 pbkdf2_hmac_sha512(const char* password, size_t password_len, const uint8_t* salt, size_t salt_len,
                    int iterations, uint8_t* out, size_t out_len) {
-    HMAC_SHA512 hmac;
-    hmac.init((const uint8_t*)password, password_len);
+    HMAC_SHA512 hmac_base;
+    hmac_base.init((const uint8_t*)password, password_len);
     
+    HMAC_SHA512 hmac = hmac_base;
     uint8_t U[64], T[64];
     uint8_t be4[4] = {0, 0, 0, 1};
     
@@ -407,10 +423,9 @@ pbkdf2_hmac_sha512(const char* password, size_t password_len, const uint8_t* sal
     std::memcpy(T, U, 64);
     
     for (int i = 1; i < iterations; i++) {
-        HMAC_SHA512 inner_hmac;
-        inner_hmac.init((const uint8_t*)password, password_len);
-        inner_hmac.update(U, 64);
-        inner_hmac.finalize(U);
+        hmac = hmac_base; // Reuse pre-computed ipad/opad states!
+        hmac.update(U, 64);
+        hmac.finalize(U);
         for (int j = 0; j < 64; j++) {
             T[j] ^= U[j];
         }

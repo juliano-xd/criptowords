@@ -119,8 +119,6 @@ class Bip39Deriver {
         }
 
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf.data(), salt_len, 2048, seed, 64);
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);
@@ -186,8 +184,6 @@ class Bip39Deriver {
         }
 
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, 2048, seed, 64);
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);
@@ -239,8 +235,6 @@ class Bip39Deriver {
         uint8_t payload[25];
         uint8_t checksum[32];
         char result[64];
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);
@@ -289,8 +283,6 @@ class Bip39Deriver {
         uint8_t chain_code[32];
         uint8_t pub_uncompressed[65];
         uint8_t hash_buf[32];
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);
@@ -386,8 +378,6 @@ class Bip39Deriver {
         uint8_t pub_serialized[33];
         uint8_t hash_buf[32];
         uint8_t ripemd_buf[20];
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);
@@ -422,8 +412,6 @@ class Bip39Deriver {
         uint8_t chain_code[32];
         uint8_t pub_uncompressed[65];
         uint8_t hash_buf[32];
-
-        unsigned int md_len = 64;
         crypto::HMAC_SHA512 hmac;
         hmac.init((const uint8_t*)"Bitcoin seed", 12);
         hmac.update(seed, 64);

@@ -9,9 +9,7 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64])
 {
-    uint64_t W1[16][2] = {0};
     uint64_t T1[8][2] = {0};
-    uint64_t W2[16][2] = {0};
     uint64_t T2[8][2] = {0};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][2], uint64_t W_opad[16][2]) {
@@ -137,9 +135,7 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64])
 {
-    uint64_t W1[16][4] = {0};
     uint64_t T1[8][4] = {0};
-    uint64_t W2[16][4] = {0};
     uint64_t T2[8][4] = {0};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][4], uint64_t W_opad[16][4]) {
@@ -293,9 +289,7 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64], uint8_t out9[64], uint8_t out10[64], uint8_t out11[64], uint8_t out12[64], uint8_t out13[64], uint8_t out14[64], uint8_t out15[64], uint8_t out16[64])
 {
-    uint64_t W1[16][8] = {0};
     uint64_t T1[8][8] = {0};
-    uint64_t W2[16][8] = {0};
     uint64_t T2[8][8] = {0};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][8], uint64_t W_opad[16][8]) {

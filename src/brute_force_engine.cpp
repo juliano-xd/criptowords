@@ -577,7 +577,10 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][4] = {0};
 
                 for (int b = 0; b < 8; ++b) {
+                    #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
                     uint8_t entropy[64];
+#pragma GCC diagnostic pop
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
@@ -589,7 +592,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                         acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
                         bits += 11;
                         while (bits >= 8) {
-                            if (b_pos < entropy_bytes) {
+                            if (b_pos < entropy_bytes && b_pos < 64) {
                                 entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
                                 bits -= 8;
                             } else break;
@@ -641,7 +644,10 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][8] = {0};
 
                 for (int b = 0; b < 16; ++b) {
+                    #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
                     uint8_t entropy[64];
+#pragma GCC diagnostic pop
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
@@ -653,7 +659,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                         acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
                         bits += 11;
                         while (bits >= 8) {
-                            if (b_pos < entropy_bytes) {
+                            if (b_pos < entropy_bytes && b_pos < 64) {
                                 entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
                                 bits -= 8;
                             } else break;
@@ -705,7 +711,10 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                 uint32_t blocks2[16][16] = {0};
 
                 for (int b = 0; b < 32; ++b) {
+                    #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
                     uint8_t entropy[64];
+#pragma GCC diagnostic pop
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
@@ -717,7 +726,7 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                         acc = (acc << 11) | (checksum_batch[b * 24 + i] & 0x7FF);
                         bits += 11;
                         while (bits >= 8) {
-                            if (b_pos < entropy_bytes) {
+                            if (b_pos < entropy_bytes && b_pos < 64) {
                                 entropy[b_pos++] = (acc >> (bits - 8)) & 0xFF;
                                 bits -= 8;
                             } else break;
