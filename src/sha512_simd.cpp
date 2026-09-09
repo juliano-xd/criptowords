@@ -1,3 +1,4 @@
+#pragma GCC diagnostic ignored "-Wpsabi"
 #include "../include/sha512_simd.hpp"
 #include <immintrin.h>
 #include <string.h>

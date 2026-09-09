@@ -1,3 +1,4 @@
+#include <memory>
 #include "../include/brute_force_engine.hpp"
 #include "../include/bip39.hpp"
 #include "../include/pbkdf2_simd.hpp"
@@ -200,10 +201,12 @@ void BruteForceEngine::worker_thread(const AppConfig& cfg, const OptimizedMnemon
                                      bool& success, std::vector<uint16_t>& result_mnemonic) {
     const size_t num_unknowns = opt.unknown_positions.size();
 
-    thread_local secp256k1_context* ctx = nullptr;
-    if (!ctx) {
-        ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    }
+    struct Secp256k1Deleter {
+        void operator()(secp256k1_context* c) const { if (c) secp256k1_context_destroy(c); }
+    };
+    thread_local std::unique_ptr<secp256k1_context, Secp256k1Deleter> ctx_ptr(
+        secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY));
+    secp256k1_context* ctx = ctx_ptr.get();
 
     std::vector<uint16_t> current_mnemonic_ids = opt.base_mnemonic;
 
@@ -416,10 +419,12 @@ static void worker_thread_simd(const AppConfig& cfg, const OptimizedMnemonics& o
                                bool& success, std::vector<uint16_t>& result_mnemonic) {
     const size_t num_unknowns = opt.unknown_positions.size();
 
-    thread_local secp256k1_context* ctx = nullptr;
-    if (!ctx) {
-        ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    }
+    struct Secp256k1Deleter {
+        void operator()(secp256k1_context* c) const { if (c) secp256k1_context_destroy(c); }
+    };
+    thread_local std::unique_ptr<secp256k1_context, Secp256k1Deleter> ctx_ptr(
+        secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY));
+    secp256k1_context* ctx = ctx_ptr.get();
 
     size_t mnemonic_len = opt.base_mnemonic.size();
     uint16_t current_mnemonic_ids[24];
@@ -935,10 +940,12 @@ void BruteForceEngine::worker_thread_gpu(const AppConfig& cfg, const OptimizedMn
                                          std::vector<uint16_t>& result_mnemonic) {
     const size_t num_unknowns = opt.unknown_positions.size();
 
-    thread_local secp256k1_context* ctx = nullptr;
-    if (!ctx) {
-        ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    }
+    struct Secp256k1Deleter {
+        void operator()(secp256k1_context* c) const { if (c) secp256k1_context_destroy(c); }
+    };
+    thread_local std::unique_ptr<secp256k1_context, Secp256k1Deleter> ctx_ptr(
+        secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY));
+    secp256k1_context* ctx = ctx_ptr.get();
 
     size_t w_sizes[24];
     size_t w_pos[24];
