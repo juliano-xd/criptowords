@@ -152,4 +152,57 @@ void sha512_transform_avx2(SHA512_AVX2_State* ctx, const uint64_t W_in[16][4]) {
 // IMPLEMENTACAO AVX-512 (8 Hashes) - Rotação Nativa de 64 bits
 // =========================================================================
 [[gnu::target("avx512f,avx512vl")]]
-void sha512_transform_avx512(SHA512_AVX512_State* ctx, const uint64_t W_in[16][8]) {}
+void sha512_transform_avx512(SHA512_AVX512_State* ctx, const uint64_t W_in[16][8]) {
+    __m512i a = _mm512_load_si512((__m512i*)ctx->state[0]);
+    __m512i b = _mm512_load_si512((__m512i*)ctx->state[1]);
+    __m512i c = _mm512_load_si512((__m512i*)ctx->state[2]);
+    __m512i d = _mm512_load_si512((__m512i*)ctx->state[3]);
+    __m512i e = _mm512_load_si512((__m512i*)ctx->state[4]);
+    __m512i f = _mm512_load_si512((__m512i*)ctx->state[5]);
+    __m512i g = _mm512_load_si512((__m512i*)ctx->state[6]);
+    __m512i h = _mm512_load_si512((__m512i*)ctx->state[7]);
+
+    auto CH  = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(z, _mm512_and_si512(x, _mm512_xor_si512(y, z)));
+    };
+    auto MAJ = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(_mm512_and_si512(x, y),_mm512_and_si512(z, _mm512_xor_si512(x, y)));
+    };
+    auto S0  = [](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 28), _mm512_ror_epi64(x, 34)), _mm512_ror_epi64(x, 39));
+    };
+    auto S1  = [](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 14), _mm512_ror_epi64(x, 18)), _mm512_ror_epi64(x, 41));
+    };
+    auto s0  = [](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 1), _mm512_ror_epi64(x, 8)), _mm512_srli_epi64(x, 7));
+    };
+    auto s1  = [](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
+        return _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 19), _mm512_ror_epi64(x, 61)), _mm512_srli_epi64(x, 6));
+    };
+
+    __m512i W[80];
+    for (int t = 0; t < 16; t++) {
+        W[t] = _mm512_loadu_si512((__m512i*)W_in[t]);
+    }
+    for (int t = 16; t < 80; t++) {
+        W[t] = _mm512_add_epi64(_mm512_add_epi64(W[t - 16], s0(W[t - 15])), _mm512_add_epi64(s1(W[t - 2]), W[t - 7]));
+    }
+
+    for (int t = 0; t < 80; t++) {
+        __m512i k_vec = _mm512_set1_epi64(K512[t]);
+        __m512i T1 = _mm512_add_epi64(h, _mm512_add_epi64(S1(e), _mm512_add_epi64(CH(e, f, g), _mm512_add_epi64(k_vec, W[t]))));
+        __m512i T2 = _mm512_add_epi64(S0(a), MAJ(a, b, c));
+        h = g; g = f; f = e; e = _mm512_add_epi64(d, T1);
+        d = c; c = b; b = a; a = _mm512_add_epi64(T1, T2);
+    }
+
+    _mm512_store_si512((__m512i*)ctx->state[0], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[0]), a));
+    _mm512_store_si512((__m512i*)ctx->state[1], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[1]), b));
+    _mm512_store_si512((__m512i*)ctx->state[2], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[2]), c));
+    _mm512_store_si512((__m512i*)ctx->state[3], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[3]), d));
+    _mm512_store_si512((__m512i*)ctx->state[4], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[4]), e));
+    _mm512_store_si512((__m512i*)ctx->state[5], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[5]), f));
+    _mm512_store_si512((__m512i*)ctx->state[6], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[6]), g));
+    _mm512_store_si512((__m512i*)ctx->state[7], _mm512_add_epi64(_mm512_load_si512((__m512i*)ctx->state[7]), h));
+}
