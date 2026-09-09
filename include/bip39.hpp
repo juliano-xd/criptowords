@@ -5,14 +5,12 @@
 #include <cstdint>
 #include <cstring>
 #include <flat_map>
-#include <openssl/hmac.h>
 #include <print>
 #include <secp256k1.h>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// #include "../keyhunt/sha3/sha3.h"
 
 #ifndef BUILTIN_EXPECT
 #define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
@@ -77,7 +75,12 @@ class Bip39Deriver {
         uint8_t I[64];
         unsigned int len = sizeof(I);
 
-        HMAC(EVP_sha512(), chain_code, 32, data, 37, I, &len);
+        
+        crypto::HMAC_SHA512 hmac;
+        hmac.init(chain_code, 32);
+        hmac.update(data, 37);
+        hmac.finalize(I);
+
 
         if (!secp256k1_ec_seckey_tweak_add(ctx, priv_key, I))
             return false;
@@ -106,19 +109,9 @@ class Bip39Deriver {
         uint8_t payload[25];
         uint8_t checksum[32];
         char result[64];
-
-        // secp256k1_context* ctx = nullptr;
-        // if (BUILTIN_EXPECT(!ctx, 0)) {
-        //     ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-        // }
-
-        // array<uint8_t, 256> salt_buf;
         std::array<uint8_t, 256> salt_buf = {'m', 'n', 'e', 'm', 'o', 'n', 'i', 'c'};
-        // uint8_t salt_buf[256];
 
         std::memcpy(salt_buf.data(), "mnemonic", 8);
-
-        // std::memcpy(salt_buf, "mnemonic", 8);
         size_t salt_len = 8;
         if (passphrase && passphrase_len > 0) {
             std::memcpy(salt_buf.data() + 8, passphrase, passphrase_len);
@@ -128,15 +121,10 @@ class Bip39Deriver {
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf.data(), salt_len, 2048, seed, 64);
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -200,15 +188,10 @@ class Bip39Deriver {
         crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, 2048, seed, 64);
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -258,15 +241,10 @@ class Bip39Deriver {
         char result[64];
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -313,15 +291,10 @@ class Bip39Deriver {
         uint8_t hash_buf[32];
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -415,15 +388,10 @@ class Bip39Deriver {
         uint8_t ripemd_buf[20];
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);
@@ -456,15 +424,10 @@ class Bip39Deriver {
         uint8_t hash_buf[32];
 
         unsigned int md_len = 64;
-        thread_local HMAC_CTX* hctx = nullptr;
-        if (!hctx) {
-            hctx = HMAC_CTX_new();
-            HMAC_Init_ex(hctx, "Bitcoin seed", 12, EVP_sha512(), NULL);
-        } else {
-            HMAC_Init_ex(hctx, NULL, 0, NULL, NULL);
-        }
-        HMAC_Update(hctx, seed, 64);
-        HMAC_Final(hctx, master_node, &md_len);
+        crypto::HMAC_SHA512 hmac;
+        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+        hmac.update(seed, 64);
+        hmac.finalize(master_node);
 
         std::memcpy(priv_key, master_node, 32);
         std::memcpy(chain_code, master_node + 32, 32);

@@ -3,7 +3,7 @@
 # Compilador e Flags
 CXX = g++
 CXXFLAGS = -O3 -mavx2 -march=native -std=c++23 -Iinclude -Wall -Wextra
-LDFLAGS = -lcrypto -lsecp256k1 -lOpenCL -pthread
+LDFLAGS = -lsecp256k1 -lOpenCL -pthread
 
 # Diretórios
 SRC_DIR = src
