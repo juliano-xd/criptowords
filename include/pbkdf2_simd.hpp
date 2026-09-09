@@ -17,18 +17,11 @@ inline void pbkdf2_hmac_sha512_4way_sse(
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
         
-        uint8_t k_ipad[128], k_opad[128];
-        for (int i = 0; i < 128; i++) {
-            k_ipad[i] = K[i] ^ 0x36;
-            k_opad[i] = K[i] ^ 0x5c;
+        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
+        for (int w = 0; w < 16; w++) {
+            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
+            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
         }
-
-        uint64_t blk[16];
-        memcpy(blk, k_ipad, 128);
-        for (int w = 0; w < 16; w++) W_ipad[w][lane] = __builtin_bswap64(blk[w]);
-
-        memcpy(blk, k_opad, 128);
-        for (int w = 0; w < 16; w++) W_opad[w][lane] = __builtin_bswap64(blk[w]);
     };
     SHA512_SSE_State ipad1, opad1;
     sha512_init_sse(&ipad1); sha512_init_sse(&opad1);
@@ -143,18 +136,11 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
         
-        uint8_t k_ipad[128], k_opad[128];
-        for (int i = 0; i < 128; i++) {
-            k_ipad[i] = K[i] ^ 0x36;
-            k_opad[i] = K[i] ^ 0x5c;
+        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
+        for (int w = 0; w < 16; w++) {
+            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
+            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
         }
-
-        uint64_t blk[16];
-        memcpy(blk, k_ipad, 128);
-        for (int w = 0; w < 16; w++) W_ipad[w][lane] = __builtin_bswap64(blk[w]);
-
-        memcpy(blk, k_opad, 128);
-        for (int w = 0; w < 16; w++) W_opad[w][lane] = __builtin_bswap64(blk[w]);
     };
     SHA512_AVX2_State ipad1, opad1;
     sha512_init_avx2(&ipad1); sha512_init_avx2(&opad1);
@@ -297,18 +283,11 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
         
-        uint8_t k_ipad[128], k_opad[128];
-        for (int i = 0; i < 128; i++) {
-            k_ipad[i] = K[i] ^ 0x36;
-            k_opad[i] = K[i] ^ 0x5c;
+        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
+        for (int w = 0; w < 16; w++) {
+            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
+            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
         }
-
-        uint64_t blk[16];
-        memcpy(blk, k_ipad, 128);
-        for (int w = 0; w < 16; w++) W_ipad[w][lane] = __builtin_bswap64(blk[w]);
-
-        memcpy(blk, k_opad, 128);
-        for (int w = 0; w < 16; w++) W_opad[w][lane] = __builtin_bswap64(blk[w]);
     };
     SHA512_AVX512_State ipad1, opad1;
     sha512_init_avx512(&ipad1); sha512_init_avx512(&opad1);

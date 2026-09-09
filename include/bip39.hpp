@@ -73,7 +73,6 @@ class Bip39Deriver {
         data[36] = static_cast<uint8_t>(index);
 
         uint8_t I[64];
-        unsigned int len = sizeof(I);
 
         
         crypto::HMAC_SHA512 hmac;
@@ -378,8 +377,14 @@ class Bip39Deriver {
         uint8_t pub_serialized[33];
         uint8_t hash_buf[32];
         uint8_t ripemd_buf[20];
-        crypto::HMAC_SHA512 hmac;
-        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+
+        static const crypto::HMAC_SHA512 base_hmac = [](){
+            crypto::HMAC_SHA512 h;
+            h.init((const uint8_t*)"Bitcoin seed", 12);
+            return h;
+        }();
+        
+        crypto::HMAC_SHA512 hmac = base_hmac;
         hmac.update(seed, 64);
         hmac.finalize(master_node);
 
@@ -412,8 +417,14 @@ class Bip39Deriver {
         uint8_t chain_code[32];
         uint8_t pub_uncompressed[65];
         uint8_t hash_buf[32];
-        crypto::HMAC_SHA512 hmac;
-        hmac.init((const uint8_t*)"Bitcoin seed", 12);
+
+        static const crypto::HMAC_SHA512 base_hmac = [](){
+            crypto::HMAC_SHA512 h;
+            h.init((const uint8_t*)"Bitcoin seed", 12);
+            return h;
+        }();
+        
+        crypto::HMAC_SHA512 hmac = base_hmac;
         hmac.update(seed, 64);
         hmac.finalize(master_node);
 

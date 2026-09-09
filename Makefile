@@ -34,15 +34,6 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 
-# Compilar objetos SIMD com flags AVX512 (as funcoes fazem dispatch dynamico)
-$(OBJ_DIR)/sha256_simd.o: $(SRC_DIR)/sha256_simd.cpp
-	@echo "Compilando $< com AVX512"
-	$(CXX) $(CXXFLAGS) -mavx512f -mavx512vl -c $< -o $@
-
-$(OBJ_DIR)/sha512_simd.o: $(SRC_DIR)/sha512_simd.cpp
-	@echo "Compilando $< com AVX512"
-	$(CXX) $(CXXFLAGS) -mavx512f -mavx512vl -c $< -o $@
-
 # Compilar objetos
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@echo "Compilando $<"
