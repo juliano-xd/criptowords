@@ -11,6 +11,16 @@
 
 namespace cryptowords {
 
+static const crypto::HMAC_SHA512& get_bitcoin_seed_hmac() {
+    static crypto::HMAC_SHA512 hmac_base;
+    static bool init = false;
+    if (!init) {
+        hmac_base.init((const uint8_t*)"Bitcoin seed", 12);
+        init = true;
+    }
+    return hmac_base;
+}
+
 size_t Bip39Deriver::build_mnemonic_str(const std::vector<uint16_t>& ids_vec,
                                         const std::vector<std::string>& wl,
                                         const std::string& separator,
@@ -82,8 +92,7 @@ std::string Bip39Deriver::derive_btc_address_from_seed(const secp256k1_context* 
     uint8_t payload[25];
     char result[100];
 
-    crypto::HMAC_SHA512 hmac;
-    hmac.init((const uint8_t*)"Bitcoin seed", 12);
+    crypto::HMAC_SHA512 hmac = get_bitcoin_seed_hmac();
     hmac.update(seed, 64);
     hmac.finalize(master_node);
 
@@ -126,8 +135,7 @@ std::string Bip39Deriver::derive_eth_address_from_seed(const secp256k1_context* 
     uint8_t pub_uncompressed[65];
     uint8_t hash_buf[32];
 
-    crypto::HMAC_SHA512 hmac;
-    hmac.init((const uint8_t*)"Bitcoin seed", 12);
+    crypto::HMAC_SHA512 hmac = get_bitcoin_seed_hmac();
     hmac.update(seed, 64);
     hmac.finalize(master_node);
 
@@ -186,14 +194,17 @@ bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
     uint8_t hash_buf[32];
     uint8_t ripemd_buf[20];
 
-    crypto::HMAC_SHA512 hmac;
-    hmac.init((const uint8_t*)"Bitcoin seed", 12);
+    crypto::HMAC_SHA512 hmac = get_bitcoin_seed_hmac();
     hmac.update(seed, 64);
     hmac.finalize(master_node);
 
     std::memcpy(priv_key, master_node, 32);
     std::memcpy(chain_code, master_node + 32, 32);
 
+    // OPTIMIZATION: Hardware accelerated SECP256k1 mixed point math via libsecp256k1.
+    // However, BIP32 HMAC-SHA512 uses the public key (unhardened path) which means we MUST do point multiplication.
+    // Doing 3 hardened + 2 unhardened derivations requires exactly 2 point multiplications and 5 HMAC-SHA512.
+    // Libsecp256k1 is highly optimized for this.
     if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
@@ -208,8 +219,10 @@ bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
     crypto::SHA256::hash(pub_serialized, pub_len, hash_buf);
     crypto::RIPEMD160::hash(hash_buf, 32, ripemd_buf);
 
-    uint32_t ripemd_fast = *reinterpret_cast<uint32_t*>(ripemd_buf);
-    uint32_t target_fast = *reinterpret_cast<const uint32_t*>(target_ripemd);
+    uint32_t ripemd_fast;
+    std::memcpy(&ripemd_fast, ripemd_buf, 4);
+    uint32_t target_fast;
+    std::memcpy(&target_fast, target_ripemd, 4);
     if (ripemd_fast != target_fast) return false;
     return std::memcmp(ripemd_buf + 4, target_ripemd + 4, 16) == 0;
 }
@@ -223,8 +236,7 @@ bool Bip39Deriver::check_eth_target_from_seed(const secp256k1_context* ctx,
     uint8_t pub_uncompressed[65];
     uint8_t hash_buf[32];
 
-    crypto::HMAC_SHA512 hmac;
-    hmac.init((const uint8_t*)"Bitcoin seed", 12);
+    crypto::HMAC_SHA512 hmac = get_bitcoin_seed_hmac();
     hmac.update(seed, 64);
     hmac.finalize(master_node);
 
@@ -244,8 +256,10 @@ bool Bip39Deriver::check_eth_target_from_seed(const secp256k1_context* ctx,
 
     crypto::Keccak256::hash(pub_uncompressed + 1, 64, hash_buf);
 
-    uint32_t eth_fast = *reinterpret_cast<uint32_t*>(hash_buf + 12);
-    uint32_t target_fast = *reinterpret_cast<const uint32_t*>(target_eth);
+    uint32_t eth_fast;
+    std::memcpy(&eth_fast, hash_buf + 12, 4);
+    uint32_t target_fast;
+    std::memcpy(&target_fast, target_eth, 4);
     if (eth_fast != target_fast) return false;
     return std::memcmp(hash_buf + 16, target_eth + 4, 16) == 0;
 }

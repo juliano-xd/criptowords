@@ -3,6 +3,10 @@
 #include "../include/brute_force_engine.hpp"
 #include "../include/cli_parser.hpp"
 #include "../include/search_optimizer.hpp"
+#include "../include/gpu_info.hpp"
+#include "../include/gpu_engine.hpp"
+
+
 #include "../include/search_plan.hpp"
 #include <print>
 
@@ -40,6 +44,14 @@ int main(int argc, char* argv[]) {
 
     if (!config.target.empty()) {
         std::println("    [+] Target: {}", config.target);
+    }
+
+
+    if (config.use_gpu) {
+        cryptowords::gpu::detect_and_print_capabilities();
+        cryptowords::GPUEngine::get_instance().init();
+
+        
     }
 
     // ==========================================================

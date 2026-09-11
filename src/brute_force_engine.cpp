@@ -42,26 +42,21 @@ void BruteForceEngine::run(ExecutionPipeline& pipeline, size_t num_threads) {
     bool success = false;
     std::vector<uint16_t> result_mnemonic;
 
-    size_t combos_per_thread = total_combos / num_threads;
-    size_t remainder = total_combos % num_threads;
 
     auto start_time = std::chrono::steady_clock::now();
     auto last_time = start_time;
     uint64_t last_tested = 0;
     double current_speed = 0.0;
 
-    size_t current_start = 0;
     for (size_t i = 0; i < num_threads; ++i) {
-        size_t combos = combos_per_thread + (i < remainder ? 1 : 0);
         threads.emplace_back(worker_thread, &pipeline, i, num_threads,
                              std::ref(found), std::ref(tested_count), std::ref(valid_count),
                              std::ref(result_mutex), std::ref(success), std::ref(result_mnemonic));
-        current_start += combos;
     }
 
     // Monitoramento da execução
     while (!found) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Medição a cada exato 1 segundo
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
         uint64_t current_tested = tested_count.load(std::memory_order_relaxed);
         uint64_t current_valid = valid_count.load(std::memory_order_relaxed);

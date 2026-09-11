@@ -22,13 +22,13 @@ bool decode_btc_address(const std::string& address, uint8_t out_ripemd[20]) {
             val /= 256;
         }
     }
-    int leading_zeros = 0;
+    size_t leading_zeros = 0;
     while (leading_zeros < address.size() && address[leading_zeros] == '1') leading_zeros++;
     while (result.size() < 25 - static_cast<size_t>(leading_zeros)) result.push_back(0);
     if (result.size() + leading_zeros != 25) return false;
 
     uint8_t decoded[25] = {};
-    for(int i = 0; i < leading_zeros; i++) decoded[i] = 0;
+    for(size_t i = 0; i < leading_zeros; i++) decoded[i] = 0;
     for(size_t i = 0; i < result.size(); i++) decoded[24 - i] = result[i];
 
     if (decoded[0] != 0x00) return false;

@@ -21,6 +21,7 @@ public:
     }
 
     bool init();
+    size_t get_optimal_batch_size() const { return max_batch_size_; }
     
     // Processa 65536 senhas (ou o batch disponivel) 
     // Retorna as 65536 sementes (64 bytes cada).

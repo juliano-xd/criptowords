@@ -126,7 +126,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                 uint32_t blocks2[16][4] = {};
 
                 for (int b = 0; b < 8; ++b) {
-                    uint8_t entropy[64] = {};
+                    uint8_t entropy[128] = {};
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
@@ -190,7 +190,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                 uint32_t blocks2[16][8] = {};
 
                 for (int b = 0; b < 16; ++b) {
-                    uint8_t entropy[64] = {};
+                    uint8_t entropy[128] = {};
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
@@ -254,7 +254,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                 uint32_t blocks2[16][16] = {};
 
                 for (int b = 0; b < 32; ++b) {
-                    uint8_t entropy[64] = {};
+                    uint8_t entropy[128] = {};
                     memcpy(entropy, opt.base_entropy, 32);
                     size_t entropy_bits = mnemonic_len * 11 - checksum_bits;
                     size_t entropy_bytes = entropy_bits / 8;
