@@ -7,6 +7,8 @@ bin/
 *.out
 *.log
 
+.*
+
 # Editor and OS files
 .vscode/
 .idea/
