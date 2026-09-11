@@ -173,10 +173,10 @@ void sha512_transform_avx512(SHA512_AVX512_State* ctx, const uint64_t W_in[16][8
     __m512i h = _mm512_load_si512((__m512i*)ctx->state[7]);
 
     auto CH  = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) {
-        return _mm512_xor_si512(z, _mm512_and_si512(x, _mm512_xor_si512(y, z)));
+        return _mm512_ternarylogic_epi64(x, y, z, 0xCA);
     };
     auto MAJ = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) {
-        return _mm512_xor_si512(_mm512_and_si512(x, y),_mm512_and_si512(z, _mm512_xor_si512(x, y)));
+        return _mm512_ternarylogic_epi64(x, y, z, 0xE8);
     };
     auto S0  = [](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
         return _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 28), _mm512_ror_epi64(x, 34)), _mm512_ror_epi64(x, 39));
