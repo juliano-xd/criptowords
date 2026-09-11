@@ -172,8 +172,8 @@ void sha256_transform_avx512(SHA256_AVX512_State* ctx, const uint32_t W_in[16][1
     __m512i h = _mm512_load_si512((__m512i*)ctx->state[7]);
 
     #define ROR512(x, n) _mm512_xor_si512(_mm512_srli_epi32(x, n), _mm512_slli_epi32(x, 32 - (n)))
-    auto CH  = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(z, _mm512_and_si512(x, _mm512_xor_si512(y, z))); };
-    auto MAJ = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_and_si512(x, y), _mm512_and_si512(z, _mm512_xor_si512(x, y))); };
+    auto CH  = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_ternarylogic_epi32(x, y, z, 0xCA); };
+    auto MAJ = [](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl"))) { return _mm512_ternarylogic_epi32(x, y, z, 0xE8); };
     auto S0  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 2), ROR512(x, 13)), ROR512(x, 22)); };
     auto S1  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 6), ROR512(x, 11)), ROR512(x, 25)); };
     auto s0  = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) { return _mm512_xor_si512(_mm512_xor_si512(ROR512(x, 7), ROR512(x, 18)), _mm512_srli_epi32(x, 3)); };
