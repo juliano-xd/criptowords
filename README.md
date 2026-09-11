@@ -4,19 +4,28 @@ CriptoWords é um motor de força bruta e recuperação mnemônica BIP39 constru
 
 ## 🚀 Funcionalidades e Inovações
 
-- **Vetorização SIMD (AVX2/AVX512)**: Implementação brutal e *lock-free* do PBKDF2-HMAC-SHA512. Em processadores AVX2, computa até 8 *rounds* inteiros de *hash* simultaneamente por núcleo físico (16 no AVX512), mitigando a maior barreira da recuperação de sementes (as famosas 2048 iterações).
-- **Target Early Rejection (Corte O(1))**: Em vez de fazer uma lenta comparação em array byte a byte do alvo final (`memcmp`), o programa *faz engenharia reversa visual* do Endereço Target (Base58/Hex) antes do motor inicializar. Um *token* de 32-bits é extraído para realizar saltos condicionais nos registradores do processador. O motor aborta os endereços falsos em um ciclo de relógio (99.9999% dos casos).
+- **Vetorização SIMD (AVX2/AVX512)**: Implementação brutal e *lock-free* do PBKDF2-HMAC-SHA512. Em vez de rodar o hash de 1 em 1, o núcleo matemático empacota múltiplos *hashes* na mesma instrução de CPU. 
+  - **Resultados Típicos (Por Core):** AVX2 entrega ganhos reais em torno de **5.4x** em processadores modernos de desktop em relação à execução unilinear, e AVX512 expande esse teto em **+11%**.
+- **Target Early Rejection (Corte O(1))**: Em vez de fazer uma lenta comparação em array byte a byte do alvo final (`memcmp`), o programa *faz engenharia reversa visual* do Endereço Target (Base58/Hex) antes do motor inicializar. Um *token* de 32-bits é extraído para realizar saltos condicionais nos registradores do processador.
 - **Auto-Dedução de Checksum Reverso**: Se as posições da frase fornecidas tiverem vazios, a palavra que carrega o *checksum* é inteiramente deduzida validando sub-blocos reversos de SHA256 sem invocar processamentos desnecessários em PBKDF2.
-- **Isolamento de Curva Elíptica Avançado**: Utiliza o core oficial padrão `libsecp256k1` otimizado para lidar com a matemática restrita da criptografia. O Motor foi escrito visando evitar instanciações e contextos de memória em loop fechado, deixando o *Heap* intocável durante bilhões de testes.
+
+## 🛠️ Limitações Matemáticas (O Efeito Exponencial)
+Este projeto é projetado para **Mnemônicos (BIP39)**, onde a geração do `Seed` obrigatoriamente força o processador a executar 2.048 iterações de `SHA512` sob *PBKDF2*. Como esse passo não pode ser burlado criptograficamente, a busca linear tem um teto físico. 
+Usando um processador multi-core otimizado em AVX2:
+- 1 ou 2 palavras desconhecidas (Até 4 Milhões de permutações): **Resolvido em menos de 1 minuto.**
+- 3 palavras desconhecidas (8,5 Bilhões): **Leva algumas horas.**
+- 4 palavras desconhecidas (17 Trilhões): **Demoraria anos em uma CPU caseira.**
+
+*Nota: Se o seu caso de uso não for recuperar palavras BIP39, mas sim fazer força bruta cega direto na Secp256k1 por um range de Chaves Privadas Raw (ex: Bitcoin Puzzle), você deve usar ferramentas de Point-Addition (Baby-Step Giant-Step / Kangaroo) em placa de vídeo (GPU).*
 
 ## 🛠️ Requisitos de Instalação
 
-Para compilar, o ambiente precisa possuir os pacotes de cabeçalho da *libsecp256k1* e *OpenCL* (para os headers passivos, embora todo o motor atual extraia processamento direto via vetorização de CPU nativa). 
+Para compilar, o ambiente precisa possuir os pacotes de cabeçalho da *libsecp256k1*. O suporte nativo foi focado puramente em vetores de CPU.
 
 No Ubuntu/Debian Linux:
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential g++ libsecp256k1-dev opencl-headers ocl-icd-opencl-dev
+sudo apt-get install build-essential g++ libsecp256k1-dev
 ```
 
 ## 🔨 Compilação
@@ -41,45 +50,9 @@ O programa suporta argumentos extremamente flexíveis para configurar o modelo d
 | `--allow` | Restringe as permutações de um `?` a palavras específicas separadas por `|` (base zero). | `"11:able|ability, 0:zoo"` |
 | `--size` | Total de palavras do Mnemônico (12, 15, 18, 21, ou 24). | Padrão: `12` |
 | `--coin` | Criptomoeda do endereço `--target` (`btc` ou `eth`). | Padrão: `btc` |
-| `--lang` | Idioma oficial do BIP39 (`en`, `pt`, `es`, `fr`, etc). Deve possuir um .txt na pasta `wordlist/`. | Padrão: `en` |
-| `--passphrase`| Aplica a 25ª palavra extra estipulada pelo usuário (salt extra no PBKDF2). | Padrão: (Vazio) |
+| `--lang` | Idioma oficial do BIP39 (`en`, `pt`, `es`, `fr`, etc). | Padrão: `en` |
+| `--passphrase`| Aplica a 25ª palavra extra estipulada pelo usuário (salt extra no PBKDF2). (Max 100 chars). | Padrão: (Vazio) |
 | `--threads` | Quantidade de threads de CPU alocadas. Recomenda-se no máximo o Nº de núcleos físicos. | Padrão: Metade da CPU |
 | `--rounds` | Rodadas do PBKDF2 (Customizável para brute-force em forks com parâmetros diferentes). | Padrão: `2048` |
-| `--invalid_too` | Por padrão o motor burla/anula hashes corrompidos no Checksum. Habilite isso para testá-los. | (Flag booleana) |
-| `--gpu` | Ativa o pipeline experimental OpenCL/GPU (Atualmente bypassado pela vetorização CPU SIMD). | (Flag booleana) |
-
-## 🎮 Exemplos Práticos de Uso
-
-### 1. Validar e Derivar uma Frase Intacta
-Ideal para verificar se a frase (e passphrase) fornecem o endereço final desejado.
-```bash
-./bin/cryptowords --mnemonics "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-```
-
-### 2. Recuperar Últimas Palavras (Modo Auto-Dedução Ativo)
-Busca cega nas últimas 2 palavras. O motor ativará a Dedução Reversa e fará bilhões de cortes de Checksum sem tocar na Curva Elíptica.
-```bash
-./bin/cryptowords --mnemonics "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon ? ?" \
-  --target 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa \
-  --threads 8
-```
-
-### 3. Recuperação Dinâmica usando --allow e Customizações (ETH)
-Busca Ethereum usando Mnemônico de 15 palavras. O usuário não se lembra da palavra 5 e da 6, mas tem certeza que a palavra 5 (índice 4) é `actor`, `able` ou `absent`.
-```bash
-./bin/cryptowords \
-  --size 15 \
-  --coin eth \
-  --mnemonics "abandon abandon abandon abandon ? ? abandon abandon abandon abandon abandon abandon abandon abandon abandon" \
-  --allow "4:actor|able|absent" \
-  --target 0xSuaCarteiraEth...
-```
-
-## 🏗️ Estrutura Arquitetural (PIMPL & Clean Code)
-
-A arquitetura do `v2.0` segue severos padrões de abstração para manter os loops rápidos (`inline`, vetorizados, *cache localized*) totalmente isolados:
-- `include/bip39.hpp` -> Declarações da estrutura em memória e das lógicas de derivações.
-- `src/bip39.cpp` -> Esconde a engenharia crua, limitando as re-compilações.
-- `SearchOptimizer` -> Avalia a string, deduz complexidade O(N), destrincha o target matematicamente e devolve um *plano de voo* mastigado.
-- `BruteForceEngine` -> Realiza despachos simultâneos nas filas SIMD, absorve interrupções e cuida apenas de matemática.
+| `--invalid_too` | Habilita a busca por chaves com checksum inválido. | (Flag booleana) |
 
