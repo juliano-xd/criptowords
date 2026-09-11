@@ -83,6 +83,7 @@ bool GPUEngine::pbkdf2_batch(const std::vector<uint8_t>& passwords,
                              uint32_t num_hashes) 
 {
     if (!initialized_) return false;
+    std::lock_guard<std::mutex> lock(mu_);
     if (num_hashes == 0) return true;
 
     cl_int err;

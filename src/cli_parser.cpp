@@ -284,7 +284,11 @@ std::expected<AppConfig, std::string> CLIParser::parse_and_validate(int argc, ch
     }
 
     if (cfg.num_threads == 0) {
+    if (cfg.use_gpu) {
+        cfg.num_threads = std::thread::hardware_concurrency(); // Use ALL cores to feed the GPU
+    } else {
         cfg.num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    }
     }
 
     return cfg;

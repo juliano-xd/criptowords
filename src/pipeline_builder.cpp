@@ -1,5 +1,6 @@
 #include "../include/pipeline_builder.hpp"
 #include "../include/batch_processors.hpp"
+#include "../include/gpu_batch_processor.hpp"
 #include "../include/crypto_impl.hpp"
 #include "../include/bip39.hpp"
 #include <iostream>
@@ -94,7 +95,11 @@ std::unique_ptr<IBatchProcessor> build_batch_processor(const AppConfig& cfg, con
 ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemonics& opt)
     : cfg_(cfg), opt_(opt), arch_(detect_best_simd()) {
     odometer_ = std::make_unique<GenericOdometer>();
-    processor_ = build_batch_processor(cfg_, opt_, arch_);
+    if (cfg_.use_gpu) {
+        processor_ = std::make_unique<GPUBatchProcessor>();
+    } else {
+        processor_ = build_batch_processor(cfg_, opt_, arch_);
+    }
 }
 
 std::unique_ptr<PipelineThreadContext> ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) {
@@ -114,6 +119,9 @@ std::unique_ptr<PipelineThreadContext> ExecutionPipeline::create_thread_context(
 }
 
 std::string ExecutionPipeline::get_architecture_name() const {
+    if (cfg_.use_gpu) {
+        return "OpenCL + Secp256k1 (Adaptive Auto-Tuned Mass Parallelism)";
+    }
     if (arch_ == SimdArch::AVX512) return "AVX512 (16-way)";
     if (arch_ == SimdArch::AVX2) return "AVX2 (8-way)";
     return "SSE4.1 (4-way)";
