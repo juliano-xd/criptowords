@@ -5,7 +5,7 @@
 # Compilador e Flags de Otimização Extrema (SIMD + Native Math)
 CXX = g++
 CXXFLAGS = -O3 -mavx2 -march=native -std=c++23 -Iinclude -Wall -Wextra -Wpedantic -Wno-deprecated-declarations
-LDFLAGS = -lsecp256k1 -pthread
+LDFLAGS = -lsecp256k1 -pthread -lOpenCL
 
 # Diretórios
 SRC_DIR = src
