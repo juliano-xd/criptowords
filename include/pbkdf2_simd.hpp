@@ -1,22 +1,22 @@
 #pragma once
-#include "sha512_simd.hpp"
+#include "sha512.hpp"
 #include <cstring>
 
 __attribute__((always_inline))
 inline void pbkdf2_hmac_sha512_4way_sse(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4, 
+    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,
     const uint8_t* salt, size_t salt_len,
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64])
 {
-    uint64_t T1[8][2] = {0};
-    uint64_t T2[8][2] = {0};
+    uint64_t T1[8][2] = {};
+    uint64_t T2[8][2] = {};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][2], uint64_t W_opad[16][2]) {
-        uint8_t K[128] = {0};
+        uint8_t K[128] = {};
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
-        
+
         const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
         for (int w = 0; w < 16; w++) {
             W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
@@ -27,27 +27,27 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     sha512_init_sse(&ipad1); sha512_init_sse(&opad1);
     SHA512_SSE_State ipad2, opad2;
     sha512_init_sse(&ipad2); sha512_init_sse(&opad2);
-    uint64_t W_ipad1[16][2] = {0};
-    uint64_t W_opad1[16][2] = {0};
+    uint64_t W_ipad1[16][2] = {};
+    uint64_t W_opad1[16][2] = {};
     populate_W(p1, l1, 0, W_ipad1, W_opad1);
     populate_W(p2, l2, 1, W_ipad1, W_opad1);
     sha512_transform_sse(&ipad1, W_ipad1);
     sha512_transform_sse(&opad1, W_opad1);
-    uint64_t W_ipad2[16][2] = {0};
-    uint64_t W_opad2[16][2] = {0};
+    uint64_t W_ipad2[16][2] = {};
+    uint64_t W_opad2[16][2] = {};
     populate_W(p3, l3, 0, W_ipad2, W_opad2);
     populate_W(p4, l4, 1, W_ipad2, W_opad2);
     sha512_transform_sse(&ipad2, W_ipad2);
     sha512_transform_sse(&opad2, W_opad2);
 
-    uint64_t msg1[16][2] = {0};
-    uint64_t msg2[16][2] = {0};
+    uint64_t msg1[16][2] = {};
+    uint64_t msg2[16][2] = {};
 
-    uint8_t salt1[128] = {0};
+    uint8_t salt1[128] = {};
     memcpy(salt1, salt, salt_len);
     salt1[salt_len] = 0; salt1[salt_len+1] = 0; salt1[salt_len+2] = 0; salt1[salt_len+3] = 1;
     salt1[salt_len+4] = 0x80;
-    
+
     uint64_t s_blk[16]; memcpy(s_blk, salt1, 128);
     for(int w=0; w<15; w++) {
         uint64_t v_swp = __builtin_bswap64(s_blk[w]);
@@ -78,11 +78,11 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     SHA512_SSE_State o2 = opad2;
     sha512_transform_sse(&o2, msg2);
     for(int i=0; i<8; i++) for(int l=0; l<2; l++) T2[i][l] = o2.state[i][l];
-    uint64_t U1[16][2] = {0};
+    uint64_t U1[16][2] = {};
     for(int l=0; l<2; l++) U1[15][l] = (128 + 64) * 8;
     U1[8][0] = 0x8000000000000000ULL;
     U1[8][1] = U1[8][0];
-    uint64_t U2[16][2] = {0};
+    uint64_t U2[16][2] = {};
     for(int l=0; l<2; l++) U2[15][l] = (128 + 64) * 8;
     U2[8][0] = 0x8000000000000000ULL;
     U2[8][1] = U2[8][0];
@@ -123,19 +123,19 @@ inline void pbkdf2_hmac_sha512_4way_sse(
 
 __attribute__((always_inline))
 inline void pbkdf2_hmac_sha512_8way_avx2(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8, 
+    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8,
     const uint8_t* salt, size_t salt_len,
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64])
 {
-    uint64_t T1[8][4] = {0};
-    uint64_t T2[8][4] = {0};
+    uint64_t T1[8][4] = {};
+    uint64_t T2[8][4] = {};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][4], uint64_t W_opad[16][4]) {
-        uint8_t K[128] = {0};
+        uint8_t K[128] = {};
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
-        
+
         const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
         for (int w = 0; w < 16; w++) {
             W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
@@ -146,16 +146,16 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     sha512_init_avx2(&ipad1); sha512_init_avx2(&opad1);
     SHA512_AVX2_State ipad2, opad2;
     sha512_init_avx2(&ipad2); sha512_init_avx2(&opad2);
-    uint64_t W_ipad1[16][4] = {0};
-    uint64_t W_opad1[16][4] = {0};
+    uint64_t W_ipad1[16][4] = {};
+    uint64_t W_opad1[16][4] = {};
     populate_W(p1, l1, 0, W_ipad1, W_opad1);
     populate_W(p2, l2, 1, W_ipad1, W_opad1);
     populate_W(p3, l3, 2, W_ipad1, W_opad1);
     populate_W(p4, l4, 3, W_ipad1, W_opad1);
     sha512_transform_avx2(&ipad1, W_ipad1);
     sha512_transform_avx2(&opad1, W_opad1);
-    uint64_t W_ipad2[16][4] = {0};
-    uint64_t W_opad2[16][4] = {0};
+    uint64_t W_ipad2[16][4] = {};
+    uint64_t W_opad2[16][4] = {};
     populate_W(p5, l5, 0, W_ipad2, W_opad2);
     populate_W(p6, l6, 1, W_ipad2, W_opad2);
     populate_W(p7, l7, 2, W_ipad2, W_opad2);
@@ -163,14 +163,14 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     sha512_transform_avx2(&ipad2, W_ipad2);
     sha512_transform_avx2(&opad2, W_opad2);
 
-    uint64_t msg1[16][4] = {0};
-    uint64_t msg2[16][4] = {0};
+    uint64_t msg1[16][4] = {{}};
+    uint64_t msg2[16][4] = {{}};
 
-    uint8_t salt1[128] = {0};
+    uint8_t salt1[128] = {};
     memcpy(salt1, salt, salt_len);
     salt1[salt_len] = 0; salt1[salt_len+1] = 0; salt1[salt_len+2] = 0; salt1[salt_len+3] = 1;
     salt1[salt_len+4] = 0x80;
-    
+
     uint64_t s_blk[16]; memcpy(s_blk, salt1, 128);
     for(int w=0; w<15; w++) {
         uint64_t v_swp = __builtin_bswap64(s_blk[w]);
@@ -205,13 +205,13 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     SHA512_AVX2_State o2 = opad2;
     sha512_transform_avx2(&o2, msg2);
     for(int i=0; i<8; i++) for(int l=0; l<4; l++) T2[i][l] = o2.state[i][l];
-    uint64_t U1[16][4] = {0};
+    uint64_t U1[16][4] = {};
     for(int l=0; l<4; l++) U1[15][l] = (128 + 64) * 8;
     U1[8][0] = 0x8000000000000000ULL;
     U1[8][1] = U1[8][0];
     U1[8][2] = U1[8][0];
     U1[8][3] = U1[8][0];
-    uint64_t U2[16][4] = {0};
+    uint64_t U2[16][4] = {};
     for(int l=0; l<4; l++) U2[15][l] = (128 + 64) * 8;
     U2[8][0] = 0x8000000000000000ULL;
     U2[8][1] = U2[8][0];
@@ -270,19 +270,19 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
 
 __attribute__((always_inline))
 inline void pbkdf2_hmac_sha512_16way_avx512(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8,     const char* p9, size_t l9,     const char* p10, size_t l10,     const char* p11, size_t l11,     const char* p12, size_t l12,     const char* p13, size_t l13,     const char* p14, size_t l14,     const char* p15, size_t l15,     const char* p16, size_t l16, 
+    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8,     const char* p9, size_t l9,     const char* p10, size_t l10,     const char* p11, size_t l11,     const char* p12, size_t l12,     const char* p13, size_t l13,     const char* p14, size_t l14,     const char* p15, size_t l15,     const char* p16, size_t l16,
     const uint8_t* salt, size_t salt_len,
     uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64], uint8_t out9[64], uint8_t out10[64], uint8_t out11[64], uint8_t out12[64], uint8_t out13[64], uint8_t out14[64], uint8_t out15[64], uint8_t out16[64])
 {
-    uint64_t T1[8][8] = {0};
-    uint64_t T2[8][8] = {0};
+    uint64_t T1[8][8] = {};
+    uint64_t T2[8][8] = {};
 
     auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][8], uint64_t W_opad[16][8]) {
-        uint8_t K[128] = {0};
+        uint8_t K[128] = {};
         if (len > 128) { /* omitted for bip39 */ }
         else { memcpy(K, pass, len); }
-        
+
         const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
         for (int w = 0; w < 16; w++) {
             W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
@@ -293,8 +293,8 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     sha512_init_avx512(&ipad1); sha512_init_avx512(&opad1);
     SHA512_AVX512_State ipad2, opad2;
     sha512_init_avx512(&ipad2); sha512_init_avx512(&opad2);
-    uint64_t W_ipad1[16][8] = {0};
-    uint64_t W_opad1[16][8] = {0};
+    uint64_t W_ipad1[16][8] = {};
+    uint64_t W_opad1[16][8] = {};
     populate_W(p1, l1, 0, W_ipad1, W_opad1);
     populate_W(p2, l2, 1, W_ipad1, W_opad1);
     populate_W(p3, l3, 2, W_ipad1, W_opad1);
@@ -305,8 +305,8 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     populate_W(p8, l8, 7, W_ipad1, W_opad1);
     sha512_transform_avx512(&ipad1, W_ipad1);
     sha512_transform_avx512(&opad1, W_opad1);
-    uint64_t W_ipad2[16][8] = {0};
-    uint64_t W_opad2[16][8] = {0};
+    uint64_t W_ipad2[16][8] = {};
+    uint64_t W_opad2[16][8] = {};
     populate_W(p9, l9, 0, W_ipad2, W_opad2);
     populate_W(p10, l10, 1, W_ipad2, W_opad2);
     populate_W(p11, l11, 2, W_ipad2, W_opad2);
@@ -318,14 +318,14 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     sha512_transform_avx512(&ipad2, W_ipad2);
     sha512_transform_avx512(&opad2, W_opad2);
 
-    uint64_t msg1[16][8] = {0};
-    uint64_t msg2[16][8] = {0};
+    uint64_t msg1[16][8] = {};
+    uint64_t msg2[16][8] = {};
 
-    uint8_t salt1[128] = {0};
+    uint8_t salt1[128] = {};
     memcpy(salt1, salt, salt_len);
     salt1[salt_len] = 0; salt1[salt_len+1] = 0; salt1[salt_len+2] = 0; salt1[salt_len+3] = 1;
     salt1[salt_len+4] = 0x80;
-    
+
     uint64_t s_blk[16]; memcpy(s_blk, salt1, 128);
     for(int w=0; w<15; w++) {
         uint64_t v_swp = __builtin_bswap64(s_blk[w]);
@@ -368,7 +368,7 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     SHA512_AVX512_State o2 = opad2;
     sha512_transform_avx512(&o2, msg2);
     for(int i=0; i<8; i++) for(int l=0; l<8; l++) T2[i][l] = o2.state[i][l];
-    uint64_t U1[16][8] = {0};
+    uint64_t U1[16][8] = {};
     for(int l=0; l<8; l++) U1[15][l] = (128 + 64) * 8;
     U1[8][0] = 0x8000000000000000ULL;
     U1[8][1] = U1[8][0];
@@ -378,7 +378,7 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     U1[8][5] = U1[8][0];
     U1[8][6] = U1[8][0];
     U1[8][7] = U1[8][0];
-    uint64_t U2[16][8] = {0};
+    uint64_t U2[16][8] = {};
     for(int l=0; l<8; l++) U2[15][l] = (128 + 64) * 8;
     U2[8][0] = 0x8000000000000000ULL;
     U2[8][1] = U2[8][0];
@@ -470,4 +470,3 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
         memcpy(out16 + i*8, &b16, 8);
     }
 }
-

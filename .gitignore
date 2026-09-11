@@ -1,0 +1,16 @@
+# Binaries and Build Artifacts
+build/
+bin/
+*.o
+*.a
+*.so
+*.out
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+.clangd/
+.openclaude/
+.opencode/
