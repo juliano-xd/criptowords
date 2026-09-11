@@ -166,6 +166,9 @@ bool Bip39Deriver::decode_hex_eth_address(const std::string& hex_addr, uint8_t o
     std::string s = hex_addr;
     if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s = s.substr(2);
     if (s.length() != 40) return false;
+    for (int i = 0; i < 40; i++) {
+        if (!std::isxdigit(s[i])) return false;
+    }
     for (int i = 0; i < 20; i++) {
         std::string byteString = s.substr(i * 2, 2);
         out_target[i] = static_cast<uint8_t>(strtol(byteString.c_str(), nullptr, 16));

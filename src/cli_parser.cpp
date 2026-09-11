@@ -158,11 +158,14 @@ std::expected<AppConfig, std::string> CLIParser::parse_and_validate(int argc, ch
                 return std::unexpected(res.error());
             for (auto& [k, v] : *res)
                 raw_allow[k].append_range(std::move(v));
-        } else if (key == "target")
+        } else if (key == "target") {
             cfg.target = value;
-        else if (key == "passphrase")
+        } else if (key == "passphrase") {
+            if (value.size() > 100) {
+                return std::unexpected("O passphrase excede o limite máximo de 100 caracteres.");
+            }
             cfg.passphrase = value;
-        else if (key == "coin") {
+        } else if (key == "coin") {
             std::string temp_coin = std::string(value);
             std::ranges::transform(temp_coin, temp_coin.begin(), ::tolower);
 

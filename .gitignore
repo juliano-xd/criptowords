@@ -1,12 +1,12 @@
 # Binaries and Build Artifacts
 build/
 bin/
+tests/
 *.o
 *.a
 *.so
 *.out
 *.log
-
 .*
 
 # Editor and OS files
