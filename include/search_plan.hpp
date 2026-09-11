@@ -17,7 +17,7 @@ struct OptimizedMnemonics {
     size_t prefix_words = 0;
 
     // Otimização de Entropia Base
-    uint8_t base_entropy[32] = {0};
+    uint8_t base_entropy[32] = {};
     uint32_t base_acc = 0;
     size_t base_bits = 0;
     size_t base_b_pos = 0;
@@ -25,4 +25,10 @@ struct OptimizedMnemonics {
     // Dedução de Checksum
     bool auto_deduce_last_word = false;
     bool allowed_last_words[2048] = {false};
+
+    // Alvo Otimizado
+    uint8_t target_bytes[20] = {};
+    uint32_t target_fast_hash = 0;
+    bool has_target = false;
+
 };

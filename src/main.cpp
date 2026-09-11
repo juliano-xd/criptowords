@@ -73,24 +73,8 @@ if (config.unknows == 0) {
 
     }
 
-    // Tentar GPU primeiro se habilitado
-    if (config.use_gpu) {
-        gpu::Engine gpu;
-        if (gpu.init("/home/trindade/temp/criptowords/src/pbkdf2_hmac512.cl")) {
-            std::println("[GPU] Usando device: {}", gpu.device_name());
-            config.gpu_engine = &gpu;
-            BruteForceEngine::run_parallel_gpu(config, plan, gpu);
-            return 0;
-        } else {
-            std::println("[GPU] OpenCL não disponível, usando CPU...");
-        }
-    }
-
-    if (config.num_threads > 1) {
-        BruteForceEngine::run_parallel_avx2(config, plan);
-    } else {
-        BruteForceEngine::run_sequential(config, plan);
-    }
-
+        std::println("\n[+] Construindo pipeline otimizado (JIT)...");
+    cryptowords::ExecutionPipeline pipeline(config, plan);
+    cryptowords::BruteForceEngine::run(pipeline, config.num_threads);
     return 0;
 }

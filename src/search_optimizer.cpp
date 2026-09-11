@@ -106,6 +106,21 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         opt.valid_combinations = opt.total_combinations / 16.0;
     }
 
+
+    // ==========================================
+    // OTIMIZAÇÃO 4: Reversão / Pre-computação do Target
+    // ==========================================
+    if (!cfg.target.empty()) {
+        opt.has_target = true;
+        if (cfg.coin == CoinTarget::BTC) {
+            cryptowords::Bip39Deriver::decode_base58_btc_address(cfg.target, opt.target_bytes);
+        } else {
+            cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, opt.target_bytes);
+        }
+        // Extrai os 4 primeiros bytes (32 bits) para Rejeição Precoce ultra-rápida (bypass memcmp)
+        std::memcpy(&opt.target_fast_hash, opt.target_bytes, 4);
+    }
+
     return opt;
 }
 
@@ -144,4 +159,10 @@ void SearchOptimizer::print_report(const OptimizedMnemonics& opt, const AppConfi
     if (opt.prefix_words > 0) {
         std::println("    [!] OTIMIZAÇÃO ATIVA       : Template de Strings Fixo ({} palavras)", opt.prefix_words);
     }
+
+    if (opt.has_target) {
+        std::println("    [!] OTIMIZAÇÃO ATIVA       : Target Reverso! Payload de 20-bytes decodificado em O(1)");
+        std::println("    [!] REJEIÇÃO PRECOCE (C1)  : Token de comparação 32-bits gerado: 0x{:08x}", opt.target_fast_hash);
+    }
+
 }
