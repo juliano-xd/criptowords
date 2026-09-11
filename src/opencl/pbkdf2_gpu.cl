@@ -2,8 +2,9 @@
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
 #define ROTR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
-#define CH64(x, y, z) (((x) & (y)) ^ (~(x) & (z)))
-#define MAJ64(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+// CH and MAJ otimizados matematicamente para usar menos portas logicas na GPU
+#define CH64(x, y, z) ((z) ^ ((x) & ((y) ^ (z))))
+#define MAJ64(x, y, z) (((x) & (y)) | ((z) & ((x) | (y))))
 #define EP0_64(x) (ROTR64(x, 28) ^ ROTR64(x, 34) ^ ROTR64(x, 39))
 #define EP1_64(x) (ROTR64(x, 14) ^ ROTR64(x, 18) ^ ROTR64(x, 41))
 #define SIG0_64(x) (ROTR64(x, 1) ^ ROTR64(x, 8) ^ ((x) >> 7))
@@ -37,19 +38,36 @@ __constant ulong IV[8] = {
     0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
 };
 
-inline void sha512_block(ulong* H, ulong* W) {
-    for (int i = 16; i < 80; ++i) {
-        W[i] = SIG1_64(W[i - 2]) + W[i - 7] + SIG0_64(W[i - 15]) + W[i - 16];
-    }
+// =========================================================================
+// OTIMIZACAO ABSOLUTA: JANELA DESLIZANTE DE 16 REGISTRADORES (Zero-Spill)
+// Sem arrays dinamicos. Expansao de mensagem resolvida estaticamente no compilador.
+// =========================================================================
+inline void sha512_block_fast(ulong* H, ulong* W) {
     ulong a = H[0], b = H[1], c = H[2], d = H[3];
     ulong e = H[4], f = H[5], g = H[6], h = H[7];
-    
-    for (int i = 0; i < 80; ++i) {
-        ulong T1 = h + EP1_64(e) + CH64(e, f, g) + K[i] + W[i];
-        ulong T2 = EP0_64(a) + MAJ64(a, b, c);
+    ulong T1, T2;
+
+    // Rounds 0-15
+    #pragma unroll 16
+    for (int j = 0; j < 16; ++j) {
+        T1 = h + EP1_64(e) + CH64(e, f, g) + K[j] + W[j];
+        T2 = EP0_64(a) + MAJ64(a, b, c);
         h = g; g = f; f = e; e = d + T1;
         d = c; c = b; b = a; a = T1 + T2;
     }
+
+    // Rounds 16-79: Calculado in-place garantindo offset seguro 
+    for (int chunk = 1; chunk < 5; ++chunk) {
+        #pragma unroll 16
+        for (int j = 0; j < 16; ++j) {
+            W[j] += SIG1_64(W[(j+14)&15]) + W[(j+9)&15] + SIG0_64(W[(j+1)&15]);
+            T1 = h + EP1_64(e) + CH64(e, f, g) + K[chunk*16 + j] + W[j];
+            T2 = EP0_64(a) + MAJ64(a, b, c);
+            h = g; g = f; f = e; e = d + T1;
+            d = c; c = b; b = a; a = T1 + T2;
+        }
+    }
+
     H[0] += a; H[1] += b; H[2] += c; H[3] += d;
     H[4] += e; H[5] += f; H[6] += g; H[7] += h;
 }
@@ -63,9 +81,8 @@ __kernel void pbkdf2_batch(
     uint gid = get_global_id(0);
     if (gid >= num_hashes) return;
     
-    // Read password
     uint pwd_len = pass_lens[gid];
-    if(pwd_len > 128) return; // not supported in this hyper-optimized kernel
+    if(pwd_len > 128) return; 
     
     uchar key[128];
     for(int i=0; i<128; i++) key[i] = 0;
@@ -75,89 +92,92 @@ __kernel void pbkdf2_batch(
         key[i] = passwords[offset + i];
     }
     
-    // Compute IPAD and OPAD
-    ulong W[80];
+    ulong W[16]; 
     ulong ipad_state[8];
     ulong opad_state[8];
     
+    #pragma unroll 8
     for(int i=0; i<8; i++) {
         ipad_state[i] = IV[i];
         opad_state[i] = IV[i];
     }
     
-    // Process block 1 of HMAC for ipad (128 bytes = 1 block of SHA512)
     for(int i=0; i<16; i++) {
         ulong word = 0;
+        #pragma unroll 8
         for(int j=0; j<8; j++) {
             word = (word << 8) | (key[i*8 + j] ^ 0x36);
         }
         W[i] = word;
     }
-    sha512_block(ipad_state, W);
+    sha512_block_fast(ipad_state, W);
     
-    // Process block 1 of HMAC for opad (128 bytes = 1 block of SHA512)
     for(int i=0; i<16; i++) {
         ulong word = 0;
+        #pragma unroll 8
         for(int j=0; j<8; j++) {
             word = (word << 8) | (key[i*8 + j] ^ 0x5c);
         }
         W[i] = word;
     }
-    sha512_block(opad_state, W);
+    sha512_block_fast(opad_state, W);
     
-    // U1 = HMAC(Key, Salt || INT(1))
-    // Salt is "mnemonic" (8 bytes). INT(1) is 4 bytes. Total 12 bytes.
-    // So for U1, we append to ipad_state block.
-    ulong H_U[8];
-    for(int i=0; i<8; i++) H_U[i] = ipad_state[i];
+    ulong H_work[8];
+    #pragma unroll 8
+    for(int i=0; i<8; i++) H_work[i] = ipad_state[i];
     
+    #pragma unroll 16
     for(int i=0; i<16; i++) W[i] = 0;
-    // "mnemonic" = 0x6d6e656d6f6e6963
     W[0] = 0x6d6e656d6f6e6963UL;
-    // INT(1) = 0x00000001, padded with 0x80 -> 0x0000000180000000
     W[1] = 0x0000000180000000UL;
-    // length in bits = (128 bytes ipad + 12 bytes salt+int) * 8 = 140 * 8 = 1120 = 0x460
     W[15] = 1120;
-    sha512_block(H_U, W);
+    sha512_block_fast(H_work, W);
     
-    // Now hash outer opad with H_U -> U1
     ulong U[8];
+    #pragma unroll 8
     for(int i=0; i<8; i++) U[i] = opad_state[i];
-    for(int i=0; i<8; i++) W[i] = H_U[i]; // append the 64 bytes of inner hash
-    W[8] = 0x8000000000000000UL; // pad
-    for(int i=9; i<15; i++) W[i] = 0;
-    // len = (128 + 64) * 8 = 192 * 8 = 1536 = 0x600
-    W[15] = 1536;
-    sha512_block(U, W);
     
-    // Accumulator F
+    #pragma unroll 8
+    for(int i=0; i<8; i++) W[i] = H_work[i];
+    W[8] = 0x8000000000000000UL;
+    W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0;
+    W[15] = 1536;
+    sha512_block_fast(U, W);
+    
     ulong F[8];
+    #pragma unroll 8
     for(int i=0; i<8; i++) F[i] = U[i];
     
-    // Loop 2047 more times
+    // ========================================================
+    // INNER LOOP MATADOR - ULTRA CACHE-FRIENDLY
+    // ========================================================
     for(int iter=1; iter<2048; iter++) {
-        // Inner hash: ipad_state + U
-        for(int i=0; i<8; i++) H_U[i] = ipad_state[i];
-        for(int i=0; i<8; i++) W[i] = U[i];
+        #pragma unroll 8
+        for(int i=0; i<8; i++) {
+            H_work[i] = ipad_state[i];
+            W[i] = U[i];
+        }
         W[8] = 0x8000000000000000UL;
-        for(int i=9; i<15; i++) W[i] = 0;
-        W[15] = 1536; // 128 + 64 bytes
-        sha512_block(H_U, W);
+        W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0; W[15] = 1536; 
         
-        // Outer hash: opad_state + H_U
-        for(int i=0; i<8; i++) U[i] = opad_state[i];
-        for(int i=0; i<8; i++) W[i] = H_U[i];
+        sha512_block_fast(H_work, W);
+        
+        #pragma unroll 8
+        for(int i=0; i<8; i++) {
+            U[i] = opad_state[i];
+            W[i] = H_work[i];
+        }
         W[8] = 0x8000000000000000UL;
-        for(int i=9; i<15; i++) W[i] = 0;
-        W[15] = 1536;
-        sha512_block(U, W);
+        W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0; W[15] = 1536;
         
-        // XOR accumulator
+        sha512_block_fast(U, W);
+        
+        #pragma unroll 8
         for(int i=0; i<8; i++) F[i] ^= U[i];
     }
     
-    // Output 64 bytes
     uint out_off = gid * 64;
+    #pragma unroll 8
     for(int i=0; i<8; i++) {
         outputs[out_off + i*8 + 0] = (F[i] >> 56) & 0xFF;
         outputs[out_off + i*8 + 1] = (F[i] >> 48) & 0xFF;
