@@ -31,6 +31,8 @@ bool decode_btc_address(const std::string& address, uint8_t out_ripemd[20]) {
     for(int i = 0; i < leading_zeros; i++) decoded[i] = 0;
     for(size_t i = 0; i < result.size(); i++) decoded[24 - i] = result[i];
 
+    if (decoded[0] != 0x00) return false;
+
     uint8_t checksum[32];
     crypto::SHA256::hash(decoded, 21, checksum);
     crypto::SHA256::hash(checksum, 32, checksum);
