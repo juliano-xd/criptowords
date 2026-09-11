@@ -125,12 +125,12 @@ void sha512_transform_avx2(SHA512_AVX2_State* ctx, const uint64_t W_in[16][4]) {
     __m256i h = _mm256_load_si256((__m256i*)ctx->state[7]);
 
     #define ROR256_64(x, n) _mm256_xor_si256(_mm256_srli_epi64(x, n), _mm256_slli_epi64(x, 64 - (n)))
-    auto CH  = [](__m256i x, __m256i y, __m256i z) { return _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z))); };
-    auto MAJ = [](__m256i x, __m256i y, __m256i z) { return _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y))); };
-    auto S0  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 28), ROR256_64(x, 34)), ROR256_64(x, 39)); };
-    auto S1  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 14), ROR256_64(x, 18)), ROR256_64(x, 41)); };
-    auto s0  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 1), ROR256_64(x, 8)), _mm256_srli_epi64(x, 7)); };
-    auto s1  = [&](__m256i x) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 19), ROR256_64(x, 61)), _mm256_srli_epi64(x, 6)); };
+    auto CH  = [](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) { return _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z))); };
+    auto MAJ = [](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y))); };
+    auto S0  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 28), ROR256_64(x, 34)), ROR256_64(x, 39)); };
+    auto S1  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 14), ROR256_64(x, 18)), ROR256_64(x, 41)); };
+    auto s0  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 1), ROR256_64(x, 8)), _mm256_srli_epi64(x, 7)); };
+    auto s1  = [&](__m256i x) __attribute__((target("avx2"))) { return _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 19), ROR256_64(x, 61)), _mm256_srli_epi64(x, 6)); };
     #undef ROR256_64
 
     __m256i W[80];
