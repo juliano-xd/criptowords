@@ -25,7 +25,6 @@ int main(int argc, char* argv[]) {
     if (config.is_help_request) {
         std::print("{}", CLIParser::get_help_text());
         return 0;
-        return 0;
     }
 
     // 4. Feedback visual de que tudo deu certo
@@ -57,9 +56,9 @@ int main(int argc, char* argv[]) {
     // 6. MOTOR DE FORÇA BRUTA (Executa o hodômetro)
     // ==========================================================
 
-if (config.unknows == 0) {
     std::println("\n[+] Construindo pipeline otimizado (JIT)...");
     cryptowords::ExecutionPipeline pipeline(config, plan);
     cryptowords::BruteForceEngine::run(pipeline, config.num_threads);
     return 0;
 }
+
