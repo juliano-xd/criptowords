@@ -1,76 +1,109 @@
-#include <secp256k1.h>
-#include "../include/bip39.hpp"
-#include "../include/brute_force_engine.hpp"
-#include "../include/cli_parser.hpp"
-#include "../include/search_optimizer.hpp"
-#include "../include/gpu_info.hpp"
-#include "../include/gpu_engine.hpp"
+#include "../include/config.hpp"
+#include "../include/cli/parser.hpp"
+#include "../include/cli/validator.hpp"
+#include "../include/search/engine.hpp"
+#include "../include/search/optimizer.hpp"
+#include "../include/search/pipeline.hpp"
+#include "../include/search/reporter.hpp"
+#include "../include/crypto/bip39.hpp"
+#include "../include/gpu/gpu_engine.hpp"
+#include "../include/gpu/gpu_info.hpp"
 
-
-#include "../include/search_plan.hpp"
 #include <print>
+#include <variant>
+
+static bool is_fully_known(const AppConfig& cfg) {
+    for (const auto& w : cfg.mnemonics) {
+        if (!std::holds_alternative<uint16_t>(w) ||
+            std::get<uint16_t>(w) == AppConfig::UNKNOWN_WORD) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool run_derivation_mode(const AppConfig& cfg) {
+    std::vector<uint16_t> ids;
+    ids.reserve(cfg.mnemonics.size());
+    for (const auto& w : cfg.mnemonics) ids.push_back(std::get<uint16_t>(w));
+
+    if (cfg.only_valids && !cryptowords::Bip39Deriver::verify_checksum(ids)) {
+        std::println(stderr, "\n[✗] FALHA: A frase semente fornecida possui um Checksum inválido!");
+        std::println(stderr, "    Se você tem certeza disso, rode novamente adicionando a flag --invalid_too");
+        return false;
+    }
+
+    auto* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+    const char* pp = cfg.passphrase.empty() ? nullptr : cfg.passphrase.c_str();
+
+    const std::string addr = (cfg.coin == CoinTarget::BTC)
+        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids, cfg.wordlist, pp,
+                                                        cfg.passphrase.size(), cfg.pbkdf2_rounds)
+        : cryptowords::Bip39Deriver::derive_eth_address(ctx, ids, cfg.wordlist, pp,
+                                                        cfg.passphrase.size(), cfg.pbkdf2_rounds);
+    secp256k1_context_destroy(ctx);
+
+    std::println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");
+    std::println("    [+] Endereço gerado: {}", addr);
+    return true;
+}
+
+static void print_config_summary(const AppConfig& cfg) {
+    std::println("\n[✓] Configurações validadas com sucesso!");
+    std::println("    [+] Moeda: {}", cfg.coin == CoinTarget::BTC ? "bitcoin" : "ethereum");
+    std::println("    [+] Password: \"{}\"", cfg.passphrase);
+    std::println("    [+] Rounds: {}", cfg.pbkdf2_rounds);
+    std::println("    [+] Size: {}", cfg.mnemonics.size());
+    std::println("    [+] Words desconhecidas: {}", cfg.unknows);
+    std::println("    [+] GPU: {}", cfg.use_gpu);
+    std::println("    [+] Apenas chaves validas: {}", cfg.only_valids);
+    std::println("    [+] Threads: {}", cfg.num_threads);
+    if (!cfg.target.empty()) std::println("    [+] Target: {}", cfg.target);
+}
 
 int main(int argc, char* argv[]) {
-    // 1. CLI pega o input e manda para o Parser
-    auto parse_result = CLIParser::parse_and_validate(argc, argv);
-
-    // 2. Se o parser barrar algo nas regras de negócio, a CLI informa o usuário
-    if (!parse_result) {
+    auto raw = CLIParser::parse(argc, argv);
+    if (!raw) {
+        if (raw.error() == "HELP") return 0;
         std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
-        std::println(stderr, "    Motivo: {}", parse_result.error());
+        std::println(stderr, "    Motivo: {}", raw.error());
         std::println(stderr, "\nUse '--help' para ver os exemplos de uso.");
         return 1;
     }
 
-    // 3. Extrai a configuração garantidamente válida
-    AppConfig config = std::move(*parse_result);
+    auto config = ConfigValidator::validate(*raw);
+    if (!config) {
+        std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
+        std::println(stderr, "    Motivo: {}", config.error());
+        std::println(stderr, "\nUse '--help' para ver os exemplos de uso.");
+        return 1;
+    }
+    const auto& cfg = *config;
+    print_config_summary(cfg);
 
-    // Tratamento de Help
-    if (config.is_help_request) {
-        std::print("{}", CLIParser::get_help_text());
-        return 0;
+    // Modo simples: todas as palavras conhecidas, sem target.
+    if (is_fully_known(cfg) && cfg.target.empty()) {
+        std::println("\n[=] Iniciando Modo de Derivação Simples...");
+        return run_derivation_mode(cfg) ? 0 : 1;
     }
 
-    // 4. Feedback visual de que tudo deu certo
-    std::println("\n[✓] Configurações validadas com sucesso!");
-    std::println("    [+] Moeda: {}", config.coin == CoinTarget::BTC ? "bitcoin" : "ethereum");
-    std::println("    [+] Password: \"{}\"", config.passphrase);
-    std::println("    [+] Rounds: {}", config.pbkdf2_rounds);
-    std::println("    [+] Size: {}", config.mnemonics.size());
-    std::println("    [+] Words desconhecidas: {}", config.unknows);
-    std::println("    [+] GPU: {}", config.use_gpu);
-    std::println("    [+] Apenas chaves validas: {}", config.only_valids);
-    std::println("    [+] Threads: {}", config.num_threads);
-
-    if (!config.target.empty()) {
-        std::println("    [+] Target: {}", config.target);
-    }
-
-
-    if (config.use_gpu) {
+    // Modo força bruta.
+    if (cfg.use_gpu) {
         cryptowords::gpu::detect_and_print_capabilities();
-        cryptowords::GPUEngine::get_instance().init();
-
-        
+        if (!cryptowords::GPUEngine::get_instance().init()) {
+            std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO DA GPU");
+            std::println(stderr, "    Motivo: Não foi possível compilar os kernels OpenCL.");
+            return 1;
+        }
     }
 
-    // ==========================================================
-    // 5. OTIMIZADOR DE BUSCA (Prepara a matriz de inteiros)
-    // ==========================================================
-    OptimizedMnemonics plan = SearchOptimizer::build_plan(config);
-
-    // Imprime o relatório de como ficou a matriz e a matemática real
-    SearchOptimizer::print_report(plan, config);
+    const auto plan = SearchOptimizer::build_plan(cfg);
+    SearchReporter::print_plan(plan, cfg);
 
     std::println("\n[=] Iniciando motor de processamento...\n");
-
-    // ==========================================================
-    // 6. MOTOR DE FORÇA BRUTA (Executa o hodômetro)
-    // ==========================================================
-
     std::println("\n[+] Construindo pipeline otimizado (JIT)...");
-    cryptowords::ExecutionPipeline pipeline(config, plan);
-    cryptowords::BruteForceEngine::run(pipeline, config.num_threads);
+
+    cryptowords::ExecutionPipeline pipeline(cfg, plan);
+    cryptowords::BruteForceEngine::run(pipeline, cfg.num_threads);
     return 0;
 }
-
