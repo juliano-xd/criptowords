@@ -1,65 +1,48 @@
 #include "../../include/crypto/bip39.hpp"
-
-#include <array>
-#include <cstring>
-
 #include "../../include/crypto/base58.hpp"
-#include "../../include/crypto/hmac_sha512.hpp"
-#include "../../include/crypto/keccak256.hpp"
-#include "../../include/crypto/ripemd160.hpp"
-#include "../../include/crypto/secp256k1_point.hpp"
-#include "../../include/crypto/secp256k1_scalar.hpp"
 #include "../../include/crypto/sha256.hpp"
+#include "../../include/crypto/hmac_sha512.hpp"
+#include "../../include/crypto/ripemd160.hpp"
+#include "../../include/crypto/keccak256.hpp"
+#include <cstring>
+#include <array>
 
 #ifndef BUILTIN_EXPECT
-    #define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
+#define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
 #endif
 
 namespace cryptowords {
 
-// =========================================================================
-// HMAC pré-computado para BIP-32 master: HMAC-SHA512("Bitcoin seed", seed).
-// =========================================================================
 struct BitcoinSeedHmacTemplate {
-    alignas(64) uint64_t inner_iv[8];
-    alignas(64) uint64_t outer_iv[8];
+    crypto::SHA512 inner_tpl;
+    crypto::SHA512 outer_tpl;
 
     BitcoinSeedHmacTemplate() {
-        crypto::HMAC_SHA512 hmac;
-        hmac.preset("Bitcoin seed", 12, 64);
-        std::memcpy(inner_iv, hmac.inner_state(), 64);
-        std::memcpy(outer_iv, hmac.outer_state(), 64);
+        const uint8_t key[] = "Bitcoin seed";
+        constexpr size_t key_len = 12;
+        uint8_t ipad[128], opad[128];
+        std::memset(ipad, 0x36, 128);
+        std::memset(opad, 0x5c, 128);
+        for (size_t i = 0; i < key_len; i++) {
+            ipad[i] ^= key[i];
+            opad[i] ^= key[i];
+        }
+        inner_tpl.preset(ipad, 128, 64);
+        outer_tpl.preset(opad, 128, 64);
     }
 
-    void compute_master_node(const uint8_t* seed,
-                             std::array<uint8_t, 64>& master_node) const noexcept {
-        alignas(64) uint64_t W[16];
-#pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) W[i] = crypto::SHA512::load_be64(seed + i * 8);
-
-        uint64_t inner[8];
-        crypto::SHA512::compress_padded_block64(inner_iv, W, inner);
-
-#pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) W[i] = inner[i];
-
-        uint64_t outer[8];
-        crypto::SHA512::compress_padded_block64(outer_iv, W, outer);
-
-#pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i)
-            crypto::SHA512::store_be64(master_node.data() + i * 8, outer[i]);
+    inline void compute_master_node(const uint8_t seed[64], uint8_t master_node[64]) const noexcept {
+        uint8_t inner_hash[64];
+        inner_tpl.complete(seed, inner_hash);
+        outer_tpl.complete(inner_hash, master_node);
     }
 };
 
-static const BitcoinSeedHmacTemplate& seed_template() {
+static const BitcoinSeedHmacTemplate& get_bitcoin_seed_template() {
     static const BitcoinSeedHmacTemplate tpl;
     return tpl;
 }
 
-// =========================================================================
-// BIP-39: construção de string
-// =========================================================================
 size_t Bip39Deriver::build_mnemonic_str(std::span<const uint16_t> ids_vec,
                                         const std::vector<std::string>& wl,
                                         const std::string& separator,
@@ -70,35 +53,31 @@ size_t Bip39Deriver::build_mnemonic_str(std::span<const uint16_t> ids_vec,
     const uint16_t* ids = ids_vec.data();
     char* ptr = out_buf;
 
-    const auto& w0 = wl[ids[0]];
+    std::string_view w0 = wl[ids[0]];
     std::memcpy(ptr, w0.data(), w0.size());
     ptr += w0.size();
 
     for (size_t i = 1; i < count; ++i) {
         std::memcpy(ptr, separator.data(), separator.size());
         ptr += separator.size();
-        const auto& w = wl[ids[i]];
+        std::string_view w = wl[ids[i]];
         std::memcpy(ptr, w.data(), w.size());
         ptr += w.size();
     }
-    return static_cast<size_t>(ptr - out_buf);
+    return ptr - out_buf;
 }
 
-// =========================================================================
-// BIP-32: derivação de chave-filha
-// =========================================================================
-bool Bip39Deriver::derive_child_key(std::array<uint8_t, 32>& priv_key,
-                                    std::array<uint8_t, 32>& chain_code,
-                                    uint32_t index) noexcept {
-    std::array<uint8_t, 37> data;
+bool Bip39Deriver::derive_child_key(const secp256k1_context* ctx, uint8_t* priv_key,
+                                    uint8_t* chain_code, uint32_t index) {
+    uint8_t data[37];
     if (index >= 0x80000000) {
         data[0] = 0x00;
-        std::memcpy(data.data() + 1, priv_key.data(), 32);
+        std::memcpy(data + 1, priv_key, 32);
     } else {
-        std::array<uint8_t, 33> pub;
-        if (__builtin_expect(!crypto::secp256k1_pubkey_create_fast(pub, priv_key), 0))
-            return false;
-        std::memcpy(data.data(), pub.data(), 33);
+        secp256k1_pubkey pubkey;
+        if (__builtin_expect(!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key), 1)) return false;
+        size_t pub_len = 33;
+        secp256k1_ec_pubkey_serialize(ctx, data, &pub_len, &pubkey, SECP256K1_EC_COMPRESSED);
     }
 
     data[33] = static_cast<uint8_t>(index >> 24);
@@ -106,273 +85,259 @@ bool Bip39Deriver::derive_child_key(std::array<uint8_t, 32>& priv_key,
     data[35] = static_cast<uint8_t>(index >> 8);
     data[36] = static_cast<uint8_t>(index);
 
-    std::array<uint8_t, 64> I;
-    crypto::HMAC_SHA512::bip32_hash(chain_code, data, I);
+    uint8_t I[64];
+    crypto::HMAC_SHA512 hmac;
+    hmac.init(chain_code, 32);
+    hmac.update(data, 37);
+    hmac.finalize(I);
 
-    if (__builtin_expect(!crypto::secp256k1_tweak_add_fast(priv_key.data(), I.data()), 0))
-        return false;
+    uint8_t* IL = I;
+    uint8_t* IR = I + 32;
 
-    std::memcpy(chain_code.data(), I.data() + 32, 32);
+    if (__builtin_expect(!secp256k1_ec_seckey_tweak_add(ctx, priv_key, IL), 1)) return false;
+
+    std::memcpy(chain_code, IR, 32);
     return true;
 }
 
-// Caminho BIP-44: m/44'/coin'/0'/0/0.
-static bool derive_bip44_privkey(const uint8_t* seed, uint32_t coin_type,
-                                 std::array<uint8_t, 32>& priv_key) noexcept {
-    std::array<uint8_t, 64> master_node;
-    std::array<uint8_t, 32> chain_code;
-    seed_template().compute_master_node(seed, master_node);
-    std::memcpy(priv_key.data(), master_node.data(), 32);
-    std::memcpy(chain_code.data(), master_node.data() + 32, 32);
-
-    constexpr uint32_t H = 0x80000000u;
-    constexpr std::array<uint32_t, 5> path_template = {44u | H, 0u | H, 0u | H, 0u, 0u};
-    for (size_t i = 0; i < path_template.size(); ++i) {
-        const uint32_t idx = (i == 1) ? (coin_type | H) : path_template[i];
-        if (!Bip39Deriver::derive_child_key(priv_key, chain_code, idx)) return false;
-    }
-    return true;
-}
-
-// =========================================================================
-// Derivação de endereço — apenas os 20 bytes finais
-// =========================================================================
-bool Bip39Deriver::derive_btc_address_bytes(const uint8_t* seed,
-                                            uint8_t out_ripemd[20]) noexcept {
-    std::array<uint8_t, 32> priv_key;
-    if (!derive_bip44_privkey(seed, 0, priv_key)) return false;
-
-    std::array<uint8_t, 33> pub_serialized;
-    if (!crypto::secp256k1_pubkey_create_fast(pub_serialized, priv_key)) return false;
-
-    std::array<uint8_t, 32> hash_buf;
-    crypto::SHA256::hash33(pub_serialized, hash_buf);
-    std::array<uint8_t, 20> ripemd_buf;
-    crypto::RIPEMD160::hash32(hash_buf, ripemd_buf);
-
-    std::memcpy(out_ripemd, ripemd_buf.data(), 20);
-    return true;
-}
-
-bool Bip39Deriver::derive_eth_address_bytes(const uint8_t* seed,
-                                            uint8_t out_eth[20]) noexcept {
-    std::array<uint8_t, 32> priv_key;
-    if (!derive_bip44_privkey(seed, 60, priv_key)) return false;
-
-    std::array<uint8_t, 65> pub_uncompressed;
-    if (!crypto::secp256k1_pubkey_create_uncompressed(pub_uncompressed, priv_key))
-        return false;
-
-    std::array<uint8_t, 32> hash_buf;
-    crypto::Keccak256::hash(pub_uncompressed.data() + 1, 64, hash_buf.data());
-    std::memcpy(out_eth, hash_buf.data() + 12, 20);
-    return true;
-}
-
-// =========================================================================
-// Versões completas (com endereço formatado)
-// =========================================================================
-std::string Bip39Deriver::derive_btc_address_from_seed(
-    const std::array<uint8_t, 64>& seed,
-    [[maybe_unused]] const char* passphrase,
-    [[maybe_unused]] size_t passphrase_len,
-    std::array<uint8_t, 32>* out_priv_key) noexcept {
-    std::array<uint8_t, 32> priv_key;
-    if (!derive_bip44_privkey(seed.data(), 0, priv_key)) return "";
-    if (out_priv_key) *out_priv_key = priv_key;
-
-    std::array<uint8_t, 33> pub_serialized;
-    if (!crypto::secp256k1_pubkey_create_fast(pub_serialized, priv_key)) return "";
-
-    std::array<uint8_t, 32> hash_buf;
-    std::array<uint8_t, 20> ripemd_buf;
-    crypto::SHA256::hash33(pub_serialized, hash_buf);
-    crypto::RIPEMD160::hash32(hash_buf, ripemd_buf);
-
-    std::array<uint8_t, 25> payload;
-    payload[0] = 0x00;
-    std::memcpy(payload.data() + 1, ripemd_buf.data(), 20);
-
-    std::array<uint8_t, 32> checksum;
-    crypto::SHA256::hash(payload.data(), 21, checksum.data());
-    crypto::SHA256::hash(checksum.data(), 32, checksum.data());
-    std::memcpy(payload.data() + 21, checksum.data(), 4);
-
+std::string Bip39Deriver::derive_btc_address_from_seed(const secp256k1_context* ctx,
+                                                       const uint8_t* seed,
+                                                       const char* /*passphrase*/,
+                                                       size_t /*passphrase_len*/) {
+    uint8_t master_node[64];
+    uint8_t priv_key[32];
+    uint8_t chain_code[32];
+    uint8_t pub_serialized[33];
+    uint8_t hash_buf[32];
+    uint8_t ripemd_buf[20];
+    uint8_t checksum[32];
+    uint8_t payload[25];
     char result[100];
-    const size_t n = base58::encode_raw(payload.data(), 25, result);
-    return std::string(result, n);
+
+    get_bitcoin_seed_template().compute_master_node(seed, master_node);
+
+    std::memcpy(priv_key, master_node, 32);
+    std::memcpy(chain_code, master_node + 32, 32);
+
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
+
+    secp256k1_pubkey pubkey;
+    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key)) return "";
+
+    size_t pub_len = 33;
+    secp256k1_ec_pubkey_serialize(ctx, pub_serialized, &pub_len, &pubkey, SECP256K1_EC_COMPRESSED);
+
+    crypto::SHA256::hash(pub_serialized, pub_len, hash_buf);
+    crypto::RIPEMD160::hash(hash_buf, 32, ripemd_buf);
+
+    payload[0] = 0x00;
+    std::memcpy(payload + 1, ripemd_buf, 20);
+
+    crypto::SHA256::hash(payload, 21, checksum);
+    crypto::SHA256::hash(checksum, 32, checksum);
+    std::memcpy(payload + 21, checksum, 4);
+
+    size_t final_len = base58::encode_raw(payload, 25, result);
+    return std::string(result, final_len);
 }
 
-std::string Bip39Deriver::derive_eth_address_from_seed(
-    [[maybe_unused]] const uint8_t* seed,
-    [[maybe_unused]] const char* passphrase,
-    [[maybe_unused]] size_t passphrase_len,
-    std::array<uint8_t, 32>* out_priv_key) noexcept {
-    std::array<uint8_t, 32> priv_key;
-    if (!derive_bip44_privkey(seed, 60, priv_key)) return "";
-    if (out_priv_key) *out_priv_key = priv_key;
+std::string Bip39Deriver::derive_eth_address_from_seed(const secp256k1_context* ctx,
+                                                       const uint8_t* seed,
+                                                       const char* /*passphrase*/,
+                                                       size_t /*passphrase_len*/) {
+    uint8_t master_node[64];
+    uint8_t priv_key[32];
+    uint8_t chain_code[32];
+    uint8_t pub_uncompressed[65];
+    uint8_t hash_buf[32];
 
-    std::array<uint8_t, 65> pub_uncompressed;
-    if (!crypto::secp256k1_pubkey_create_uncompressed(pub_uncompressed, priv_key))
-        return "";
+    get_bitcoin_seed_template().compute_master_node(seed, master_node);
 
-    std::array<uint8_t, 32> hash_buf;
-    crypto::Keccak256::hash(pub_uncompressed.data() + 1, 64, hash_buf.data());
+    std::memcpy(priv_key, master_node, 32);
+    std::memcpy(chain_code, master_node + 32, 32);
+
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000003C)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
+
+    secp256k1_pubkey pubkey;
+    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key)) return "";
+    size_t pub_len = 65;
+    secp256k1_ec_pubkey_serialize(ctx, pub_uncompressed, &pub_len, &pubkey, SECP256K1_EC_UNCOMPRESSED);
+
+    crypto::Keccak256::hash(pub_uncompressed + 1, 64, hash_buf);
 
     char hex[43];
     hex[0] = '0';
     hex[1] = 'x';
-    static constexpr char HT[] = "0123456789abcdef";
+    static const char hextable[] = "0123456789abcdef";
     for (int i = 0; i < 20; ++i) {
-        hex[2 + i * 2]     = HT[(hash_buf[12 + i] >> 4) & 0x0F];
-        hex[2 + i * 2 + 1] = HT[(hash_buf[12 + i] & 0x0F)];
+        hex[2 + i * 2] = hextable[(hash_buf[12 + i] >> 4) & 0x0f];
+        hex[2 + i * 2 + 1] = hextable[(hash_buf[12 + i] & 0x0f)];
     }
     return std::string(hex, 42);
 }
 
-// =========================================================================
-// Decodificação
-// =========================================================================
-bool Bip39Deriver::decode_base58_btc_address(const std::string& address,
-                                             uint8_t out_ripemd[20]) noexcept {
+bool Bip39Deriver::decode_base58_btc_address(const std::string& address, uint8_t out_ripemd[20]) {
     return base58::decode_btc_address(address, out_ripemd);
 }
 
-bool Bip39Deriver::decode_hex_eth_address(const std::string& hex_addr,
-                                          uint8_t out_target[20]) noexcept {
-    std::string_view s = hex_addr;
-    if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-        s.remove_prefix(2);
+bool Bip39Deriver::decode_hex_eth_address(const std::string& hex_addr, uint8_t out_target[20]) {
+    std::string s = hex_addr;
+    if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s = s.substr(2);
     if (s.length() != 40) return false;
-    for (size_t i = 0; i < 40; ++i)
-        if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return false;
-
-    auto hex_val = [](char c) -> uint8_t {
-        if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
-        if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
-        return static_cast<uint8_t>(c - 'A' + 10);
-    };
-    for (size_t i = 0; i < 20; ++i)
-        out_target[i] = static_cast<uint8_t>(
-            (hex_val(s[i * 2]) << 4) | hex_val(s[i * 2 + 1]));
+    for (int i = 0; i < 40; i++) {
+        if (!std::isxdigit(s[i])) return false;
+    }
+    for (int i = 0; i < 20; i++) {
+        std::string byteString = s.substr(i * 2, 2);
+        out_target[i] = static_cast<uint8_t>(strtol(byteString.c_str(), nullptr, 16));
+    }
     return true;
 }
 
-// =========================================================================
-// Comparação single-target (rejeição rápida de 64 bits)
-// =========================================================================
-bool Bip39Deriver::check_btc_target_from_seed(const uint8_t* seed,
+bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
+                                              const uint8_t* seed,
                                               const uint8_t* target_ripemd,
-                                              uint64_t target_fast64) noexcept {
-    uint8_t addr[20];
-    if (!derive_btc_address_bytes(seed, addr)) return false;
+                                              uint32_t target_fast) {
+    uint8_t master_node[64], priv_key[32], chain_code[32];
+    uint8_t pub_serialized[33], hash_buf[32], ripemd_buf[20];
 
-    uint64_t fast;
-    std::memcpy(&fast, addr, 8);
-    if (fast != target_fast64) return false;
-    return std::memcmp(addr + 8, target_ripemd + 8, 12) == 0;
+    get_bitcoin_seed_template().compute_master_node(seed, master_node);
+
+    std::memcpy(priv_key,   master_node,      32);
+    std::memcpy(chain_code, master_node + 32, 32);
+
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0))          return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0))          return false;
+
+    secp256k1_pubkey pubkey;
+    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key)) return false;
+    size_t pub_len = 33;
+    secp256k1_ec_pubkey_serialize(ctx, pub_serialized, &pub_len, &pubkey, SECP256K1_EC_COMPRESSED);
+
+    crypto::SHA256::hash(pub_serialized, pub_len, hash_buf);
+    crypto::RIPEMD160::hash(hash_buf, 32, ripemd_buf);
+
+    uint32_t ripemd_fast;
+    std::memcpy(&ripemd_fast, ripemd_buf, 4);
+    if (ripemd_fast != target_fast) return false;
+    return std::memcmp(ripemd_buf + 4, target_ripemd + 4, 16) == 0;
 }
 
-bool Bip39Deriver::check_eth_target_from_seed(const uint8_t* seed,
+bool Bip39Deriver::check_eth_target_from_seed(const secp256k1_context* ctx,
+                                              const uint8_t* seed,
                                               const uint8_t* target_eth,
-                                              uint64_t target_fast64) noexcept {
-    uint8_t addr[20];
-    if (!derive_eth_address_bytes(seed, addr)) return false;
+                                              uint32_t target_fast) {
+    uint8_t master_node[64];
+    uint8_t priv_key[32];
+    uint8_t chain_code[32];
+    uint8_t pub_uncompressed[65];
+    uint8_t hash_buf[32];
 
-    uint64_t fast;
-    std::memcpy(&fast, addr, 8);
-    if (__builtin_expect(fast != target_fast64, 1)) return false;
-    return std::memcmp(addr + 8, target_eth + 8, 12) == 0;
+    get_bitcoin_seed_template().compute_master_node(seed, master_node);
+
+    std::memcpy(priv_key, master_node, 32);
+    std::memcpy(chain_code, master_node + 32, 32);
+
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000003C)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return false;
+    if (!derive_child_key(ctx, priv_key, chain_code, 0)) return false;
+
+    secp256k1_pubkey pubkey;
+    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key)) return false;
+    size_t pub_len = 65;
+    secp256k1_ec_pubkey_serialize(ctx, pub_uncompressed, &pub_len, &pubkey, SECP256K1_EC_UNCOMPRESSED);
+
+    crypto::Keccak256::hash(pub_uncompressed + 1, 64, hash_buf);
+
+    uint32_t eth_fast;
+    std::memcpy(&eth_fast, hash_buf + 12, 4);
+    if (__builtin_expect(eth_fast != target_fast, 1)) return false;
+    return std::memcmp(hash_buf + 16, target_eth + 4, 16) == 0;
 }
 
-// =========================================================================
-// Checksum BIP-39
-// =========================================================================
-namespace {
-uint8_t compute_checksum_bits_impl(std::span<const uint16_t> ids,
-                                   unsigned bits) noexcept {
-    const size_t n = ids.size();
+bool Bip39Deriver::verify_checksum(std::span<const uint16_t> mnemonic_ids) noexcept {
+    const size_t n = mnemonic_ids.size();
+
+    if (BUILTIN_EXPECT(n < 12 || n > 24 || n % 3 != 0, 0))
+        return false;
+
     const size_t entropy_bytes = (n * 4) / 3;
-    const uint16_t* p = ids.data();
+    const unsigned checksum_bits = n / 3;
+    const uint16_t* ids = mnemonic_ids.data();
 
     std::array<uint32_t, 8> data{};
     uint64_t buffer = 0;
     uint32_t* out = data.data();
 
     for (size_t i = 0, shift = 1; i < n; i += 3, ++shift) {
-        const uint64_t chunk =
-            (uint64_t(p[i]) << 22) | (uint64_t(p[i + 1]) << 11) | uint64_t(p[i + 2]);
+        const uint64_t chunk = (uint64_t(ids[i]) << 22) | (uint64_t(ids[i + 1]) << 11) | uint64_t(ids[i + 2]);
         buffer = (buffer << 33) | chunk;
         *out++ = __builtin_bswap32(static_cast<uint32_t>(buffer >> shift));
     }
 
+    const uint8_t original_checksum = static_cast<uint8_t>(buffer & ((uint64_t{1} << checksum_bits) - 1));
+
     std::array<uint8_t, 32> hash{};
     crypto::SHA256::hash(data.data(), entropy_bytes, hash.data());
-    return hash[0] >> (8 - bits);
-}
-}  // namespace
 
-bool Bip39Deriver::verify_checksum(std::span<const uint16_t> ids) noexcept {
-    const size_t n = ids.size();
-    if (n < 12 || n > 24 || n % 3 != 0) [[unlikely]] return false;
-
-    const unsigned bits = n / 3;
-    const uint8_t computed = compute_checksum_bits_impl(ids, bits);
-    const uint8_t expected = static_cast<uint8_t>(ids[n - 1] & ((1u << bits) - 1));
-    return computed == expected;
+    return original_checksum == (hash[0] >> (8 - checksum_bits));
 }
 
-bool Bip39Deriver::extract_checksum(std::span<const uint16_t> ids,
-                                    uint8_t& out) noexcept {
-    const size_t n = ids.size();
-    if (n < 12 || n > 24 || n % 3 != 0) return false;
-    out = compute_checksum_bits_impl(ids, n / 3);
-    return true;
-}
 
-// =========================================================================
-// Seed BIP-39 (PBKDF2 sobre a string do mnemônico)
-// =========================================================================
-static void compute_bip39_seed(std::span<const uint16_t> ids,
-                               const std::vector<std::string>& wl,
-                               const char* passphrase, size_t passphrase_len,
-                               uint32_t rounds, const std::string& separator,
-                               uint8_t* out_seed) noexcept {
+std::string Bip39Deriver::derive_btc_address(const secp256k1_context* ctx,
+                                      std::span<const uint16_t> mnemonic_ids,
+                                      const std::vector<std::string>& wl,
+                                      const char* passphrase,
+                                      size_t passphrase_len,
+                                      uint32_t rounds) {
     char buf[MAX_MNEMONIC_LEN];
-    const size_t len = Bip39Deriver::build_mnemonic_str(ids, wl, separator, buf);
+    size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);
 
+    uint8_t seed[64];
     uint8_t salt_buf[256];
     std::memcpy(salt_buf, "mnemonic", 8);
     size_t salt_len = 8;
     if (passphrase && passphrase_len > 0) {
-        const size_t n = std::min(passphrase_len, sizeof(salt_buf) - 8);
-        std::memcpy(salt_buf + 8, passphrase, n);
-        salt_len += n;
+        std::memcpy(salt_buf + 8, passphrase, passphrase_len);
+        salt_len += passphrase_len;
     }
 
-    crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, rounds, out_seed, 64);
+    crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, rounds, seed, 64);
+    return derive_btc_address_from_seed(ctx, seed, passphrase, passphrase_len);
 }
 
-std::string Bip39Deriver::derive_btc_address(std::span<const uint16_t> ids,
-                                             const std::vector<std::string>& wl,
-                                             const char* passphrase,
-                                             size_t passphrase_len, uint32_t rounds,
-                                             const std::string& separator,
-                                             std::array<uint8_t, 32>* out_priv_key) noexcept {
-    std::array<uint8_t, 64> seed;
-    compute_bip39_seed(ids, wl, passphrase, passphrase_len, rounds, separator, seed.data());
-    return derive_btc_address_from_seed(seed, passphrase, passphrase_len, out_priv_key);
-}
+std::string Bip39Deriver::derive_eth_address(const secp256k1_context* ctx,
+                                      std::span<const uint16_t> mnemonic_ids,
+                                      const std::vector<std::string>& wl,
+                                      const char* passphrase,
+                                      size_t passphrase_len,
+                                      uint32_t rounds) {
+    char buf[MAX_MNEMONIC_LEN];
+    size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);
 
-std::string Bip39Deriver::derive_eth_address(std::span<const uint16_t> ids,
-                                             const std::vector<std::string>& wl,
-                                             const char* passphrase,
-                                             size_t passphrase_len, uint32_t rounds,
-                                             const std::string& separator,
-                                             std::array<uint8_t, 32>* out_priv_key) {
-    std::array<uint8_t, 64> seed;
-    compute_bip39_seed(ids, wl, passphrase, passphrase_len, rounds, separator, seed.data());
-    return derive_eth_address_from_seed(seed.data(), passphrase, passphrase_len, out_priv_key);
-}
+    uint8_t seed[64];
+    uint8_t salt_buf[256];
+    std::memcpy(salt_buf, "mnemonic", 8);
+    size_t salt_len = 8;
+    if (passphrase && passphrase_len > 0) {
+        std::memcpy(salt_buf + 8, passphrase, passphrase_len);
+        salt_len += passphrase_len;
+    }
 
-}  // namespace cryptowords
+    crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, rounds, seed, 64);
+    return derive_eth_address_from_seed(ctx, seed, passphrase, passphrase_len);
+}
+} // namespace cryptowords

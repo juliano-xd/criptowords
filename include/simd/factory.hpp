@@ -1,22 +1,30 @@
 #pragma once
-#include <memory>
-
 #include "../search/processor.hpp"
 #include "arch.hpp"
-#include "cpu_features.hpp"
+
+#include <memory>
 
 namespace cryptowords {
 
-// detect_best_simd() declarada em arch.hpp — sem duplicata.
+// Detecção de runtime (implementada em src/simd/factory.cpp)
+SimdArch detect_best_simd();
 
-std::unique_ptr<IBatchProcessor> make_simd_processor(const AppConfig& cfg,
-                                                     const OptimizedMnemonics& opt,
-                                                     SimdArch arch);
-
-namespace detail {
-std::unique_ptr<IBatchProcessor> make_simd_processor_sse(const AppConfig&, const OptimizedMnemonics&);
-std::unique_ptr<IBatchProcessor> make_simd_processor_avx2(const AppConfig&, const OptimizedMnemonics&);
-std::unique_ptr<IBatchProcessor> make_simd_processor_avx512(const AppConfig&, const OptimizedMnemonics&);
-}  // namespace detail
-
-}  // namespace cryptowords
+// Fachada pública — dispatch runtime baseado na CPU.
+std::unique_ptr<IBatchProcessor> make_simd_processor(const AppConfig& cfg, const OptimizedMnemonics& opt, SimdArch arch);
+    // Símbolos definidos por TU. Só existem se o bloco SIMD correspondente foi
+    // compilado — o dispatcher usa CRYPTOWORDS_HAVE_* para saber.
+    namespace detail {
+        #ifdef CRYPTOWORDS_HAVE_SSE41
+            std::unique_ptr<IBatchProcessor>
+            make_simd_processor_sse(const AppConfig&, const OptimizedMnemonics&);
+        #endif
+        #ifdef CRYPTOWORDS_HAVE_AVX2
+            std::unique_ptr<IBatchProcessor>
+            make_simd_processor_avx2(const AppConfig&, const OptimizedMnemonics&);
+        #endif
+        #ifdef CRYPTOWORDS_HAVE_AVX512
+            std::unique_ptr<IBatchProcessor>
+            make_simd_processor_avx512(const AppConfig&, const OptimizedMnemonics&);
+        #endif
+    } // namespace detail
+} // namespace cryptowords

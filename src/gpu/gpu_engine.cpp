@@ -1,5 +1,4 @@
-#include "../include/gpu_engine.hpp"
-#include <iostream>
+#include "../../include/gpu/gpu_engine.hpp"
 #include <fstream>
 #include <sstream>
 #include <print>
@@ -17,7 +16,19 @@ GPUEngine::~GPUEngine() {
 }
 
 std::string GPUEngine::load_kernel(const std::string& filename) {
-    std::ifstream file(filename);
+    const std::vector<std::string> candidates = {
+        filename,
+        "../" + filename,
+        "../../" + filename,
+        "/usr/local/share/criptowords/" + filename,
+        "/usr/share/criptowords/" + filename
+    };
+
+    std::ifstream file;
+    for (const auto& path : candidates) {
+        file.open(path);
+        if (file.is_open()) break;
+    }
     if (!file.is_open()) return "";
     std::stringstream buffer;
     buffer << file.rdbuf();
@@ -40,28 +51,28 @@ bool GPUEngine::init() {
     context_ = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
     if (err != CL_SUCCESS) return false;
 
-    queue_ = clCreateCommandQueue(context_, device, 0, &err);
+    queue_ = clCreateCommandQueueWithProperties(context_, device, nullptr, &err);
     if (err != CL_SUCCESS) return false;
 
-    std::string pbkdf2_src = load_kernel("src/opencl/pbkdf2_gpu.cl");
+    std::string pbkdf2_src = load_kernel("src/gpu/kernels/pbkdf2_gpu.cl");
     if (pbkdf2_src.empty()) {
-        std::println(stderr, "Erro: Arquivo src/opencl/pbkdf2_gpu.cl nao encontrado!");
+        std::println(stderr, "Erro: Arquivo src/gpu/kernels/pbkdf2_gpu.cl nao encontrado!");
         return false;
     }
 
     const char* src_ptr = pbkdf2_src.c_str();
     pbkdf2_prog_ = clCreateProgramWithSource(context_, 1, &src_ptr, nullptr, &err);
-    
+
     // Flags de otimizacao extremas para a Radeon
     const char* options = "-cl-mad-enable -cl-strict-aliasing";
     err = clBuildProgram(pbkdf2_prog_, 1, &device, options, nullptr, nullptr);
-    
+
     if (err != CL_SUCCESS) {
         size_t log_size;
         clGetProgramBuildInfo(pbkdf2_prog_, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &log_size);
         std::string log(log_size, '\0');
         clGetProgramBuildInfo(pbkdf2_prog_, device, CL_PROGRAM_BUILD_LOG, log_size, log.data(), nullptr);
-        std::println(stderr, "Erro ao compilar pbkdf2_gpu.cl:\n{}", log);
+        std::println(stderr, "Erro ao compilar src/gpu/kernels/pbkdf2_gpu.cl:\n{}", log);
         return false;
     }
 
@@ -77,10 +88,10 @@ bool GPUEngine::init() {
     return true;
 }
 
-bool GPUEngine::pbkdf2_batch(const std::vector<uint8_t>& passwords, 
-                             const std::vector<uint32_t>& pass_lens, 
+bool GPUEngine::pbkdf2_batch(const std::vector<uint8_t>& passwords,
+                             const std::vector<uint32_t>& pass_lens,
                              std::vector<uint8_t>& out_seeds,
-                             uint32_t num_hashes) 
+                             uint32_t num_hashes)
 {
     if (!initialized_) return false;
     std::lock_guard<std::mutex> lock(mu_);
@@ -98,13 +109,13 @@ bool GPUEngine::pbkdf2_batch(const std::vector<uint8_t>& passwords,
     if (err != CL_SUCCESS) return false;
 
     size_t global_work_size = num_hashes;
-    size_t local_work_size = 256; 
-    
+    size_t local_work_size = 256;
+
     // Se o batch for menor que 256, ajuste o local
     if (global_work_size < local_work_size) {
-        // Pad to nearest multiple of 256 for optimal hardware dispatch, but since our kernel is strictly reqd_work_group_size(256), 
-        // we MUST pass global as a multiple of 256. 
-        global_work_size = ((num_hashes + 255) / 256) * 256; 
+        // Pad to nearest multiple of 256 for optimal hardware dispatch, but since our kernel is strictly reqd_work_group_size(256),
+        // we MUST pass global as a multiple of 256.
+        global_work_size = ((num_hashes + 255) / 256) * 256;
     } else {
         global_work_size = ((num_hashes + 255) / 256) * 256;
     }

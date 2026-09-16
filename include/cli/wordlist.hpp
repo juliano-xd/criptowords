@@ -6,12 +6,9 @@
 #include <vector>
 
 class WordlistLoader {
-   public:
-    static std::string normalize_lang(std::string_view lang);
-
+public:
     static std::expected<std::vector<std::string>, std::string> load(const std::string& lang);
 
-    static std::unordered_map<std::string, uint16_t> build_index(const std::vector<std::string>& words);
-
-    static std::string to_nfc(std::string_view w);
+    static std::unordered_map<std::string, uint16_t>
+    build_index(const std::vector<std::string>& words);
 };

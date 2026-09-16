@@ -1,6 +1,8 @@
-#include "../include/gpu_info.hpp"
+#include "../../include/gpu/gpu_info.hpp"
+#ifndef CL_TARGET_OPENCL_VERSION
+#define CL_TARGET_OPENCL_VERSION 300
+#endif
 #include <CL/cl.h>
-#include <iostream>
 #include <vector>
 #include <string>
 #include <print>
@@ -27,7 +29,7 @@ T get_num_info(cl_device_id device, cl_device_info param) {
 
 void detect_and_print_capabilities() {
     std::println("\n[=] Iniciando Sondagem Profunda de Hardware (OpenCL)...");
-    
+
     cl_uint num_platforms = 0;
     clGetPlatformIDs(0, nullptr, &num_platforms);
     if (num_platforms == 0) {
@@ -48,7 +50,7 @@ void detect_and_print_capabilities() {
 
         for (cl_uint j = 0; j < num_devices; ++j) {
             cl_device_id d = devices[j];
-            
+
             cl_device_type type = get_num_info<cl_device_type>(d, CL_DEVICE_TYPE);
             std::string type_str = (type & CL_DEVICE_TYPE_GPU) ? "GPU Dedicada/Integrada" :
                                    (type & CL_DEVICE_TYPE_CPU) ? "Processador (CPU)" : "Acelerador";
@@ -56,14 +58,14 @@ void detect_and_print_capabilities() {
             std::string name = get_string_info(d, CL_DEVICE_NAME);
             std::string vendor = get_string_info(d, CL_DEVICE_VENDOR);
             std::string version = get_string_info(d, CL_DEVICE_VERSION);
-            
+
             cl_uint compute_units = get_num_info<cl_uint>(d, CL_DEVICE_MAX_COMPUTE_UNITS);
             size_t max_work_group = get_num_info<size_t>(d, CL_DEVICE_MAX_WORK_GROUP_SIZE);
             cl_ulong global_mem = get_num_info<cl_ulong>(d, CL_DEVICE_GLOBAL_MEM_SIZE);
             cl_ulong local_mem = get_num_info<cl_ulong>(d, CL_DEVICE_LOCAL_MEM_SIZE);
             cl_ulong max_alloc = get_num_info<cl_ulong>(d, CL_DEVICE_MAX_MEM_ALLOC_SIZE);
             cl_uint clock_freq = get_num_info<cl_uint>(d, CL_DEVICE_MAX_CLOCK_FREQUENCY);
-            
+
             std::println("\n    🖥️  Dispositivo Encontrado: {}", name);
             std::println("    ├─ Tipo: {}", type_str);
             std::println("    ├─ Fabricante: {}", vendor);
@@ -74,7 +76,7 @@ void detect_and_print_capabilities() {
             std::println("    ├─ VRAM Global: {} MB", global_mem / (1024 * 1024));
             std::println("    ├─ VRAM Alocação Máxima: {} MB", max_alloc / (1024 * 1024));
             std::println("    └─ Memória Compartilhada (L1/Local): {} KB por bloco", local_mem / 1024);
-            
+
             std::string extensions = get_string_info(d, CL_DEVICE_EXTENSIONS);
             std::println("    [+] Capacidades Técnicas Extraídas:");
             if (extensions.find("cl_khr_int64_base_atomics") != std::string::npos)
@@ -90,13 +92,13 @@ void detect_and_print_capabilities() {
             // CÁLCULO DE PLANEJAMENTO HEURÍSTICO PARA A PLACA ENCONTRADA
             // ==============================================================
             std::println("\n    [⚙️] Motor Dinâmico: Planejando Distribuição Ideal para esta Placa...");
-            
+
             // 1. Determinar o Local Work Size (Tamanho do Bloco)
-            // Em algoritmos pesados de Hash (SHA512 tem muitos registradores), 
+            // Em algoritmos pesados de Hash (SHA512 tem muitos registradores),
             // usar o MAX absoluto (ex: 1024) pode causar "Register Spilling" (vazamento pra VRAM lenta).
             // A heurística ideal de criptografia estabiliza em blocos de 256.
             size_t optimal_local_size = (max_work_group >= 256) ? 256 : max_work_group;
-            
+
             // 2. Determinar a Volumetria de Ocupação (Global Work Size)
             // GPUs escondem latência de memória agendando milhares de threads.
             // Para saturar a placa, queremos pelo menos 32 "Waves" por Compute Unit.
@@ -105,7 +107,7 @@ void detect_and_print_capabilities() {
 
             // 3. Cálculo de Memória VRAM Exigida (O Custo do PBKDF2)
             // Cada thread precisará salvar o estado intermediário e o hash final (aprox 200 bytes por thread)
-            size_t bytes_per_thread = 200; 
+            size_t bytes_per_thread = 200;
             cl_ulong required_vram = optimal_global_size * bytes_per_thread;
 
             // 4. Adaptação Dinâmica de Memória (Safety Check)
@@ -120,7 +122,7 @@ void detect_and_print_capabilities() {
             double req_vram_mb = required_vram / (1024.0 * 1024.0);
 
             // 5. Estratégia de Cache (Local Memory)
-            // O vetor de salt (a palavra/frase do alvo) e as tabelas mágicas (se houver) 
+            // O vetor de salt (a palavra/frase do alvo) e as tabelas mágicas (se houver)
             // vão pra memória L1 para que todos os workers leiam com latência ZERO.
             size_t local_mem_required = 1024; // 1 KB de uso constante por bloco
             std::string l1_status = (local_mem_required <= local_mem) ? "Seguro (Latência Zero)" : "Gargalo (Spill to Global)";
