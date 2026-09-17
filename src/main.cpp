@@ -37,10 +37,8 @@ static bool run_derivation_mode(const AppConfig& cfg) {
     const char* pp = cfg.passphrase.empty() ? nullptr : cfg.passphrase.c_str();
 
     const std::string addr = (cfg.coin == CoinTarget::BTC)
-        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids, cfg.wordlist, pp,
-                                                        cfg.passphrase.size(), cfg.pbkdf2_rounds)
-        : cryptowords::Bip39Deriver::derive_eth_address(ctx, ids, cfg.wordlist, pp,
-                                                        cfg.passphrase.size(), cfg.pbkdf2_rounds);
+        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds)
+        : cryptowords::Bip39Deriver::derive_eth_address(ctx, ids, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds);
     secp256k1_context_destroy(ctx);
 
     std::println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");

@@ -14,27 +14,14 @@
 namespace cryptowords {
 
 struct BitcoinSeedHmacTemplate {
-    crypto::SHA512 inner_tpl;
-    crypto::SHA512 outer_tpl;
+    crypto::HMAC_SHA512 hmac;
 
     BitcoinSeedHmacTemplate() {
-        const uint8_t key[] = "Bitcoin seed";
-        constexpr size_t key_len = 12;
-        uint8_t ipad[128], opad[128];
-        std::memset(ipad, 0x36, 128);
-        std::memset(opad, 0x5c, 128);
-        for (size_t i = 0; i < key_len; i++) {
-            ipad[i] ^= key[i];
-            opad[i] ^= key[i];
-        }
-        inner_tpl.preset(ipad, 128, 64);
-        outer_tpl.preset(opad, 128, 64);
+        hmac.preset("Bitcoin seed", 12, 64);
     }
 
     inline void compute_master_node(const uint8_t seed[64], uint8_t master_node[64]) const noexcept {
-        uint8_t inner_hash[64];
-        inner_tpl.complete(seed, inner_hash);
-        outer_tpl.complete(inner_hash, master_node);
+        hmac.complete(seed, 64, master_node);
     }
 };
 
@@ -86,10 +73,7 @@ bool Bip39Deriver::derive_child_key(const secp256k1_context* ctx, uint8_t* priv_
     data[36] = static_cast<uint8_t>(index);
 
     uint8_t I[64];
-    crypto::HMAC_SHA512 hmac;
-    hmac.init(chain_code, 32);
-    hmac.update(data, 37);
-    hmac.finalize(I);
+    crypto::HMAC_SHA512::bip32_hash(chain_code, data, I);
 
     uint8_t* IL = I;
     uint8_t* IR = I + 32;

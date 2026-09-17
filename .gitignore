@@ -9,6 +9,12 @@ tests/
 *.log
 .*
 compile_commands.json
+criptowords
+CMakeCache.txt
+CMakeFiles/
+Makefile
+_deps/
+cmake_install.cmake
 
 # Editor and OS files
 .vscode/
