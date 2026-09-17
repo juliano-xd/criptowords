@@ -17,8 +17,7 @@ public:
     ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemonics& opt);
     ~ExecutionPipeline();
 
-    std::unique_ptr<PipelineThreadContext> create_thread_context(size_t thread_idx,
-                                                                 size_t num_threads);
+    std::unique_ptr<PipelineThreadContext> create_thread_context(size_t thread_idx, size_t num_threads);
 
     bool advance(PipelineThreadContext& ctx) { return odometer_->advance(ctx, opt_); }
 
