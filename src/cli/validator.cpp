@@ -32,7 +32,9 @@ parse_constraint_map(std::string_view input) {
         auto words = g.substr(pos_colon + 1) | std::views::split('|') |
                      std::views::filter([](auto r) { return !r.empty(); }) |
                      std::views::transform([](auto r) { return std::string(r.begin(), r.end()); });
-        result[pos].append_range(words);
+        for (auto&& w : words) {
+            result[pos].push_back(std::move(w));
+        }
     }
     return result;
 }
@@ -149,7 +151,9 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             std::views::transform([](auto r) { return std::string(r.begin(), r.end()); });
 
         std::vector<std::string> temp_mnemonic;
-        temp_mnemonic.append_range(words_view);
+        for (auto&& w : words_view) {
+            temp_mnemonic.push_back(std::move(w));
+        }
 
         if (temp_mnemonic.size() != raw_size) {
             const size_t sz = temp_mnemonic.size();
