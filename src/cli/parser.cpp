@@ -103,6 +103,13 @@ std::expected<RawOptions, std::string> CLIParser::parse(int argc, char* argv[]) 
     app.add_flag("--profile-gpu", raw.profile_gpu,
                  "Profile GPU OpenCL latency and bandwidth metrics during recovery");
 
+    app.add_flag("--host-info,--probe", raw.probe_hardware,
+                 "Exibe diagnóstico profundo do hardware do host com auto-tuning recomendado e sai");
+
+    bool no_pin = false;
+    app.add_flag("--no-pin", no_pin,
+                 "Desativa a afinidade fixa de núcleos físicos de CPU (Core Pinning)");
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::CallForHelp&) {
@@ -112,5 +119,7 @@ std::expected<RawOptions, std::string> CLIParser::parse(int argc, char* argv[]) 
         return std::unexpected(e.what());
     }
 
+    raw.pin_cores = !no_pin;
     return raw;
+
 }

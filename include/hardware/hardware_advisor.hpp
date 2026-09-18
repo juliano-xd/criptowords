@@ -1,16 +1,20 @@
 #pragma once
 
-#include <string>
-#include <vector>
-
+#include "host_probe.hpp"
 #include "../config.hpp"
 #include "../simd/batch_processor.hpp"
-#include "host_probe.hpp"
+
+#include <string>
+#include <vector>
 
 namespace cryptowords {
 namespace hardware {
 
-enum class ExecutionEngineChoice { CpuSIMD, GpuOpenCL, HybridParallel };
+enum class ExecutionEngineChoice {
+    CpuSIMD,
+    GpuOpenCL,
+    HybridParallel
+};
 
 struct TuningStrategy {
     ExecutionEngineChoice chosen_engine = ExecutionEngineChoice::CpuSIMD;
@@ -30,19 +34,17 @@ struct TuningStrategy {
     size_t chosen_gpu_batch = 16384;
     size_t chosen_slot_size = 128;
 
+    // Racional técnico da escolha
     std::string rationale;
 };
 
 class HardwareAdvisor {
-   public:
+public:
     static TuningStrategy analyze(const AppConfig& cfg, const HostProfile& host);
     static void apply_tuning(AppConfig& cfg, const TuningStrategy& strat);
-
-    // `quiet` suprime a caixa de diagnóstico (host report é uma ação explícita
-    // do usuário e sempre imprime; summary é parte do fluxo normal).
     static void print_host_report(const HostProfile& host, const TuningStrategy& strat);
-    static void print_tuning_summary(const TuningStrategy& strat, bool quiet);
+    static void print_tuning_summary(const TuningStrategy& strat);
 };
 
-}  // namespace hardware
-}  // namespace cryptowords
+} // namespace hardware
+} // namespace cryptowords

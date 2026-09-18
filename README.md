@@ -117,7 +117,23 @@ return std::memcmp(ripemd_buf + 4, target_ripemd + 4, 16) == 0;
 - **Modo Híbrido Cooperativo (`--hybrid`)**: Permite que a GPU execute os lotes massivos em segundo plano enquanto a CPU executa seus núcleos SIMD AVX2 em paralelo.
 - **Core Pinning em Linux**: Vinculação estrita de threads a núcleos físicos da CPU via `pthread_setaffinity_np`, prevenindo migrações de contexto pelo escalonador do kernel Linux.
 
-### 8. Estratégias de Afunilamento Heurístico
+### 8. Sondagem Profunda de Hardware e Auto-Tuning Adaptativo (`HostProbe` & `HardwareAdvisor`)
+O CriptoWords incorpora um mecanismo avançado de inspeção arquitetural que sonda o computador hospedeiro antes da execução e calibra automaticamente os parâmetros ótimos:
+- **Inspeção de CPU e Caches**:
+  - Extração da *Brand String* e fabricante via CPUID (`AMD Zen 2/3/4/5`, `Intel Raptor/Arrow Lake`, `Xeon`, `Threadripper`, `EPYC`).
+  - Mapeamento topológico: núcleos físicos reais, threads lógicas (SMT / Hyper-Threading), soquetes e nós NUMA.
+  - Medição de hierarquia de caches: tamanhos de L1d, L1i, L2 e L3.
+  - Detecção de silício criptográfico: **SHA-NI** (aceleração por hardware de SHA-256) e **Intel SHA-512** nativo.
+- **Inspeção e Classificação de GPU**:
+  - Detecção e categorização de todas as placas OpenCL instaladas (dGPU High-End, dGPU Mid-Range, iGPU SoC/APU).
+  - Determinação do tamanho ótimo de Work-Group com base no Warp/Wavefront nativo (Wave32 para RDNA/NVIDIA vs Wave64 para GCN/CDNA).
+  - Dimensionamento dinâmico de lotes de memória VRAM (*batch tuning*) para máxima ocupação sem *throttling*.
+- **Auto-Tuning de Threads e Core Pinning**:
+  - Ajusta dinamicamente a contagem de workers e ativa a afinidade fixa de núcleos físicos (`pthread_setaffinity_np`), prevenindo invalidação de cache L1/L2 por migração entre núcleos do sistema operacional (desativável via `--no-pin`).
+- **Diagnóstico Completo de Hardware (`--host-info` / `--probe`)**:
+  - Exibe um relatório técnico estruturado com todas as métricas do processador, memória, placas de vídeo e a recomendação de orquestração ótima para aquela máquina.
+
+### 9. Estratégias de Afunilamento Heurístico
 O parâmetro `--strategy` permite priorizar e reordenar as palavras das incógnitas com base em modelos probabilísticos:
 - **`default`**: Varredura baseada estritamente em espaço afim $\mathbb{F}_2^C$.
 - **`hamming`**: Gradiente de transições de bits e entropia de borda nos limites de 11 bits.
@@ -125,7 +141,8 @@ O parâmetro `--strategy` permite priorizar e reordenar as palavras das incógni
 - **`typo`**: Autômatos finitos de distância de edição de Levenshtein (`--max-distance`), calculando semelhança ortográfica contra palavras adjacentes.
 - **Composições**: Combinações como `--strategy hamming,frequency` ou `--strategy hamming+typo`.
 
-### 9. Suíte de Benchmark e Profiling Integrada
+### 10. Suíte de Benchmark e Profiling Integrada
+- **`--host-info` / `--probe`**: Exibe o diagnóstico completo do hardware hospedeiro (CPU, Topologia, Caches, ISA, GPUs, VRAM e auto-tuning recomendado) e finaliza.
 - **`--benchmark`**: Avalia em tempo real a velocidade máxima de todos os subsistemas de hardware da máquina local (Checksum SHA-NI, PBKDF2 multithread, throughput de VRAM e kernel OpenCL, derivações secp256k1).
 - **`--profile-gpu`**: Mede com precisão de nanossegundos via OpenCL Profiling Events a latência de transferência Host-to-Device (H2D), tempo de execução do kernel e largura de banda efetiva em GB/s.
 - **`--list-gpus`**: Varre o subsistema OpenCL, listando placas dedicadas e integradas com pontuação de relevância heurística.
@@ -139,6 +156,10 @@ O parâmetro `--strategy` permite priorizar e reordenar as palavras das incógni
 - **CMake** versão 3.25 ou superior.
 - **OpenCL** (Opcional, para aceleração por placa de vídeo): drivers proprietários NVIDIA, AMD ROCm/AMDGPU-PRO ou Mesa Rusticl/Clover.
 - **pkg-config** (recomendado).
+
+> **Compilação Otimizada por Padrão**:
+> O sistema de build CMake habilita automaticamente **`-march=native -mtune=native`** e **Link-Time Optimization (`LTO / IPO`)** em compilações `Release`, garantindo que o compilador utilize todas as extensões do seu processador (AVX-512, AVX2, SHA-NI, BMI2) com inlining inter-procedural entre arquivos fonte.
+
 
 > **Nota sobre Dependências**: O arquivo de build está configurado com **download automático via CMake FetchContent**. Se `libsecp256k1` ou `CLI11` não estiverem instalados no seu sistema operacional, o CMake baixará, configurará e compilará as bibliotecas oficiais do Bitcoin Core automaticamente durante a montagem do projeto!
 
@@ -251,6 +272,13 @@ Se você lembra anotações parciais das palavras perdidas:
 ```bash
 ./criptowords --benchmark
 ```
+
+### 10. Diagnóstico Arquitetural do Host e Auto-Tuning (`--host-info`)
+```bash
+./criptowords --host-info
+```
+*Exibe todas as características do processador (núcleos físicos, threads lógicas, SMT, caches L1/L2/L3, ISA criptográfica), capacidade de memória RAM, dispositivos OpenCL com Compute Index e a orquestração ótima recomendada para aquele hardware.*
+
 
 ---
 
