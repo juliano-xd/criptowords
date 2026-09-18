@@ -313,6 +313,7 @@ void HMAC_SHA512::hash(const void* key, size_t key_len,
 
 void pbkdf2_hmac_sha512(const char* password, size_t password_len, const uint8_t* salt, size_t salt_len,
                         int iterations, uint8_t* out, size_t out_len) {
+    if (salt_len > 252) salt_len = 252;
     HMAC_SHA512 hmac_base;
     const size_t u1_msg_len = salt_len + 4;
     hmac_base.preset(password, password_len, u1_msg_len);

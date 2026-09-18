@@ -9,7 +9,7 @@
 
 namespace cryptowords {
 
-static constexpr size_t MAX_MNEMONIC_LEN = 300;
+static constexpr size_t MAX_MNEMONIC_LEN = 1024;
 static constexpr size_t BIP39_WORDLIST_SIZE = 2048;
 
 class Bip39Deriver {
@@ -23,6 +23,10 @@ public:
     // Derivação BIP32 Estendida (Chave Criança - Child Key)
     static bool derive_child_key(const secp256k1_context* ctx, uint8_t* priv_key,
                                  uint8_t* chain_code, uint32_t index);
+
+    // Derivação BIP32 Hardened otimizada (sem branches e sem pubkey)
+    static bool derive_child_key_hardened(const secp256k1_context* ctx, uint8_t* priv_key,
+                                          uint8_t* chain_code, uint32_t index) noexcept;
 
     // Deriva o endereço BTC final de uma semente bruta
     static std::string derive_btc_address_from_seed(const secp256k1_context* ctx,
@@ -42,7 +46,8 @@ public:
                                           const std::vector<std::string>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0,
-                                          uint32_t rounds = 2048);
+                                          uint32_t rounds = 2048,
+                                          const std::string& separator = " ");
 
     // Deriva o endereço ETH a partir de ids de mnemônicos (Gera a string e roda PBKDF2)
     static std::string derive_eth_address(const secp256k1_context* ctx,
@@ -50,7 +55,8 @@ public:
                                           const std::vector<std::string>& wl,
                                           const char* passphrase = nullptr,
                                           size_t passphrase_len = 0,
-                                          uint32_t rounds = 2048);
+                                          uint32_t rounds = 2048,
+                                          const std::string& separator = " ");
 
     // Converte e verifica integridade de endereço Base58 do BTC
     static bool decode_base58_btc_address(const std::string& address, uint8_t out_ripemd[20]);

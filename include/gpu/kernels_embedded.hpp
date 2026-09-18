@@ -1,3 +1,9 @@
+#pragma once
+#include <string_view>
+
+namespace cryptowords::gpu {
+
+inline constexpr std::string_view PBKDF2_GPU_KERNEL_SRC = R"OPENCL(
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
 #define ROTR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
@@ -256,3 +262,6 @@ __kernel void pbkdf2_batch(
         outputs[out_off + i*8 + 7] = (F[i]      ) & 0xFF;
     }
 }
+)OPENCL";
+
+} // namespace cryptowords::gpu

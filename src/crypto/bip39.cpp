@@ -62,7 +62,7 @@ bool Bip39Deriver::derive_child_key(const secp256k1_context* ctx, uint8_t* priv_
         std::memcpy(data + 1, priv_key, 32);
     } else {
         secp256k1_pubkey pubkey;
-        if (__builtin_expect(!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key), 1)) return false;
+        if (__builtin_expect(!secp256k1_ec_pubkey_create(ctx, &pubkey, priv_key), 0)) return false;
         size_t pub_len = 33;
         secp256k1_ec_pubkey_serialize(ctx, data, &pub_len, &pubkey, SECP256K1_EC_COMPRESSED);
     }
@@ -78,9 +78,28 @@ bool Bip39Deriver::derive_child_key(const secp256k1_context* ctx, uint8_t* priv_
     uint8_t* IL = I;
     uint8_t* IR = I + 32;
 
-    if (__builtin_expect(!secp256k1_ec_seckey_tweak_add(ctx, priv_key, IL), 1)) return false;
+    if (__builtin_expect(!secp256k1_ec_seckey_tweak_add(ctx, priv_key, IL), 0)) return false;
 
     std::memcpy(chain_code, IR, 32);
+    return true;
+}
+
+bool Bip39Deriver::derive_child_key_hardened(const secp256k1_context* ctx, uint8_t* priv_key,
+                                             uint8_t* chain_code, uint32_t index) noexcept {
+    uint8_t data[37];
+    data[0] = 0x00;
+    std::memcpy(data + 1, priv_key, 32);
+    data[33] = static_cast<uint8_t>(index >> 24);
+    data[34] = static_cast<uint8_t>(index >> 16);
+    data[35] = static_cast<uint8_t>(index >> 8);
+    data[36] = static_cast<uint8_t>(index);
+
+    uint8_t I[64];
+    crypto::HMAC_SHA512::bip32_hash(chain_code, data, I);
+
+    if (__builtin_expect(!secp256k1_ec_seckey_tweak_add(ctx, priv_key, I), 0)) return false;
+
+    std::memcpy(chain_code, I + 32, 32);
     return true;
 }
 
@@ -103,9 +122,9 @@ std::string Bip39Deriver::derive_btc_address_from_seed(const secp256k1_context* 
     std::memcpy(priv_key, master_node, 32);
     std::memcpy(chain_code, master_node + 32, 32);
 
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return "";
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000002C)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return "";
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
 
@@ -144,9 +163,9 @@ std::string Bip39Deriver::derive_eth_address_from_seed(const secp256k1_context* 
     std::memcpy(priv_key, master_node, 32);
     std::memcpy(chain_code, master_node + 32, 32);
 
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return "";
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000003C)) return "";
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000002C)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000003C)) return "";
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return "";
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
 
@@ -173,15 +192,19 @@ bool Bip39Deriver::decode_base58_btc_address(const std::string& address, uint8_t
 }
 
 bool Bip39Deriver::decode_hex_eth_address(const std::string& hex_addr, uint8_t out_target[20]) {
-    std::string s = hex_addr;
-    if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s = s.substr(2);
+    std::string_view s = hex_addr;
+    if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s.remove_prefix(2);
     if (s.length() != 40) return false;
-    for (int i = 0; i < 40; i++) {
-        if (!std::isxdigit(s[i])) return false;
+    for (size_t i = 0; i < 40; i++) {
+        if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return false;
     }
-    for (int i = 0; i < 20; i++) {
-        std::string byteString = s.substr(i * 2, 2);
-        out_target[i] = static_cast<uint8_t>(strtol(byteString.c_str(), nullptr, 16));
+    auto hex_val = [](char c) -> uint8_t {
+        if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+        if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
+        return static_cast<uint8_t>(c - 'A' + 10);
+    };
+    for (size_t i = 0; i < 20; i++) {
+        out_target[i] = static_cast<uint8_t>((hex_val(s[i * 2]) << 4) | hex_val(s[i * 2 + 1]));
     }
     return true;
 }
@@ -198,9 +221,9 @@ bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
     std::memcpy(priv_key,   master_node,      32);
     std::memcpy(chain_code, master_node + 32, 32);
 
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return false;
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000002C)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0))          return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0))          return false;
 
@@ -233,9 +256,9 @@ bool Bip39Deriver::check_eth_target_from_seed(const secp256k1_context* ctx,
     std::memcpy(priv_key, master_node, 32);
     std::memcpy(chain_code, master_node + 32, 32);
 
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000002C)) return false;
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x8000003C)) return false;
-    if (!derive_child_key(ctx, priv_key, chain_code, 0x80000000)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000002C)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x8000003C)) return false;
+    if (!derive_child_key_hardened(ctx, priv_key, chain_code, 0x80000000)) return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return false;
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return false;
 
@@ -286,17 +309,19 @@ std::string Bip39Deriver::derive_btc_address(const secp256k1_context* ctx,
                                       const std::vector<std::string>& wl,
                                       const char* passphrase,
                                       size_t passphrase_len,
-                                      uint32_t rounds) {
+                                      uint32_t rounds,
+                                      const std::string& separator) {
     char buf[MAX_MNEMONIC_LEN];
-    size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);
+    size_t len = build_mnemonic_str(mnemonic_ids, wl, separator, buf);
 
     uint8_t seed[64];
     uint8_t salt_buf[256];
     std::memcpy(salt_buf, "mnemonic", 8);
     size_t salt_len = 8;
     if (passphrase && passphrase_len > 0) {
-        std::memcpy(salt_buf + 8, passphrase, passphrase_len);
-        salt_len += passphrase_len;
+        size_t copy_len = std::min(passphrase_len, sizeof(salt_buf) - 8);
+        std::memcpy(salt_buf + 8, passphrase, copy_len);
+        salt_len += copy_len;
     }
 
     crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, rounds, seed, 64);
@@ -308,17 +333,19 @@ std::string Bip39Deriver::derive_eth_address(const secp256k1_context* ctx,
                                       const std::vector<std::string>& wl,
                                       const char* passphrase,
                                       size_t passphrase_len,
-                                      uint32_t rounds) {
+                                      uint32_t rounds,
+                                      const std::string& separator) {
     char buf[MAX_MNEMONIC_LEN];
-    size_t len = build_mnemonic_str(mnemonic_ids, wl, " ", buf);
+    size_t len = build_mnemonic_str(mnemonic_ids, wl, separator, buf);
 
     uint8_t seed[64];
     uint8_t salt_buf[256];
     std::memcpy(salt_buf, "mnemonic", 8);
     size_t salt_len = 8;
     if (passphrase && passphrase_len > 0) {
-        std::memcpy(salt_buf + 8, passphrase, passphrase_len);
-        salt_len += passphrase_len;
+        size_t copy_len = std::min(passphrase_len, sizeof(salt_buf) - 8);
+        std::memcpy(salt_buf + 8, passphrase, copy_len);
+        salt_len += copy_len;
     }
 
     crypto::pbkdf2_hmac_sha512(buf, len, salt_buf, salt_len, rounds, seed, 64);
