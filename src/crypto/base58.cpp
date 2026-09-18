@@ -14,6 +14,7 @@ namespace base58 {
         // '1' inicial = byte 0x00 à esquerda.
         size_t leading = 0;
         while (leading < address.size() && address[leading] == '1') ++leading;
+        if (leading >= 25) return false;
 
         // Big-number base58 -> bytes little-endian.
         std::vector<uint8_t> bytes;

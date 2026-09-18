@@ -9,6 +9,8 @@ using PVD = SimdBatchProcessor<SimdArch::AVX512, true,  true>;
 
 std::unique_ptr<IBatchProcessor>
 make_simd_processor_avx512(const AppConfig& cfg, const OptimizedMnemonics& opt) {
+    if (opt.direct_valid_wheels)
+        return std::make_unique<P>();
     if (cfg.only_valids && opt.auto_deduce_last_word)
         return std::make_unique<PVD>();
     if (cfg.only_valids)

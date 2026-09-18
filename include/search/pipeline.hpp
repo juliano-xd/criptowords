@@ -47,6 +47,7 @@ private:
     const OptimizedMnemonics& opt_;
     std::unique_ptr<IOdometer>       odometer_;
     std::unique_ptr<IBatchProcessor> processor_;
+    std::unique_ptr<IBatchProcessor> cpu_processor_;
     std::string                      arch_name_;
 };
 

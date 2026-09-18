@@ -40,16 +40,66 @@ parse_constraint_map(std::string_view input) {
 std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions& raw) {
     AppConfig cfg;
 
+    cfg.list_gpus     = raw.list_gpus;
+    cfg.run_benchmark = raw.run_benchmark;
+    cfg.profile_gpu   = raw.profile_gpu;
+    cfg.gpu_platform  = raw.gpu_platform;
+    cfg.gpu_device    = raw.gpu_device;
+    cfg.gpu_batch     = raw.gpu_batch;
+
+    if (raw.list_gpus || raw.run_benchmark) {
+        return cfg;
+    }
+
     size_t raw_size = raw.size;
     std::string raw_lang = raw.lang;
+    std::string norm_lang = WordlistLoader::normalize_lang(raw_lang);
 
+    cfg.language = norm_lang;
     cfg.coin = raw.coin;
     cfg.passphrase = raw.passphrase;
     cfg.num_threads = raw.num_threads;
     cfg.pbkdf2_rounds = raw.pbkdf2_rounds;
     cfg.use_gpu = raw.use_gpu;
+    cfg.use_hybrid = raw.use_hybrid;
+    if (cfg.use_hybrid) cfg.use_gpu = true;
     cfg.only_valids = !raw.invalid_too;
+    cfg.distinct = raw.distinct;
     cfg.target = raw.target;
+    cfg.max_distance = raw.max_distance;
+
+    std::vector<std::string> tokenized_strategies;
+    for (const auto& item : raw.strategies) {
+        for (const auto part : std::views::split(item, '+')) {
+            std::string s(part.begin(), part.end());
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+            if (!s.empty()) tokenized_strategies.push_back(std::move(s));
+        }
+    }
+    if (tokenized_strategies.empty()) {
+        tokenized_strategies.push_back("default");
+    }
+
+    cfg.strategies.clear();
+    for (auto& s : tokenized_strategies) {
+        std::ranges::transform(s, s.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (s == "default") {
+            if (!cfg.has_strategy(SearchStrategy::Default)) cfg.strategies.push_back(SearchStrategy::Default);
+        } else if (s == "hamming" || s == "hamming-gradient" || s == "hamming_gradient") {
+            if (!cfg.has_strategy(SearchStrategy::HammingGradient)) cfg.strategies.push_back(SearchStrategy::HammingGradient);
+        } else if (s == "frequency") {
+            if (!cfg.has_strategy(SearchStrategy::Frequency)) cfg.strategies.push_back(SearchStrategy::Frequency);
+        } else if (s == "typo") {
+            if (!cfg.has_strategy(SearchStrategy::Typo)) cfg.strategies.push_back(SearchStrategy::Typo);
+        } else {
+            return std::unexpected(std::format("Estratégia de busca inválida: '{}'. Opções válidas: default, hamming, frequency, typo", s));
+        }
+    }
+    if (cfg.strategies.empty()) {
+        cfg.strategies.push_back(SearchStrategy::Default);
+    }
+    cfg.strategy = cfg.strategies[0];
 
     cfg.mnemonics.resize(raw_size, AppConfig::UNKNOWN_WORD);
     cfg.unknows = raw_size;
@@ -61,7 +111,7 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
 
     std::unordered_map<std::string, uint16_t> word_to_id = WordlistLoader::build_index(cfg.wordlist);
 
-    if (raw_lang == "ja" || raw_lang == "japanese") {
+    if (norm_lang == "japanese") {
         cfg.separator = "\xE3\x80\x80";
     }
 
@@ -74,8 +124,20 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     }
 
     if (!raw.mnemonics.empty()) {
+        std::string cleaned_mnemonics = raw.mnemonics;
+        const std::string id_space = "\xE3\x80\x80";
+        size_t p = 0;
+        while ((p = cleaned_mnemonics.find(id_space, p)) != std::string::npos) {
+            cleaned_mnemonics.replace(p, id_space.length(), " ");
+            p += 1;
+        }
+
+        for (char& c : cleaned_mnemonics) {
+            if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+        }
+
         auto words_view =
-            raw.mnemonics | std::views::split(' ') |
+            cleaned_mnemonics | std::views::split(' ') |
             std::views::filter([](auto r) { return !r.empty(); }) |
             std::views::transform([](auto r) { return std::string(r.begin(), r.end()); });
 
@@ -99,6 +161,10 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             const auto& w = temp_mnemonic[i];
             if (w != "?") {
                 auto it = word_to_id.find(w);
+                if (it == word_to_id.end()) {
+                    std::string nfc_w = WordlistLoader::to_nfc(w);
+                    it = word_to_id.find(nfc_w);
+                }
                 if (it == word_to_id.end()) {
                     return std::unexpected(
                         std::format("A palavra '{}' não existe na wordlist '{}'.", w, raw_lang));
@@ -131,10 +197,18 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
         for (const auto& w : words) {
             auto it = word_to_id.find(w);
             if (it == word_to_id.end()) {
+                std::string nfc_w = WordlistLoader::to_nfc(w);
+                it = word_to_id.find(nfc_w);
+            }
+            if (it == word_to_id.end()) {
                 return std::unexpected(std::format("A palavra permitida '{}' não existe.", w));
             }
             translated_allows.push_back(it->second);
         }
+
+        std::ranges::sort(translated_allows);
+        auto [first, last] = std::ranges::unique(translated_allows);
+        translated_allows.erase(first, last);
 
         if (translated_allows.size() == 1) {
             cfg.mnemonics[pos] = translated_allows.front();
@@ -164,21 +238,25 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             "O parâmetro '--target' é obrigatório quando há posições desconhecidas ou com múltiplas opções (--allow).");
     }
 
+    if (cfg.passphrase.size() > 99) {
+        return std::unexpected("Passphrase suporta no máximo 99 caracteres.");
+    }
+
     if (cfg.use_gpu) {
-        if (!cfg.passphrase.empty()) {
-            return std::unexpected("Aceleração por GPU não suporta '--passphrase'. O kernel OpenCL é ultra-otimizado e hardcodado para salt padrão.");
-        }
         if (cfg.pbkdf2_rounds != 2048) {
             return std::unexpected(std::format("Aceleração por GPU exige '--rounds 2048' (padrão BIP39), mas {} foi solicitado.", cfg.pbkdf2_rounds));
         }
-        if (cfg.mnemonics.size() > 12) {
-            return std::unexpected("Aceleração por GPU suporta apenas mnemonics de até 12 palavras (devido ao limite estrito de 128 bytes do kernel Zero-Spill).");
-        }
-        if (raw_lang == "ja" || raw_lang == "japanese") {
-            return std::unexpected("Aceleração por GPU não suporta o idioma Japonês (UTF-8 multi-byte excede o limite de 128 bytes do kernel).");
-        }
-        if (cfg.num_threads == 0) {
-            cfg.num_threads = std::thread::hardware_concurrency();
+        if (cfg.use_hybrid) {
+            if (cfg.num_threads == 0) {
+                cfg.num_threads = std::thread::hardware_concurrency();
+            }
+        } else {
+            if (raw.num_threads > 1) {
+                cfg.use_hybrid = true;
+                cfg.num_threads = raw.num_threads;
+            } else {
+                cfg.num_threads = 1;
+            }
         }
     } else {
         if (cfg.num_threads == 0) {

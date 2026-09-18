@@ -10,12 +10,25 @@
 #include <CL/cl.h>
 #endif
 
+#include "gpu_info.hpp"
 #include <vector>
 #include <string>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 
 namespace cryptowords {
+
+struct GpuExecutionMetrics {
+    uint64_t write_time_ns = 0;
+    uint64_t kernel_time_ns = 0;
+    uint64_t read_time_ns = 0;
+    uint64_t total_time_ns = 0;
+    double bandwidth_h2d_gb_s = 0.0;
+    double bandwidth_d2h_gb_s = 0.0;
+    double kernel_keys_per_sec = 0.0;
+    double total_keys_per_sec = 0.0;
+};
 
 class GPUEngine {
 public:
@@ -24,15 +37,42 @@ public:
         return instance;
     }
 
-    bool init();
+    bool init(int platform_id = -1, int device_id = -1, size_t batch_size = 0, const uint64_t* salt_block = nullptr, bool silent = false, size_t slot_size = 256);
+    void cleanup();
     size_t get_optimal_batch_size() const { return max_batch_size_; }
+    size_t get_slot_size() const { return slot_size_; }
+    const gpu::DiscoveredDevice* get_active_device() const {
+        return active_device_.has_value() ? &active_device_.value() : nullptr;
+    }
     
-    // Processa 65536 senhas (ou o batch disponivel) 
-    // Retorna as 65536 sementes (64 bytes cada).
+    static constexpr size_t NUM_SLOTS = 2;
+
     bool pbkdf2_batch(const std::vector<uint8_t>& passwords, 
                       const std::vector<uint32_t>& pass_lens, 
                       std::vector<uint8_t>& out_seeds,
                       uint32_t num_hashes);
+
+    bool pbkdf2_batch_profiled(const std::vector<uint8_t>& passwords, 
+                               const std::vector<uint32_t>& pass_lens, 
+                               std::vector<uint8_t>& out_seeds,
+                               uint32_t num_hashes,
+                               GpuExecutionMetrics& metrics);
+
+    // Métodos do pipeline assíncrono Double-Buffering
+    bool enqueue_batch_async(size_t slot,
+                             const std::vector<uint8_t>& passwords,
+                             const std::vector<uint32_t>& pass_lens,
+                             uint32_t num_hashes,
+                             uint8_t* out_seeds_ptr);
+
+    bool wait_batch(size_t slot);
+    bool is_slot_in_flight(size_t slot) const {
+        if (slot >= NUM_SLOTS) return false;
+        std::lock_guard<std::mutex> lock(mu_);
+        return slot_in_flight_[slot];
+    }
+    bool is_unified_memory() const { return is_unified_memory_; }
+    size_t get_local_work_size() const { return local_work_size_; }
 
 private:
     GPUEngine() = default;
@@ -42,20 +82,30 @@ private:
     GPUEngine& operator=(const GPUEngine&) = delete;
 
     std::string load_kernel(const std::string& filename);
+    void cleanup_locked();
 
     bool initialized_ = false;
-    std::mutex mu_;
+    mutable std::mutex mu_;
+    std::optional<gpu::DiscoveredDevice> active_device_;
 
     cl_context context_ = nullptr;
     cl_command_queue queue_ = nullptr;
     cl_program pbkdf2_prog_ = nullptr;
     cl_kernel pbkdf2_kernel_ = nullptr;
 
-    cl_mem d_passwords_ = nullptr;
-    cl_mem d_pass_lens_ = nullptr;
-    cl_mem d_out_seeds_ = nullptr;
-    
+    cl_mem d_passwords_[NUM_SLOTS] = {nullptr, nullptr};
+    cl_mem d_pass_lens_[NUM_SLOTS] = {nullptr, nullptr};
+    cl_mem d_out_seeds_[NUM_SLOTS] = {nullptr, nullptr};
+    cl_mem d_salt_block_ = nullptr;
+    cl_event ev_kernel_[NUM_SLOTS] = {nullptr, nullptr};
+    cl_event ev_read_[NUM_SLOTS] = {nullptr, nullptr};
+    bool slot_in_flight_[NUM_SLOTS] = {false, false};
+    uint32_t slot_hashes_[NUM_SLOTS] = {0, 0};
+
+    bool is_unified_memory_ = false;
+    size_t local_work_size_ = 32;
     size_t max_batch_size_ = 65536;
+    size_t slot_size_ = 256;
 };
 
 } // namespace cryptowords

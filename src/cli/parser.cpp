@@ -60,8 +60,48 @@ std::expected<RawOptions, std::string> CLIParser::parse(int argc, char* argv[]) 
     app.add_flag("--gpu", raw.use_gpu,
                  "Enable GPU acceleration via OpenCL");
 
+    app.add_flag("--hybrid", raw.use_hybrid,
+                 "Enable hybrid CPU (AVX2) + GPU co-processing");
+
+    app.add_flag("--list-gpus", raw.list_gpus,
+                 "List all detected OpenCL platforms and devices and exit");
+
+    app.add_option("--gpu-platform", raw.gpu_platform,
+                   "OpenCL platform index (default: auto)")
+        ->type_name("ID")
+        ->default_val(-1);
+
+    app.add_option("--gpu-device", raw.gpu_device,
+                   "OpenCL device index (default: auto)")
+        ->type_name("ID")
+        ->default_val(-1);
+
+    app.add_option("--gpu-batch", raw.gpu_batch,
+                   "GPU batch size (default: auto-tuned by VRAM/CUs)")
+        ->type_name("NUM")
+        ->default_val(0);
+
     app.add_flag("--invalid_too", raw.invalid_too,
                  "Include invalid checksums in search");
+
+    app.add_flag("--distinct", raw.distinct,
+                 "Assume distinct words in mnemonic (prunes known words from unknown wheels)");
+
+    app.add_option("--strategy", raw.strategies,
+                   "Search strategies: default, hamming, frequency, typo (can be combined)")
+        ->type_name("STRATEGY...")
+        ->delimiter(',');
+
+    app.add_option("--max-distance", raw.max_distance,
+                   "Maximum edit distance for typo strategy (1-3)")
+        ->type_name("NUM")
+        ->default_val(2);
+
+    app.add_flag("--benchmark", raw.run_benchmark,
+                 "Run full hardware & algorithmic performance benchmark suite and exit");
+
+    app.add_flag("--profile-gpu", raw.profile_gpu,
+                 "Profile GPU OpenCL latency and bandwidth metrics during recovery");
 
     try {
         app.parse(argc, argv);
