@@ -97,9 +97,12 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     std::print("├──────────┼───────────────┼────────────┼─────────────────────┼─────────┼────────────┤\n");
 
     std::vector<size_t> thread_counts = {1};
-    if (hw_threads >= 2) thread_counts.push_back(2);
-    if (hw_threads >= 4) thread_counts.push_back(4);
-    if (hw_threads > 4) thread_counts.push_back(hw_threads);
+    for (size_t t = 2; t < hw_threads; t *= 2) {
+        thread_counts.push_back(t);
+    }
+    if (hw_threads > 1 && thread_counts.back() != hw_threads) {
+        thread_counts.push_back(hw_threads);
+    }
 
     double baseline_rate = 0.0;
     const std::string test_pw = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -164,7 +167,16 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
             size_t best_batch = 0;
             double best_effective_khs = 0.0;
 
-            for (size_t batch : batch_sizes) {
+            std::vector<size_t> cur_batch_sizes = batch_sizes;
+            if (dev.compute_units >= 20 || dev.global_mem >= 6ULL * 1024 * 1024 * 1024) {
+                cur_batch_sizes.push_back(131072);
+                cur_batch_sizes.push_back(262144);
+            }
+            if (dev.compute_units >= 60 || dev.global_mem >= 12ULL * 1024 * 1024 * 1024) {
+                cur_batch_sizes.push_back(524288);
+            }
+
+            for (size_t batch : cur_batch_sizes) {
                 // Re-inicializa para o dispositivo e tamanho de lote específico em modo silencioso
                 gpu_engine.cleanup();
                 constexpr size_t bench_slot_sz = 128;
