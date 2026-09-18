@@ -90,14 +90,41 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
         gpu::print_device_capabilities(dev);
     }
 
+    // Limite máximo de chaves pelo tamanho de alocação de buffer do dispositivo
+    size_t max_keys_by_alloc = (dev.max_alloc > 0) ? (dev.max_alloc / slot_size_) : 524288;
+    if (dev.global_mem > 0) {
+        size_t max_keys_by_vram = (dev.global_mem / 4) / slot_size_;
+        if (max_keys_by_vram < max_keys_by_alloc) max_keys_by_alloc = max_keys_by_vram;
+    }
+    if (max_keys_by_alloc < 4096) max_keys_by_alloc = 4096;
+
     // Ajuste dinâmico do tamanho do lote
     if (batch_size > 0) {
-        max_batch_size_ = ((batch_size + 255) / 256) * 256;
+        size_t requested = ((batch_size + 255) / 256) * 256;
+        if (requested > max_keys_by_alloc) requested = (max_keys_by_alloc / 256) * 256;
+        max_batch_size_ = std::max(size_t(4096), requested);
     } else {
         size_t local_sz = (dev.max_work_group >= 256) ? 256 : dev.max_work_group;
         size_t calc_batch = dev.compute_units * local_sz * 32;
-        if (calc_batch < 8192) calc_batch = 8192;
-        if (calc_batch > 65536) calc_batch = 65536;
+
+        size_t min_b = 8192;
+        size_t max_b = 65536;
+
+        if (dev.compute_units >= 60 || dev.global_mem >= 12ULL * 1024 * 1024 * 1024) {
+            min_b = 131072;
+            max_b = 524288;
+        } else if (dev.compute_units >= 20 || dev.global_mem >= 6ULL * 1024 * 1024 * 1024) {
+            min_b = 65536;
+            max_b = 262144;
+        } else if (dev.compute_units <= 4 || dev.global_mem < 4ULL * 1024 * 1024 * 1024) {
+            min_b = 8192;
+            max_b = 32768;
+        }
+
+        if (calc_batch < min_b) calc_batch = min_b;
+        if (calc_batch > max_b) calc_batch = max_b;
+        if (calc_batch > max_keys_by_alloc) calc_batch = max_keys_by_alloc;
+
         max_batch_size_ = ((calc_batch + 255) / 256) * 256;
     }
 

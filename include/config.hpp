@@ -33,6 +33,8 @@ struct RawOptions {
     bool                     distinct      = false;
     bool                     run_benchmark = false;
     bool                     profile_gpu   = false;
+    bool                     probe_hardware = false;
+    bool                     pin_cores      = true;
 };
 
 // Configuração validada — pronta para o motor.
@@ -48,9 +50,10 @@ struct AppConfig {
     std::string language   = "en";
 
     uint64_t pbkdf2_rounds = 2048;
-    size_t   num_threads   = 1;
+    size_t   num_threads   = 0;
     size_t   unknows       = 0;
     size_t   max_distance  = 2;
+
 
     CoinTarget                  coin       = CoinTarget::BTC;
     std::vector<SearchStrategy> strategies = {SearchStrategy::Default};
@@ -61,14 +64,17 @@ struct AppConfig {
         return false;
     }
 
-    bool only_valids  = true;
-    bool use_gpu      = false;
-    bool use_hybrid   = false;
-    bool list_gpus    = false;
-    int  gpu_platform = -1;
-    int  gpu_device   = -1;
-    size_t gpu_batch  = 0;
-    bool distinct     = false;
+    bool only_valids   = true;
+    bool use_gpu       = false;
+    bool use_hybrid    = false;
+    bool list_gpus     = false;
+    int  gpu_platform  = -1;
+    int  gpu_device    = -1;
+    size_t gpu_batch   = 0;
+    bool distinct      = false;
     bool run_benchmark = false;
     bool profile_gpu   = false;
+    bool probe_hardware = false;
+    bool pin_cores      = true;
 };
+

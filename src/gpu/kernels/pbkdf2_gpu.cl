@@ -1,8 +1,8 @@
 #pragma OPENCL EXTENSION cl_khr_int64_base_atomics : enable
 
-#define ROTR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
-#define CH64(x, y, z) ((z) ^ ((x) & ((y) ^ (z))))
-#define MAJ64(x, y, z) (((x) & (y)) | ((z) & ((x) | (y))))
+#define ROTR64(x, n) rotate((ulong)(x), 64UL - (ulong)(n))
+#define CH64(x, y, z) bitselect((ulong)(z), (ulong)(y), (ulong)(x))
+#define MAJ64(x, y, z) bitselect((ulong)(x), (ulong)(y), (ulong)((x) ^ (z)))
 #define EP0_64(x) (ROTR64(x, 28) ^ ROTR64(x, 34) ^ ROTR64(x, 39))
 #define EP1_64(x) (ROTR64(x, 14) ^ ROTR64(x, 18) ^ ROTR64(x, 41))
 #define SIG0_64(x) (ROTR64(x, 1) ^ ROTR64(x, 8) ^ ((x) >> 7))
@@ -37,6 +37,41 @@ __constant ulong IV[8] = {
 };
 
 inline void sha512_block_fast(ulong* H, ulong* W) {
+    ulong a = H[0], b = H[1], c = H[2], d = H[3];
+    ulong e = H[4], f = H[5], g = H[6], h = H[7];
+    ulong T1, T2;
+
+    #pragma unroll 16
+    for (int j = 0; j < 16; ++j) {
+        T1 = h + EP1_64(e) + CH64(e, f, g) + K[j] + W[j];
+        T2 = EP0_64(a) + MAJ64(a, b, c);
+        h = g; g = f; f = e; e = d + T1;
+        d = c; c = b; b = a; a = T1 + T2;
+    }
+
+    for (int chunk = 1; chunk < 5; ++chunk) {
+        #pragma unroll 16
+        for (int j = 0; j < 16; ++j) {
+            W[j] += SIG1_64(W[(j+14)&15]) + W[(j+9)&15] + SIG0_64(W[(j+1)&15]);
+            T1 = h + EP1_64(e) + CH64(e, f, g) + K[chunk*16 + j] + W[j];
+            T2 = EP0_64(a) + MAJ64(a, b, c);
+            h = g; g = f; f = e; e = d + T1;
+            d = c; c = b; b = a; a = T1 + T2;
+        }
+    }
+
+    H[0] += a; H[1] += b; H[2] += c; H[3] += d;
+    H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+}
+
+inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
+    ulong W[16];
+    #pragma unroll 8
+    for (int i = 0; i < 8; ++i) W[i] = in8[i];
+    W[8] = 0x8000000000000000UL;
+    W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0;
+    W[15] = 1536;
+
     ulong a = H[0], b = H[1], c = H[2], d = H[3];
     ulong e = H[4], f = H[5], g = H[6], h = H[7];
     ulong T1, T2;
@@ -220,24 +255,12 @@ __kernel void pbkdf2_batch(
     
     for(int iter=1; iter<2048; iter++) {
         #pragma unroll 8
-        for(int i=0; i<8; i++) {
-            H_work[i] = ipad_state[i];
-            W[i] = U[i];
-        }
-        W[8] = 0x8000000000000000UL;
-        W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0; W[15] = 1536; 
-        
-        sha512_block_fast(H_work, W);
+        for(int i=0; i<8; i++) H_work[i] = ipad_state[i];
+        sha512_block_fast_padded(H_work, U);
         
         #pragma unroll 8
-        for(int i=0; i<8; i++) {
-            U[i] = opad_state[i];
-            W[i] = H_work[i];
-        }
-        W[8] = 0x8000000000000000UL;
-        W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0; W[15] = 1536;
-        
-        sha512_block_fast(U, W);
+        for(int i=0; i<8; i++) U[i] = opad_state[i];
+        sha512_block_fast_padded(U, H_work);
         
         #pragma unroll 8
         for(int i=0; i<8; i++) F[i] ^= U[i];

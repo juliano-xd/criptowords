@@ -41,6 +41,27 @@ namespace cryptowords {
             if (primary.empty()) {
                 const unsigned int total = std::thread::hardware_concurrency();
                 for (unsigned int i = 0; i < total; ++i) primary.push_back(static_cast<int>(i));
+            } else {
+                // Priorizar núcleos de maior silício (Golden Cores / P-Cores) primeiro
+                std::vector<std::pair<uint32_t, int>> rated;
+                for (int cpu : primary) {
+                    uint32_t score = 0;
+                    std::string cppc_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/acpi_cppc/highest_perf";
+                    std::ifstream f_c(cppc_path);
+                    if (f_c >> score) {}
+                    else {
+                        std::string f_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq";
+                        std::ifstream f_m(f_path);
+                        f_m >> score;
+                    }
+                    rated.push_back({score, cpu});
+                }
+                std::stable_sort(rated.begin(), rated.end(), [](const auto& a, const auto& b) {
+                    return a.first > b.first;
+                });
+                for (size_t i = 0; i < primary.size(); ++i) {
+                    primary[i] = rated[i].second;
+                }
             }
             return primary;
         }
@@ -104,10 +125,10 @@ namespace cryptowords {
         }
     } // namespace
 
-    void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx, size_t num_threads, SearchState& state) {
+        void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx, size_t num_threads, SearchState& state) {
 #if defined(__linux__)
         static const auto cpu_ids = get_physical_cpu_ids();
-        if (!cpu_ids.empty()) {
+        if (!cpu_ids.empty() && pipeline.config().pin_cores) {
             int target_cpu = cpu_ids[thread_idx % cpu_ids.size()];
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
@@ -133,9 +154,11 @@ namespace cryptowords {
 
         print_box_top("EXECUÇÃO DO MOTOR SIMD", DEFAULT_INNER_WIDTH);
         print_box_line(std::format("Motor SIMD   : \033[1;36m{}\033[0m", pipeline.architecture_name()), DEFAULT_INNER_WIDTH);
-        print_box_line(std::format("Threads      : \033[1;37m{:<4}\033[0m │ Afinidade CPU : \033[1;32mAtivo (Core Pinning Físico)\033[0m", num_threads), DEFAULT_INNER_WIDTH);
+        std::string pin_str = pipeline.config().pin_cores ? "\033[1;32mAtivo (Core Pinning Físico)\033[0m" : "\033[90mDesativado\033[0m";
+        print_box_line(std::format("Threads      : \033[1;37m{:<4}\033[0m │ Afinidade CPU : {}", num_threads, pin_str), DEFAULT_INNER_WIDTH);
         print_box_bottom(DEFAULT_INNER_WIDTH);
         std::print("\n");
+
 
         const auto start = std::chrono::steady_clock::now();
         SearchState state;

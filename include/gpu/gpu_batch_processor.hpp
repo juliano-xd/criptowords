@@ -20,7 +20,6 @@ public:
         size_t opt_batch = GPUEngine::get_instance().get_optimal_batch_size();
         batch_capacity_ = opt_batch;
         if (batch_capacity_ < 4096) batch_capacity_ = 4096;
-        if (batch_capacity_ > 8192) batch_capacity_ = 8192;
         batch_capacity_ = ((batch_capacity_ + 255) / 256) * 256;
 
         slot_size_ = GPUEngine::get_instance().get_slot_size();

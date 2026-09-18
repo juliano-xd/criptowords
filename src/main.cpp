@@ -8,6 +8,8 @@
 #include "../include/crypto/bip39.hpp"
 #include "../include/gpu/gpu_engine.hpp"
 #include "../include/gpu/gpu_info.hpp"
+#include "../include/hardware/host_probe.hpp"
+#include "../include/hardware/hardware_advisor.hpp"
 #include "../include/benchmark/benchmark_runner.hpp"
 #include "../include/cli/ui.hpp"
 
@@ -61,8 +63,6 @@ static bool run_derivation_mode(const AppConfig& cfg) {
     return true;
 }
 
-
-
 int main(int argc, char* argv[]) {
     auto raw = CLIParser::parse(argc, argv);
     if (!raw) {
@@ -80,7 +80,19 @@ int main(int argc, char* argv[]) {
         std::println(stderr, "\nUse '--help' para ver os exemplos de uso.");
         return 1;
     }
-    const auto& cfg = *config;
+    auto cfg = *config;
+
+    // Sondagem profunda de hardware do host e análise de auto-tuning
+    const auto host_profile = cryptowords::hardware::HostProbe::probe_all();
+    const auto tuning_strat = cryptowords::hardware::HardwareAdvisor::analyze(cfg, host_profile);
+
+    if (cfg.probe_hardware) {
+        cryptowords::hardware::HardwareAdvisor::print_host_report(host_profile, tuning_strat);
+        return 0;
+    }
+
+    // Aplica o auto-tuning adaptativo para parâmetros não fixados pelo usuário
+    cryptowords::hardware::HardwareAdvisor::apply_tuning(cfg, tuning_strat);
 
     if (cfg.list_gpus) {
         cryptowords::gpu::print_device_list();
@@ -98,16 +110,7 @@ int main(int argc, char* argv[]) {
 
     // Modo força bruta.
     if (cfg.use_gpu) {
-        size_t slot_size = 128;
-        bool is_cjk = (cfg.language == "ja" || cfg.language == "japanese" ||
-                       cfg.language == "ko" || cfg.language == "korean" ||
-                       cfg.language.starts_with("zh") || cfg.language.starts_with("chinese") ||
-                       cfg.separator == "\xE3\x80\x80");
-        if (is_cjk || cfg.mnemonics.size() >= 21) {
-            slot_size = 512;
-        } else if (cfg.mnemonics.size() > 12) {
-            slot_size = 256;
-        }
+        size_t slot_size = tuning_strat.chosen_slot_size;
 
         // Pré-calcula o bloco de salt do PBKDF2 com suporte a passphrase
         uint64_t salt_block64[16] = {};
@@ -137,8 +140,10 @@ int main(int argc, char* argv[]) {
 
     const auto plan = SearchOptimizer::build_plan(cfg);
     SearchReporter::print_plan(plan, cfg);
+    cryptowords::hardware::HardwareAdvisor::print_tuning_summary(tuning_strat);
 
     cryptowords::ExecutionPipeline pipeline(cfg, plan);
     cryptowords::BruteForceEngine::run(pipeline, cfg.num_threads);
     return 0;
 }
+

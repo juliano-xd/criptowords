@@ -46,10 +46,14 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     cfg.gpu_platform  = raw.gpu_platform;
     cfg.gpu_device    = raw.gpu_device;
     cfg.gpu_batch     = raw.gpu_batch;
+    cfg.probe_hardware = raw.probe_hardware;
+    cfg.pin_cores     = raw.pin_cores;
+    cfg.num_threads   = raw.num_threads;
 
-    if (raw.list_gpus || raw.run_benchmark) {
+    if (raw.list_gpus || raw.run_benchmark || raw.probe_hardware) {
         return cfg;
     }
+
 
     size_t raw_size = raw.size;
     std::string raw_lang = raw.lang;
@@ -67,6 +71,9 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     cfg.distinct = raw.distinct;
     cfg.target = raw.target;
     cfg.max_distance = raw.max_distance;
+    cfg.probe_hardware = raw.probe_hardware;
+    cfg.pin_cores = raw.pin_cores;
+
 
     std::vector<std::string> tokenized_strategies;
     for (const auto& item : raw.strategies) {

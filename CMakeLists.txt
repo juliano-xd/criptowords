@@ -18,8 +18,22 @@ endif()
 
 # ---------- Opções ----------
 option(CRYPTOWORDS_GPU    "Aceleração OpenCL"       ON)
-option(CRYPTOWORDS_NATIVE "Compilar com -march=native (só para builds locais)" OFF)
+option(CRYPTOWORDS_NATIVE "Compilar com -march=native (máxima performance para o hardware local)" ON)
+option(CRYPTOWORDS_LTO    "Otimização em tempo de linkedição (LTO/IPO)" ON)
 option(CRYPTOWORDS_WERROR "Tratar warnings como erros" OFF)
+
+# ---------- Otimização Inter-Procedural (LTO / IPO) ----------
+if(CRYPTOWORDS_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+    if(IPO_SUPPORTED)
+        message(STATUS "LTO/IPO suportado pelo compilador — ativando otimização inter-procedural.")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    else()
+        message(STATUS "LTO/IPO não suportado: ${IPO_ERROR}")
+    endif()
+endif()
+
 
 # ---------- Dependências externas com fallback automático ----------
 include(FetchContent)
@@ -97,10 +111,18 @@ endif()
 
 message(STATUS "SIMD: SSE4.1=${HAVE_SSE41}  AVX2=${HAVE_AVX2}  AVX512=${HAVE_AVX512}  SHA-NI=${HAVE_SHA_NI}")
 
-# ---------- Flags de aviso (aplicadas só ao código nosso) ----------
+# ---------- Flags de aviso e performance ----------
 set(WARN_FLAGS -Wall -Wextra -Wpedantic)
 if(CRYPTOWORDS_WERROR)
     list(APPEND WARN_FLAGS -Werror)
+endif()
+
+set(PERF_FLAGS -fomit-frame-pointer -fstrict-aliasing -fno-math-errno -fno-trapping-math)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    list(APPEND PERF_FLAGS -ftree-vectorize)
+endif()
+if(CRYPTOWORDS_NATIVE)
+    list(APPEND PERF_FLAGS -march=native -mtune=native)
 endif()
 
 # ---------- Núcleo (portável) ----------
@@ -117,6 +139,9 @@ set(CORE_SOURCES
 
     src/simd/factory.cpp
 
+    src/hardware/host_probe.cpp
+    src/hardware/hardware_advisor.cpp
+
     src/crypto/base58.cpp
     src/crypto/bip39.cpp
     src/crypto/ripemd160.cpp
@@ -129,11 +154,13 @@ set(CORE_SOURCES
 add_library(criptowords_core OBJECT ${CORE_SOURCES})
 target_include_directories(criptowords_core PUBLIC include)
 target_link_libraries(criptowords_core PUBLIC PkgConfig::SECP256K1 CLI11::CLI11)
-target_compile_options(criptowords_core PRIVATE ${WARN_FLAGS})
+target_compile_options(criptowords_core PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 
-if(CRYPTOWORDS_NATIVE)
-    target_compile_options(criptowords_core PRIVATE -march=native)
+if(CRYPTOWORDS_GPU)
+    target_link_libraries(criptowords_core PUBLIC OpenCL::OpenCL)
+    target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_GPU=1)
 endif()
+
 
 # ---------- TUs SIMD compiladas por arquitetura ----------
 set(SHA_FLAG "")
@@ -147,7 +174,7 @@ if(HAVE_SSE41)
     add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
     target_include_directories(simd_sse PRIVATE include)
     target_link_libraries(simd_sse PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_sse PRIVATE -msse4.1 ${SHA_FLAG} ${WARN_FLAGS})
+    target_compile_options(simd_sse PRIVATE -msse4.1 ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_SSE41=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
 endif()
@@ -156,7 +183,7 @@ if(HAVE_AVX2)
     add_library(simd_avx2 OBJECT src/simd/factory_avx2.cpp)
     target_include_directories(simd_avx2 PRIVATE include)
     target_link_libraries(simd_avx2 PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${SHA_FLAG} ${WARN_FLAGS})
+    target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX2=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx2>)
 endif()
@@ -165,10 +192,11 @@ if(HAVE_AVX512)
     add_library(simd_avx512 OBJECT src/simd/factory_avx512.cpp)
     target_include_directories(simd_avx512 PRIVATE include)
     target_link_libraries(simd_avx512 PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_avx512 PRIVATE -mavx512f ${SHA_FLAG} ${WARN_FLAGS})
+    target_compile_options(simd_avx512 PRIVATE -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX512=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx512>)
 endif()
+
 
 # ---------- GPU (opcional) ----------
 set(GPU_SOURCES "")
@@ -189,10 +217,12 @@ add_executable(criptowords
 )
 
 target_include_directories(criptowords PRIVATE include)
+target_compile_options(criptowords PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 target_link_libraries(criptowords PRIVATE
     PkgConfig::SECP256K1
     CLI11::CLI11
 )
+
 
 if(CRYPTOWORDS_GPU)
     target_link_libraries(criptowords PRIVATE OpenCL::OpenCL)
