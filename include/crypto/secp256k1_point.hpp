@@ -21,48 +21,66 @@ static constexpr uint64_t DELTA_P = 0x1000003D1ULL;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
-// Redução especializada em F_p (p = 2^256 - 2^32 - 977) com DELTA_P em ~22 instruções sem divisões
+// Redução especializada em F_p (p = 2^256 - 2^32 - 977) com DELTA_P sem loops
 FORCE_INLINE UInt<4> reduce_secp256k1_p(const uint64_t r[8]) noexcept {
-    uint64_t carry = 0;
-    uint64_t h_prod[5] = {};
-    for (int i = 0; i < 4; ++i) {
-        unsigned __int128 prod = static_cast<unsigned __int128>(r[4 + i]) * DELTA_P + carry;
-        h_prod[i] = static_cast<uint64_t>(prod);
-        carry = static_cast<uint64_t>(prod >> 64);
-    }
-    h_prod[4] = carry;
+    unsigned __int128 p0 = static_cast<unsigned __int128>(r[4]) * DELTA_P;
+    uint64_t h0 = static_cast<uint64_t>(p0);
+    uint64_t c0 = static_cast<uint64_t>(p0 >> 64);
 
-    uint64_t s[5] = {};
+    unsigned __int128 p1 = static_cast<unsigned __int128>(r[5]) * DELTA_P + c0;
+    uint64_t h1 = static_cast<uint64_t>(p1);
+    uint64_t c1 = static_cast<uint64_t>(p1 >> 64);
+
+    unsigned __int128 p2 = static_cast<unsigned __int128>(r[6]) * DELTA_P + c1;
+    uint64_t h2 = static_cast<uint64_t>(p2);
+    uint64_t c2 = static_cast<uint64_t>(p2 >> 64);
+
+    unsigned __int128 p3 = static_cast<unsigned __int128>(r[7]) * DELTA_P + c2;
+    uint64_t h3 = static_cast<uint64_t>(p3);
+    uint64_t h4 = static_cast<uint64_t>(p3 >> 64);
+
+    uint64_t s0, s1, s2, s3, s4;
     unsigned char c = 0;
-    c = _addcarry_u64(0, r[0], h_prod[0], reinterpret_cast<unsigned long long*>(&s[0]));
-    c = _addcarry_u64(c, r[1], h_prod[1], reinterpret_cast<unsigned long long*>(&s[1]));
-    c = _addcarry_u64(c, r[2], h_prod[2], reinterpret_cast<unsigned long long*>(&s[2]));
-    c = _addcarry_u64(c, r[3], h_prod[3], reinterpret_cast<unsigned long long*>(&s[3]));
-    c = _addcarry_u64(c, 0, h_prod[4], reinterpret_cast<unsigned long long*>(&s[4]));
+    c = _addcarry_u64(0, r[0], h0, reinterpret_cast<unsigned long long*>(&s0));
+    c = _addcarry_u64(c, r[1], h1, reinterpret_cast<unsigned long long*>(&s1));
+    c = _addcarry_u64(c, r[2], h2, reinterpret_cast<unsigned long long*>(&s2));
+    c = _addcarry_u64(c, r[3], h3, reinterpret_cast<unsigned long long*>(&s3));
+    c = _addcarry_u64(c, 0,    h4, reinterpret_cast<unsigned long long*>(&s4));
 
-    if (s[4] != 0) {
-        unsigned __int128 extra = static_cast<unsigned __int128>(s[4]) * DELTA_P;
-        c = _addcarry_u64(0, s[0], static_cast<uint64_t>(extra), reinterpret_cast<unsigned long long*>(&s[0]));
-        c = _addcarry_u64(c, s[1], static_cast<uint64_t>(extra >> 64), reinterpret_cast<unsigned long long*>(&s[1]));
-        c = _addcarry_u64(c, s[2], 0, reinterpret_cast<unsigned long long*>(&s[2]));
-        c = _addcarry_u64(c, s[3], 0, reinterpret_cast<unsigned long long*>(&s[3]));
-        if (c) {
+    if (__builtin_expect(s4 != 0, 0)) {
+        unsigned __int128 extra = static_cast<unsigned __int128>(s4) * DELTA_P;
+        c = _addcarry_u64(0, s0, static_cast<uint64_t>(extra), reinterpret_cast<unsigned long long*>(&s0));
+        c = _addcarry_u64(c, s1, static_cast<uint64_t>(extra >> 64), reinterpret_cast<unsigned long long*>(&s1));
+        c = _addcarry_u64(c, s2, 0, reinterpret_cast<unsigned long long*>(&s2));
+        c = _addcarry_u64(c, s3, 0, reinterpret_cast<unsigned long long*>(&s3));
+        if (__builtin_expect(c != 0, 0)) {
             unsigned __int128 final_c = static_cast<unsigned __int128>(c) * DELTA_P;
-            _addcarry_u64(0, s[0], static_cast<uint64_t>(final_c), reinterpret_cast<unsigned long long*>(&s[0]));
+            _addcarry_u64(0, s0, static_cast<uint64_t>(final_c), reinterpret_cast<unsigned long long*>(&s0));
         }
     }
 
+    if (__builtin_expect(s3 == ~0ULL && s2 == ~0ULL && s1 == ~0ULL && s0 >= 0xFFFFFFFEFFFFFC2FULL, 0)) {
+        s0 += DELTA_P;
+        s1 = 0;
+        s2 = 0;
+        s3 = 0;
+    }
+
     UInt<4> res;
-    for (int i = 0; i < 4; ++i) res.bits[i] = s[i];
-    if (res >= P) res -= P;
+    res.bits[0] = s0;
+    res.bits[1] = s1;
+    res.bits[2] = s2;
+    res.bits[3] = s3;
     return res;
 }
 
 // Multiplicação em F_p (4x4 = 16 multiplicações)
 FORCE_INLINE UInt<4> mul_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
     uint64_t r[8] = {};
+    #pragma GCC unroll 4
     for (int i = 0; i < 4; ++i) {
         uint64_t carry = 0;
+        #pragma GCC unroll 4
         for (int j = 0; j < 4; ++j) {
             unsigned __int128 prod = static_cast<unsigned __int128>(a.bits[i]) * b.bits[j] + r[i + j] + carry;
             r[i + j] = static_cast<uint64_t>(prod);
@@ -73,7 +91,6 @@ FORCE_INLINE UInt<4> mul_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
     return reduce_secp256k1_p(r);
 }
 
-// Quadratura modular dedicada em F_p: reduz de 16 para 10 multiplicações (37.5% de aceleração)
 // Quadratura modular dedicada em F_p: reduz de 16 para 10 multiplicações (37.5% de aceleração)
 FORCE_INLINE UInt<4> sqr_mod_p(const UInt<4>& a) noexcept {
     const uint64_t a0 = a.bits[0], a1 = a.bits[1], a2 = a.bits[2], a3 = a.bits[3];
@@ -133,9 +150,40 @@ FORCE_INLINE UInt<4> sqr_mod_p(const UInt<4>& a) noexcept {
 }
 #pragma GCC diagnostic pop
 
-// Adição modular em F_p via UInt<4>::add_carry
+// Adição modular em F_p com redução rápida por DELTA_P
 FORCE_INLINE UInt<4> add_mod_p(UInt<4> a, const UInt<4>& b) noexcept {
-    if (a.add_carry(b) || a >= P) { a -= P; }
+    if (a.add_carry(b)) {
+        unsigned char c = _addcarry_u64(0, a.bits[0], DELTA_P, reinterpret_cast<unsigned long long*>(&a.bits[0]));
+        c = _addcarry_u64(c, a.bits[1], 0, reinterpret_cast<unsigned long long*>(&a.bits[1]));
+        c = _addcarry_u64(c, a.bits[2], 0, reinterpret_cast<unsigned long long*>(&a.bits[2]));
+        _addcarry_u64(c, a.bits[3], 0, reinterpret_cast<unsigned long long*>(&a.bits[3]));
+    } else if (__builtin_expect(a.bits[3] == ~0ULL && a.bits[2] == ~0ULL && a.bits[1] == ~0ULL && a.bits[0] >= 0xFFFFFFFEFFFFFC2FULL, 0)) {
+        a.bits[0] += DELTA_P;
+        a.bits[1] = 0;
+        a.bits[2] = 0;
+        a.bits[3] = 0;
+    }
+    return a;
+}
+
+// Duplicação modular em F_p (2 * a mod p) via shift de 1 bit e redução imediata de carry
+FORCE_INLINE UInt<4> double_mod_p(UInt<4> a) noexcept {
+    uint64_t c = a.bits[3] >> 63;
+    a.bits[3] = (a.bits[3] << 1) | (a.bits[2] >> 63);
+    a.bits[2] = (a.bits[2] << 1) | (a.bits[1] >> 63);
+    a.bits[1] = (a.bits[1] << 1) | (a.bits[0] >> 63);
+    a.bits[0] = a.bits[0] << 1;
+    if (c) {
+        unsigned char br = _addcarry_u64(0, a.bits[0], DELTA_P, reinterpret_cast<unsigned long long*>(&a.bits[0]));
+        br = _addcarry_u64(br, a.bits[1], 0, reinterpret_cast<unsigned long long*>(&a.bits[1]));
+        br = _addcarry_u64(br, a.bits[2], 0, reinterpret_cast<unsigned long long*>(&a.bits[2]));
+        _addcarry_u64(br, a.bits[3], 0, reinterpret_cast<unsigned long long*>(&a.bits[3]));
+    } else if (__builtin_expect(a.bits[3] == ~0ULL && a.bits[2] == ~0ULL && a.bits[1] == ~0ULL && a.bits[0] >= 0xFFFFFFFEFFFFFC2FULL, 0)) {
+        a.bits[0] += DELTA_P;
+        a.bits[1] = 0;
+        a.bits[2] = 0;
+        a.bits[3] = 0;
+    }
     return a;
 }
 
@@ -206,26 +254,35 @@ FORCE_INLINE void point_add_mixed_raw(PointJacobian& p1, const uint64_t p2_x[4],
     const UInt<4> p2x = make_uint4(p2_x);
     const UInt<4> p2y = make_uint4(p2_y);
 
-    UInt<4> Z1Z1 = sqr_mod_p(p1.Z);
-    UInt<4> U2 = mul_mod_p(p2x, Z1Z1);
-    UInt<4> Z1_cubed = mul_mod_p(p1.Z, Z1Z1);
-    UInt<4> S2 = mul_mod_p(p2y, Z1_cubed);
-
-    UInt<4> H = sub_mod_p(U2, p1.X);
-    UInt<4> R = sub_mod_p(S2, p1.Y);
+    UInt<4> U2, S2, H, R, Z3;
+    if (__builtin_expect(p1.Z.bits[0] == 1 && (p1.Z.bits[1] | p1.Z.bits[2] | p1.Z.bits[3]) == 0, 0)) {
+        // Fast-path Z1 == 1: elimina 4 multiplicações e 1 quadratura
+        U2 = p2x;
+        S2 = p2y;
+        H = sub_mod_p(U2, p1.X);
+        R = sub_mod_p(S2, p1.Y);
+        Z3 = H;
+    } else {
+        UInt<4> Z1Z1 = sqr_mod_p(p1.Z);
+        U2 = mul_mod_p(p2x, Z1Z1);
+        UInt<4> Z1_cubed = mul_mod_p(p1.Z, Z1Z1);
+        S2 = mul_mod_p(p2y, Z1_cubed);
+        H = sub_mod_p(U2, p1.X);
+        R = sub_mod_p(S2, p1.Y);
+        Z3 = mul_mod_p(p1.Z, H);
+    }
 
     if (__builtin_expect(H.eqz(), 0)) {
         if (R.eqz()) return;
         else { p1.is_infinity = true; return; }
     }
 
-    UInt<4> Z3 = mul_mod_p(p1.Z, H);
     UInt<4> H2 = sqr_mod_p(H);
     UInt<4> H3 = mul_mod_p(H, H2);
     UInt<4> U1_H2 = mul_mod_p(p1.X, H2);
 
     UInt<4> R2 = sqr_mod_p(R);
-    UInt<4> X3 = sub_mod_p(sub_mod_p(R2, H3), add_mod_p(U1_H2, U1_H2));
+    UInt<4> X3 = sub_mod_p(sub_mod_p(R2, H3), double_mod_p(U1_H2));
     UInt<4> Y3 = sub_mod_p(mul_mod_p(R, sub_mod_p(U1_H2, X3)), mul_mod_p(p1.Y, H3));
 
     p1.X = X3;

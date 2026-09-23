@@ -8,6 +8,17 @@
 namespace cryptowords {
 namespace base58 {
 
+    // Tabela estática de lookup O(1) para caracteres Base58 (256 bytes)
+    constexpr auto make_b58_table() {
+        std::array<int8_t, 256> tbl{};
+        tbl.fill(-1);
+        for (int i = 0; i < 58; ++i) {
+            tbl[static_cast<uint8_t>(BASE58_ALPHABET[i])] = static_cast<int8_t>(i);
+        }
+        return tbl;
+    }
+    constexpr auto B58_LOOKUP = make_b58_table();
+
     bool decode_btc_address(const std::string& address, uint8_t out_ripemd[20]) {
         if (address.size() < 26 || address.size() > 35) return false;
 
@@ -18,23 +29,15 @@ namespace base58 {
 
         UInt<4> val = 0;
         for (char c : address) {
-            const char* p = std::strchr(BASE58_ALPHABET, c);
-            if (!p) return false;
+            int8_t digit = B58_LOOKUP[static_cast<uint8_t>(c)];
+            if (__builtin_expect(digit < 0, 0)) return false;
             val *= 58ULL;
-            val += static_cast<u64>(p - BASE58_ALPHABET);
+            val += static_cast<u64>(digit);
         }
 
-        uint8_t decoded[25] = {};
-        for (int i = 0; i < 4; ++i) {
-            uint64_t w = val.bits[i];
-            for (int b = 0; b < 8; ++b) {
-                int pos = 24 - (i * 8 + b);
-                if (pos >= 0) {
-                    decoded[pos] = static_cast<uint8_t>(w & 0xFF);
-                }
-                w >>= 8;
-            }
-        }
+        alignas(8) uint8_t raw[32];
+        val.to_bytes(raw, Endianness::big);
+        const uint8_t* decoded = raw + 7; // 32 - 25 = 7
 
         if (decoded[0] != 0x00) return false;
 
@@ -48,22 +51,18 @@ namespace base58 {
     }
 
 size_t encode_raw(const uint8_t* payload, size_t len, char* out_buf) {
-    size_t leading_zeros = 0;
-    while (leading_zeros < len && payload[leading_zeros] == 0x00) {
-        leading_zeros++;
-    }
-
     if (len == 0) {
         out_buf[0] = '\0';
         return 0;
     }
 
-    // Carrega payload em big-endian no UInt<4> (até 25 bytes / 200 bits)
-    UInt<4> val = 0;
-    for (size_t i = leading_zeros; i < len; ++i) {
-        val <<= 8;
-        val += payload[i];
+    size_t leading_zeros = 0;
+    while (leading_zeros < len && payload[leading_zeros] == 0x00) {
+        leading_zeros++;
     }
+
+    // Carrega payload em big-endian diretamente no UInt<4>
+    UInt<4> val(payload + leading_zeros, len - leading_zeros, Endianness::big);
 
     char tmp[64];
     size_t tmp_len = 0;
