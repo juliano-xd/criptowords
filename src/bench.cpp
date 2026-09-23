@@ -1,4 +1,5 @@
 #include "../include/math/UInt.hpp"
+#include "../include/crypto/secp256k1_point.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -544,6 +545,22 @@ int main(int argc, char** argv) {
         mask.bits[2] = 0x7FFFFFFFFFFFFFFFULL;
         mask.bits[3] = 0ULL;
         check(shl != x && shr == (x & mask), "single-pass bit shifts boundary check");
+    }
+
+    // ============================================================
+    // 38. SECP256K1 POINT MATH & MODULAR INVERSION
+    // ============================================================
+    {
+        std::array<uint8_t, 32> seckey = {};
+        seckey[31] = 1;
+        std::array<uint8_t, 33> pub_fast;
+        check(crypto::secp256k1_pubkey_create_fast(pub_fast, seckey), "pubkey_create_fast G");
+        check(pub_fast[0] == 0x02 && pub_fast[1] == 0x79 && pub_fast[2] == 0xbe, "pubkey G matches known coordinates");
+
+        UInt<4> a("0x123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF");
+        UInt<4> inv_a = crypto::inv_mod_p(a);
+        UInt<4> one = crypto::mul_mod_p(a, inv_a);
+        check(one == UInt<4>(1), "inv_mod_p mathematical exactness (a * inv(a) == 1 mod p)");
     }
 
     std::println("{}", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");

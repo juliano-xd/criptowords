@@ -147,18 +147,33 @@ public:
         bits.fill(0);
         if (ptr == nullptr || len == 0) return;
         if (order == BitOrder::LSB) {
-            for (size_t i = 0; i < len; ++i) {
-                size_t limb_idx = i / 8;
-                if (limb_idx >= N) break;
-                size_t bit_idx = i % 8;
-                bits[limb_idx] |= static_cast<u64>(ptr[i]) << (bit_idx * 8);
+            const size_t full_words = std::min(len >> 3, static_cast<size_t>(N));
+            for (size_t w = 0; w < full_words; ++w) {
+                u64 v;
+                std::memcpy(&v, ptr + (w << 3), 8);
+                bits[w] = v;
+            }
+            const size_t rem = len - (full_words << 3);
+            if (rem > 0 && full_words < N) {
+                u64 v = 0;
+                std::memcpy(&v, ptr + (full_words << 3), rem);
+                bits[full_words] = v;
             }
         } else {
-            for (size_t i = 0; i < len && i < N * 8; ++i) {
-                size_t byte_pos = N * 8 - 1 - i;
-                size_t limb_idx = byte_pos / 8;
-                size_t bit_idx = byte_pos % 8;
-                bits[limb_idx] |= static_cast<u64>(ptr[i]) << (bit_idx * 8);
+            if (len == N * 8) {
+                #pragma GCC unroll 8
+                for (size_t w = 0; w < N; ++w) {
+                    u64 v;
+                    std::memcpy(&v, ptr + (w << 3), 8);
+                    bits[N - 1 - w] = __builtin_bswap64(v);
+                }
+            } else {
+                for (size_t i = 0; i < len && i < N * 8; ++i) {
+                    const size_t byte_pos = N * 8 - 1 - i;
+                    const size_t limb_idx = byte_pos >> 3;
+                    const size_t bit_idx = byte_pos & 7;
+                    bits[limb_idx] |= static_cast<u64>(ptr[i]) << (bit_idx << 3);
+                }
             }
         }
     }
@@ -673,6 +688,17 @@ public:
 
         if (*this < v) return {UInt<N>(0), *this};
         if (*this == v) return {UInt<N>(1), UInt<N>(0)};
+
+        if constexpr (N > 1) {
+            bool single_limb = true;
+            for (u8 i = 1; i < N; ++i) {
+                if (v.bits[i] != 0) { single_limb = false; break; }
+            }
+            if (single_limb) {
+                auto [q, r_u64] = divmod(v.bits[0]);
+                return {q, UInt<N>(r_u64)};
+            }
+        }
 
         UInt<N> q{};
         UInt<N> r{};
