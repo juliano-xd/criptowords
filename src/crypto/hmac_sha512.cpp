@@ -35,17 +35,25 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         HMAC_SHA512 h_iter;
         h_iter.preset(password, password_len, HASH_LEN);
 
-        UInt<8> T_u;
-        std::memcpy(T_u.bits.data(), T.data(), 64);
-        T_u.set_mode(Backend::SIMD);
+        auto* T_words = reinterpret_cast<uint64_t*>(T.data());
+        const auto* U_words = reinterpret_cast<const uint64_t*>(U.data());
 
         for (int i = 1; i < iterations; ++i) {
             h_iter.complete(U.data(), HASH_LEN, U);
-            UInt<8> U_u;
-            std::memcpy(U_u.bits.data(), U.data(), 64);
-            T_u ^= U_u;
+#if defined(__AVX2__)
+            __m256i t0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(T_words));
+            __m256i t1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(T_words + 4));
+            __m256i u0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(U_words));
+            __m256i u1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(U_words + 4));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(T_words), _mm256_xor_si256(t0, u0));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(T_words + 4), _mm256_xor_si256(t1, u1));
+#else
+            #pragma GCC unroll 8
+            for (int w = 0; w < 8; ++w) {
+                T_words[w] ^= U_words[w];
+            }
+#endif
         }
-        std::memcpy(T.data(), T_u.bits.data(), 64);
     }
 
     std::memcpy(out, T.data(), std::min<size_t>(HASH_LEN, out_len));

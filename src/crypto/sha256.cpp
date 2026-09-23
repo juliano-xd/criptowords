@@ -373,36 +373,44 @@ void SHA256::finalize(uint8_t out[32]) {
 }
 
 void SHA256::hash(const void* data, uint8_t len, uint8_t out[32]) {
+    if (len <= 55) {
+        alignas(16) uint8_t block[64] = {0};
+        if (len != 0) std::memcpy(block, data, len);
+        block[len] = 0x80;
+        uint64_t bit_len_be = __builtin_bswap64(static_cast<uint64_t>(len) * 8);
+        std::memcpy(block + 56, &bit_len_be, 8);
+
+#if defined(__SHA__)
+        std::array<uint32_t, 8> state = {
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        };
+        cryptowords::detail::sha256_process_x86(state.data(), block, 64);
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            uint32_t out_be = __builtin_bswap32(state[i]);
+            std::memcpy(out + i * 4, &out_be, 4);
+        }
+        return;
+#else
+        SHA256 ctx;
+        ctx.process_block(block);
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            uint32_t out_be = __builtin_bswap32(ctx.h_[i]);
+            std::memcpy(out + i * 4, &out_be, 4);
+        }
+        return;
+#endif
+    }
+
     SHA256 ctx;
     ctx.update(data, len);
     ctx.finalize(out);
 }
 
 void SHA256::hash33(const std::array<u8, 33> &in, std::array<u8, 32> &out) noexcept {
-    alignas(16) std::array<u8, 64> block = {0};
-    std::memcpy(block.data(), in.data(), 33);
-    block[33] = 0x80;
-    block[62] = 0x01;
-    block[63] = 0x08; // 33 * 8 = 264 bits = 0x0108
-
-#if defined(__SHA__)
-    std::array<uint32_t, 8> state = {
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-    };
-    cryptowords::detail::sha256_process_x86(state.data(), block.data(), 64);
-    for (int i = 0; i < 8; ++i) {
-        uint32_t out_be = __builtin_bswap32(state[i]);
-        std::memcpy(out.data() + i * 4, &out_be, 4);
-    }
-#else
-    SHA256 ctx;
-    ctx.process_block(block.data());
-    for (int i = 0; i < 8; ++i) {
-        uint32_t out_be = __builtin_bswap32(ctx.h_[i]);
-        std::memcpy(out.data() + i * 4, &out_be, 4);
-    }
-#endif
+    hash(in.data(), 33, out.data());
 }
 
 void SHA256::process_block(const uint8_t block[64]) {

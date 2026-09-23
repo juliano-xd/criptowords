@@ -190,6 +190,7 @@ private:
         for (std::uint32_t t = first_round; t < 16; ++t)
             round(a, b, c, d, e, f, g, h, K_[t], w[t]);
 
+        SHA512_UNROLL16
         for (std::uint32_t t = 16; t < 80; ++t) {
             const unsigned i = t & 15;
             w[i] += small0(w[(i + 1) & 15]) +
@@ -378,18 +379,28 @@ public:
 
         if (suffix_len != 0) {
             const std::size_t first = buffer_size_;
-            const std::size_t last = first + suffix_len - 1;
-            const std::size_t w0 = first >> 3;
-            const std::size_t w1 = last >> 3;
-            const std::size_t byte0 = w0 << 3;
+            if ((first & 7) == 0 && (suffix_len & 7) == 0) {
+                const std::size_t w0 = first >> 3;
+                const std::size_t word_count = suffix_len >> 3;
+                const auto* p = static_cast<const byte*>(suffix);
+                #pragma GCC unroll 8
+                for (std::size_t i = 0; i < word_count; ++i) {
+                    w[w0 + i] = load_be64(p + (i << 3));
+                }
+            } else {
+                const std::size_t last = first + suffix_len - 1;
+                const std::size_t w0 = first >> 3;
+                const std::size_t w1 = last >> 3;
+                const std::size_t byte0 = w0 << 3;
 
-            alignas(64) byte patch[block_size];
-            for (std::size_t i = w0; i <= w1; ++i)
-                store_be64(patch + ((i - w0) << 3), template_w_[i]);
-            std::memcpy(patch + (first - byte0), suffix, suffix_len);
+                alignas(64) byte patch[block_size];
+                for (std::size_t i = w0; i <= w1; ++i)
+                    store_be64(patch + ((i - w0) << 3), template_w_[i]);
+                std::memcpy(patch + (first - byte0), suffix, suffix_len);
 
-            for (std::size_t i = w0; i <= w1; ++i)
-                w[i] = load_be64(patch + ((i - w0) << 3));
+                for (std::size_t i = w0; i <= w1; ++i)
+                    w[i] = load_be64(patch + ((i - w0) << 3));
+            }
         }
 
         auto state = template_mid_;
