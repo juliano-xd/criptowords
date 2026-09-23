@@ -563,6 +563,30 @@ int main(int argc, char** argv) {
         check(one == UInt<4>(1), "inv_mod_p mathematical exactness (a * inv(a) == 1 mod p)");
     }
 
+    // ============================================================
+    // 39. NATIVE BIG-ENDIAN INITIALIZATION & TO_BYTES
+    // ============================================================
+    {
+        std::array<uint8_t, 32> be_bytes = {};
+        be_bytes[31] = 0x42;
+        be_bytes[0]  = 0x01;
+        // Big endian: byte 0 is MSB (bits[3]), byte 31 is LSB (bits[0])
+        UInt<4> u_be(be_bytes, Endianness::big);
+        check((u_be.bits[0] & 0xFF) == 0x42, "UInt(arr, Endianness::big) LSB matches");
+        check((u_be.bits[3] >> 56) == 0x01,  "UInt(arr, Endianness::big) MSB matches");
+
+        auto exported = u_be.to_bytes(Endianness::big);
+        check(exported == be_bytes, "u_be.to_bytes(Endianness::big) round-trip exact");
+
+        std::array<uint8_t, 32> out_buf = {};
+        u_be.to_bytes(out_buf, Endianness::big);
+        check(out_buf == be_bytes, "u_be.to_bytes(out_buf, Endianness::big) exact");
+
+        // Factory and helper methods
+        auto u_from_be = UInt<4>::from_be(be_bytes);
+        check(u_from_be == u_be, "UInt::from_be matches UInt constructor");
+    }
+
     std::println("{}", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
     } catch (const std::exception& e) {

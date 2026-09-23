@@ -11,6 +11,7 @@
 #include <format>
 #include <immintrin.h>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,6 +47,14 @@ enum class BitOrder : int {
     LSB = 0,
     MSB = 1
 };
+
+FORCE_INLINE constexpr BitOrder to_bit_order(Endianness e) noexcept {
+    return (e == Endianness::big) ? BitOrder::MSB : BitOrder::LSB;
+}
+
+FORCE_INLINE constexpr Endianness to_endianness(BitOrder o) noexcept {
+    return (o == BitOrder::MSB) ? Endianness::big : Endianness::little;
+}
 
 template <u8 N>
 class alignas(64) UInt {
@@ -89,7 +98,7 @@ private:
         }
     }
 
-    template <std::unsigned_integral T, u16 M>
+    template <std::unsigned_integral T, std::size_t M>
     FORCE_INLINE void load_array_impl(const std::array<T, M>& values, BitOrder order) noexcept {
         load_array_impl(values.data(), order);
     }
@@ -111,9 +120,20 @@ public:
     constexpr UInt& operator=(const UInt& o) noexcept = default;
     constexpr UInt& operator=(UInt&& o) noexcept = default;
 
+    constexpr explicit UInt(Endianness endian) noexcept : endian_(endian) {}
+
     constexpr UInt(u64 v) noexcept {
         bits.fill(0);
         bits[0] = v;
+    }
+
+    constexpr UInt(u64 v, Endianness endian) noexcept : endian_(endian) {
+        bits.fill(0);
+        if (endian == Endianness::little) {
+            bits[0] = v;
+        } else {
+            bits[N - 1] = v;
+        }
     }
 
     explicit operator u64() const {
@@ -140,6 +160,19 @@ public:
         u8 i = 0;
         for (u64 v : il) {
             bits[i++] = v;
+        }
+    }
+
+    UInt(std::initializer_list<u64> il, Endianness endian) : endian_(endian) {
+        bits.fill(0);
+        u8 count = static_cast<u8>(il.size());
+        if (count > N) throw std::out_of_range("Initializer list too long");
+        if (endian == Endianness::little) {
+            u8 i = 0;
+            for (u64 v : il) bits[i++] = v;
+        } else {
+            u8 i = 0;
+            for (u64 v : il) bits[N - count + i++] = v;
         }
     }
 
@@ -178,6 +211,11 @@ public:
         }
     }
 
+    FORCE_INLINE explicit UInt(const u8* ptr, size_t len, Endianness endian) noexcept
+        : UInt(ptr, len, to_bit_order(endian)) {
+        endian_ = endian;
+    }
+
     template<typename InputIt>
         requires std::input_or_output_iterator<InputIt>
     explicit UInt(InputIt first, InputIt last, BitOrder order = BitOrder::LSB) {
@@ -186,6 +224,21 @@ public:
         if (bytes.empty()) return;
         *this = UInt<N>(bytes.data(), bytes.size(), order);
     }
+
+    template<typename InputIt>
+        requires std::input_or_output_iterator<InputIt>
+    explicit UInt(InputIt first, InputIt last, Endianness endian)
+        : UInt(first, last, to_bit_order(endian)) {
+        endian_ = endian;
+    }
+
+    template <std::size_t M>
+    explicit UInt(std::span<const u8, M> bytes, BitOrder order = BitOrder::LSB) noexcept
+        : UInt(bytes.data(), bytes.size(), order) {}
+
+    template <std::size_t M>
+    explicit UInt(std::span<const u8, M> bytes, Endianness endian) noexcept
+        : UInt(bytes.data(), bytes.size(), endian) {}
 
     template <u8 M>
     UInt(const UInt<M>& other) noexcept {
@@ -216,12 +269,32 @@ public:
 
     template <std::unsigned_integral T, std::size_t M>
     explicit UInt(const T (&values)[M], BitOrder order = BitOrder::LSB) noexcept {
-        load_array_impl<T, M>(values, order);
+        if constexpr (sizeof(T) == 1) {
+            *this = UInt<N>(reinterpret_cast<const u8*>(values), M, order);
+        } else {
+            load_array_impl<T, M>(values, order);
+        }
     }
 
-    template <std::unsigned_integral T, u16 M>
+    template <std::unsigned_integral T, std::size_t M>
+    explicit UInt(const T (&values)[M], Endianness endian) noexcept
+        : UInt(values, to_bit_order(endian)) {
+        endian_ = endian;
+    }
+
+    template <std::unsigned_integral T, std::size_t M>
     explicit UInt(const std::array<T, M>& values, BitOrder order = BitOrder::LSB) noexcept {
-        load_array_impl<T, M>(values, order);
+        if constexpr (sizeof(T) == 1) {
+            *this = UInt<N>(reinterpret_cast<const u8*>(values.data()), M, order);
+        } else {
+            load_array_impl<T, M>(values, order);
+        }
+    }
+
+    template <std::unsigned_integral T, std::size_t M>
+    explicit UInt(const std::array<T, M>& values, Endianness endian) noexcept
+        : UInt(values, to_bit_order(endian)) {
+        endian_ = endian;
     }
 
     constexpr explicit UInt(std::string_view sv) {
@@ -271,6 +344,125 @@ public:
 
     [[nodiscard]] Backend mode() const noexcept { return mode_; }
     [[nodiscard]] Endianness endianness() const noexcept { return endian_; }
+
+    void to_bytes(u8* ptr, size_t len, BitOrder order = BitOrder::LSB) const noexcept {
+        if (ptr == nullptr || len == 0) return;
+        if (order == BitOrder::LSB) {
+            const size_t full_words = std::min(len >> 3, static_cast<size_t>(N));
+            for (size_t w = 0; w < full_words; ++w) {
+                std::memcpy(ptr + (w << 3), &bits[w], 8);
+            }
+            const size_t rem = len - (full_words << 3);
+            if (rem > 0 && full_words < N) {
+                std::memcpy(ptr + (full_words << 3), &bits[full_words], rem);
+            }
+            if (len > N * 8) {
+                std::memset(ptr + (N * 8), 0, len - (N * 8));
+            }
+        } else {
+            if (len == N * 8) {
+                #pragma GCC unroll 8
+                for (size_t w = 0; w < N; ++w) {
+                    u64 v = __builtin_bswap64(bits[N - 1 - w]);
+                    std::memcpy(ptr + (w << 3), &v, 8);
+                }
+            } else {
+                std::memset(ptr, 0, len);
+                for (size_t i = 0; i < len && i < N * 8; ++i) {
+                    const size_t byte_pos = N * 8 - 1 - i;
+                    const size_t limb_idx = byte_pos >> 3;
+                    const size_t bit_idx = byte_pos & 7;
+                    ptr[i] = static_cast<u8>((bits[limb_idx] >> (bit_idx << 3)) & 0xFF);
+                }
+            }
+        }
+    }
+
+    FORCE_INLINE void to_bytes(u8* ptr, size_t len, Endianness endian) const noexcept {
+        to_bytes(ptr, len, to_bit_order(endian));
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(std::array<u8, M>& out, BitOrder order = BitOrder::LSB) const noexcept {
+        to_bytes(out.data(), M, order);
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(std::array<u8, M>& out, Endianness endian) const noexcept {
+        to_bytes(out.data(), M, to_bit_order(endian));
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(u8 (&out)[M], BitOrder order = BitOrder::LSB) const noexcept {
+        to_bytes(out, M, order);
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(u8 (&out)[M], Endianness endian) const noexcept {
+        to_bytes(out, M, to_bit_order(endian));
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(std::span<u8, M> out, BitOrder order = BitOrder::LSB) const noexcept {
+        to_bytes(out.data(), out.size(), order);
+    }
+
+    template <std::size_t M>
+    FORCE_INLINE void to_bytes(std::span<u8, M> out, Endianness endian) const noexcept {
+        to_bytes(out.data(), out.size(), to_bit_order(endian));
+    }
+
+    template <std::size_t M = N * 8>
+    [[nodiscard]] std::array<u8, M> to_bytes(BitOrder order = BitOrder::LSB) const noexcept {
+        std::array<u8, M> arr{};
+        to_bytes(arr.data(), M, order);
+        return arr;
+    }
+
+    template <std::size_t M = N * 8>
+    [[nodiscard]] std::array<u8, M> to_bytes(Endianness endian) const noexcept {
+        std::array<u8, M> arr{};
+        to_bytes(arr.data(), M, to_bit_order(endian));
+        return arr;
+    }
+
+    template <typename T>
+    FORCE_INLINE void to_be(T& out) const noexcept {
+        to_bytes(out, Endianness::big);
+    }
+
+    template <typename T>
+    FORCE_INLINE void to_le(T& out) const noexcept {
+        to_bytes(out, Endianness::little);
+    }
+
+    template <typename T>
+    [[nodiscard]] static constexpr UInt<N> from_be(const T& val) noexcept {
+        return UInt<N>(val, Endianness::big);
+    }
+
+    template <typename T>
+    [[nodiscard]] static constexpr UInt<N> from_le(const T& val) noexcept {
+        return UInt<N>(val, Endianness::little);
+    }
+
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const u8* ptr, size_t len, Endianness endian = Endianness::little) noexcept {
+        return UInt<N>(ptr, len, endian);
+    }
+
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const u8* ptr, size_t len, BitOrder order) noexcept {
+        return UInt<N>(ptr, len, order);
+    }
+
+    template <std::size_t M>
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const std::array<u8, M>& arr, Endianness endian = Endianness::little) noexcept {
+        return UInt<N>(arr, endian);
+    }
+
+    template <std::size_t M>
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const std::array<u8, M>& arr, BitOrder order) noexcept {
+        return UInt<N>(arr, order);
+    }
 
     [[nodiscard]] bool is_scalar() const noexcept { return mode_ == Backend::Scalar; }
     [[nodiscard]] bool is_simd()   const noexcept { return mode_ == Backend::SIMD; }
