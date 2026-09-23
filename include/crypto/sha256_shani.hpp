@@ -1,11 +1,45 @@
 #pragma once
 
-#if defined(__SHA__) || defined(__BMI2__)
-#include <immintrin.h>
 #include <cstdint>
 #include <cstring>
 
+// ATENÇÃO: headers de sistema/chamadas a `#include` NUNCA podem ficar dentro de
+// um namespace — incluí-los aqui corrompe a stdlib (ex.: "'abs' has not been
+// declared in '::'") e esconde as intrínsecas do compilador.
+#if defined(__SHA__)
+# include <immintrin.h>
+# if defined(__GNUC__)
+#  include <stdint.h>
+#  include <x86intrin.h>
+# endif
+# if defined(_MSC_VER)
+#  define WIN32_LEAN_AND_MEAN
+#  include <Windows.h>
+# endif
+#endif
+
 namespace cryptowords::detail {
+
+inline void set_11bits(uint8_t* buf, size_t bit_offset, uint16_t val) {
+    val &= 0x7FF;
+    size_t byte_pos = bit_offset / 8;
+    size_t bit_pos  = bit_offset % 8;
+
+    uint32_t current = (static_cast<uint32_t>(buf[byte_pos]) << 16) |
+                       (static_cast<uint32_t>(buf[byte_pos + 1]) << 8) |
+                       (static_cast<uint32_t>(buf[byte_pos + 2]));
+
+    uint32_t shift = 24 - 11 - bit_pos;
+    uint32_t mask = (0x7FFu << shift);
+
+    current = (current & ~mask) | (static_cast<uint32_t>(val) << shift);
+
+    buf[byte_pos]     = static_cast<uint8_t>((current >> 16) & 0xFF);
+    buf[byte_pos + 1] = static_cast<uint8_t>((current >> 8) & 0xFF);
+    buf[byte_pos + 2] = static_cast<uint8_t>(current & 0xFF);
+}
+
+#if defined(__SHA__)
 /* sha256-x86.c - Intel SHA extensions using C intrinsics  */
 /*   Written and place in public domain by Jeffrey Walton  */
 /*   Based on code from Intel, and by Sean Gulley for      */
@@ -13,17 +47,8 @@ namespace cryptowords::detail {
 
 /* gcc -DTEST_MAIN -msse4.1 -msha sha256-x86.c -o sha256.exe   */
 
-/* Include the GCC super header */
-#if defined(__GNUC__)
-# include <stdint.h>
-# include <x86intrin.h>
-#endif
-
 /* Microsoft supports Intel SHA ACLE extensions as of Visual Studio 2015 */
 #if defined(_MSC_VER)
-# include <immintrin.h>
-# define WIN32_LEAN_AND_MEAN
-# include <Windows.h>
 typedef UINT32 uint32_t;
 typedef UINT8 uint8_t;
 #endif
@@ -399,25 +424,6 @@ inline uint8_t sha256_bip39_first_byte_shani(const uint8_t block64[64]) {
     sha256_process_x86(state, block64, 64);
     return static_cast<uint8_t>(state[0] >> 24);
 }
-
-inline void set_11bits(uint8_t* buf, size_t bit_offset, uint16_t val) {
-    val &= 0x7FF;
-    size_t byte_pos = bit_offset / 8;
-    size_t bit_pos  = bit_offset % 8;
-
-    uint32_t current = (static_cast<uint32_t>(buf[byte_pos]) << 16) |
-                       (static_cast<uint32_t>(buf[byte_pos + 1]) << 8) |
-                       (static_cast<uint32_t>(buf[byte_pos + 2]));
-
-    uint32_t shift = 24 - 11 - bit_pos;
-    uint32_t mask = (0x7FFu << shift);
-
-    current = (current & ~mask) | (static_cast<uint32_t>(val) << shift);
-
-    buf[byte_pos]     = static_cast<uint8_t>((current >> 16) & 0xFF);
-    buf[byte_pos + 1] = static_cast<uint8_t>((current >> 8) & 0xFF);
-    buf[byte_pos + 2] = static_cast<uint8_t>(current & 0xFF);
-}
+#endif
 
 } // namespace cryptowords::detail
-#endif

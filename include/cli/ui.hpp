@@ -1,11 +1,17 @@
 #pragma once
 
+#include <print>
 #include <string>
 #include <string_view>
 #include <format>
 #include <algorithm>
-#include <print>
+#include <printf.h>
 #include <cstdint>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#include "../math/UInt.hpp"
+#pragma GCC diagnostic pop
 
 namespace cryptowords::ui {
 
@@ -18,6 +24,23 @@ inline std::string format_num(double val) {
     }
     uint64_t n = static_cast<uint64_t>(val);
     std::string s = std::to_string(n);
+    std::string res;
+    int count = 0;
+    for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
+        res += s[i];
+        if (++count == 3 && i > 0) {
+            res += '.';
+            count = 0;
+        }
+    }
+    std::reverse(res.begin(), res.end());
+    return res;
+}
+
+template <unsigned char N>
+inline std::string format_num(const UInt<N>& val) {
+    if (val.eqz()) return "0";
+    std::string s = val.to_string();
     std::string res;
     int count = 0;
     for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {

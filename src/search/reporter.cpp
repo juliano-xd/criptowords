@@ -106,7 +106,7 @@ void SearchReporter::print_plan(const OptimizedMnemonics& opt, const AppConfig& 
 
     print_box_line("\033[1;36m1. ESPAÇO DE BUSCA & REDUÇÃO MATEMÁTICA\033[0m", INNER_WIDTH);
 
-    std::string bruto_line = std::format("   Espaço Bruto Total       : {:>14} combinações", format_num(opt.math_combinations));
+    std::string bruto_line = std::format("   Espaço Bruto Total       : {:>14} combinações", format_num(opt.exact_math_combinations));
     print_box_line(bruto_line, INNER_WIDTH);
 
     double current_comb = opt.math_combinations;
@@ -115,11 +115,11 @@ void SearchReporter::print_plan(const OptimizedMnemonics& opt, const AppConfig& 
     double saved_pct = (current_comb > 0) ? (100.0 * (1.0 - (valid_target / current_comb))) : 0.0;
 
     std::string poda_line = std::format("   Poda Matemática Checksum : {:>14} chaves válidas  [Redução: {:>5.1f}x]",
-                                        format_num(valid_target), ratio);
+                                        format_num(opt.exact_valid_combinations), ratio);
     print_box_line(poda_line, INNER_WIDTH);
 
     std::string efetivas_line = std::format("   \033[1;32m➔ Chaves Efetivas PBKDF2\033[0m : \033[1;32m{:>14} chaves\033[0m         \033[1;33m[PODA: {:>5.1f}x]\033[0m",
-                                            format_num(valid_target), ratio);
+                                            format_num(opt.exact_valid_combinations), ratio);
     print_box_line(efetivas_line, INNER_WIDTH);
 
     std::string economia_line = std::format("      \033[90m└─> Economia: {:.1f}% do espaço bruto descartado antes do cálculo pesado!\033[0m", saved_pct);

@@ -39,6 +39,7 @@ public:
 
     const std::string& architecture_name() const noexcept { return arch_name_; }
     double total_combinations() const noexcept { return opt_.total_combinations; }
+    double math_combinations() const noexcept { return opt_.math_combinations; }
     const AppConfig& config() const noexcept { return cfg_; }
 
     void verify_and_print_result(const std::vector<uint16_t>& mnemonic) const;

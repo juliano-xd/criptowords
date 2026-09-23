@@ -96,17 +96,14 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
         if (cfg.gpu_batch > 0) {
             strat.chosen_gpu_batch = cfg.gpu_batch;
         } else {
-            // Dimensionamento por CUs e categoria de hardware
-            size_t batch = best_gpu->compute_units * strat.chosen_workgroup_size * 32;
+            // Dimensionamento para streaming double-buffering com sobreposição 100% CPU/GPU
+            size_t batch = best_gpu->compute_units * strat.chosen_workgroup_size * 2;
             if (best_gpu->category == GpuCategory::DiscreteHighEnd) {
-                batch = std::max(batch, size_t(131072));
-                batch = std::min(batch, size_t(524288));
+                batch = std::clamp(batch, size_t(32768), size_t(65536));
             } else if (best_gpu->category == GpuCategory::DiscreteMidRange) {
-                batch = std::max(batch, size_t(65536));
-                batch = std::min(batch, size_t(262144));
+                batch = std::clamp(batch, size_t(16384), size_t(32768));
             } else { // iGPU ou Entry
-                batch = std::max(batch, size_t(8192));
-                batch = std::min(batch, size_t(32768));
+                batch = std::clamp(batch, size_t(8192), size_t(16384));
             }
             if (best_gpu->max_alloc_bytes > 0) {
                 size_t max_k = best_gpu->max_alloc_bytes / 256;

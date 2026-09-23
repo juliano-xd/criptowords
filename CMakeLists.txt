@@ -6,6 +6,11 @@ project(criptowords
     LANGUAGES   CXX
 )
 
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
 # ---------- Padrão e defaults ----------
 set(CMAKE_CXX_STANDARD          23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +20,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -flto")
 
 # ---------- Opções ----------
 option(CRYPTOWORDS_GPU    "Aceleração OpenCL"       ON)
@@ -24,14 +30,22 @@ option(CRYPTOWORDS_WERROR "Tratar warnings como erros" OFF)
 
 # ---------- Otimização Inter-Procedural (LTO / IPO) ----------
 if(CRYPTOWORDS_LTO)
-    include(CheckIPOSupported)
-    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
-    if(IPO_SUPPORTED)
-        message(STATUS "LTO/IPO suportado pelo compilador — ativando otimização inter-procedural.")
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-    else()
-        message(STATUS "LTO/IPO não suportado: ${IPO_ERROR}")
-    endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    # include(CheckIPOSupported)
+    # check_ipo_supported(RESULT IPO_SUPPORTED)
+    # if(IPO_SUPPORTED)
+    #     # Prioriza linkers de alta performance
+    #     include(CheckCXXLinkerFlag)
+    #     check_cxx_linker_flag("-fuse-ld=mold" HAS_MOLD)
+    #     if(HAS_MOLD)
+    #         add_link_options("-fuse-ld=mold")
+    #     else()
+    #         check_cxx_linker_flag("-fuse-ld=lld" HAS_LLD)
+    #         if(HAS_LLD)
+    #             add_link_options("-fuse-ld=lld")
+    #         endif()
+    #     endif()
+    # endif()
 endif()
 
 
@@ -63,15 +77,16 @@ endif()
 
 find_package(CLI11 QUIET)
 if(NOT CLI11_FOUND)
-    message(STATUS "CLI11 não encontrado no sistema. Baixando via FetchContent...")
+    message(STATUS "CLI11 not found on system. Downloading...")
     FetchContent_Declare(CLI11
         GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-        GIT_TAG        v2.4.2
+        GIT_TAG        v2.7.2
         GIT_SHALLOW    TRUE
+        SYSTEM
     )
     FetchContent_MakeAvailable(CLI11)
 else()
-    message(STATUS "CLI11 encontrado no sistema.")
+    message(STATUS "CLI11 found on system.")
 endif()
 
 if(CRYPTOWORDS_GPU)
@@ -117,7 +132,7 @@ if(CRYPTOWORDS_WERROR)
     list(APPEND WARN_FLAGS -Werror)
 endif()
 
-set(PERF_FLAGS -fomit-frame-pointer -fstrict-aliasing -fno-math-errno -fno-trapping-math)
+set(PERF_FLAGS -fomit-frame-pointer -fstrict-aliasing -fno-math-errno -fno-trapping-math -funroll-loops -floop-interchange -floop-unroll-and-jam)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     list(APPEND PERF_FLAGS -ftree-vectorize)
 endif()
@@ -146,9 +161,8 @@ set(CORE_SOURCES
     src/crypto/bip39.cpp
     src/crypto/ripemd160.cpp
     src/crypto/sha256.cpp
-    src/crypto/sha512.cpp
-    src/crypto/hmac_sha512.cpp
     src/crypto/keccak256.cpp
+    src/crypto/hmac_sha512.cpp
 )
 
 add_library(criptowords_core OBJECT ${CORE_SOURCES})
@@ -163,18 +177,11 @@ endif()
 
 
 # ---------- TUs SIMD compiladas por arquitetura ----------
-set(SHA_FLAG "")
-if(HAVE_SHA_NI)
-    set(SHA_FLAG -msha)
-    target_compile_options(criptowords_core PRIVATE -msse4.1 ${SHA_FLAG})
-    target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_SHA_NI=1)
-endif()
-
 if(HAVE_SSE41)
     add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
     target_include_directories(simd_sse PRIVATE include)
     target_link_libraries(simd_sse PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_sse PRIVATE -msse4.1 ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
+    target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_SSE41=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
 endif()
@@ -183,7 +190,7 @@ if(HAVE_AVX2)
     add_library(simd_avx2 OBJECT src/simd/factory_avx2.cpp)
     target_include_directories(simd_avx2 PRIVATE include)
     target_link_libraries(simd_avx2 PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
+    target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX2=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx2>)
 endif()
@@ -192,7 +199,7 @@ if(HAVE_AVX512)
     add_library(simd_avx512 OBJECT src/simd/factory_avx512.cpp)
     target_include_directories(simd_avx512 PRIVATE include)
     target_link_libraries(simd_avx512 PRIVATE PkgConfig::SECP256K1)
-    target_compile_options(simd_avx512 PRIVATE -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd ${SHA_FLAG} ${WARN_FLAGS} ${PERF_FLAGS})
+    target_compile_options(simd_avx512 PRIVATE -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd ${WARN_FLAGS} ${PERF_FLAGS})
     target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX512=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx512>)
 endif()
@@ -229,9 +236,7 @@ if(CRYPTOWORDS_GPU)
     target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_GPU=1)
 endif()
 
-if(HAVE_SHA_NI)
-    target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_SHA_NI=1)
-endif()
+
 if(HAVE_SSE41)
     target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_SSE41=1)
 endif()
@@ -240,6 +245,19 @@ if(HAVE_AVX2)
 endif()
 if(HAVE_AVX512)
     target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_AVX512=1)
+endif()
+
+# ---------- Testes Comparativos ----------
+add_executable(test_sha512_comparison
+    tests/test_sha512_comparison.cpp
+    $<TARGET_OBJECTS:criptowords_core>
+    ${SIMD_OBJECTS}
+)
+target_include_directories(test_sha512_comparison PRIVATE include)
+target_compile_options(test_sha512_comparison PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
+target_link_libraries(test_sha512_comparison PRIVATE PkgConfig::SECP256K1 CLI11::CLI11)
+if(CRYPTOWORDS_GPU)
+    target_link_libraries(test_sha512_comparison PRIVATE OpenCL::OpenCL)
 endif()
 
 # ---------- Install ----------

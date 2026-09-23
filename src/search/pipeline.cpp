@@ -52,13 +52,20 @@ ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemon
     }
 }
 
+namespace {
+static const secp256k1_context* get_shared_secp256k1_context() {
+    static const secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    return ctx;
+}
+} // namespace
+
 ExecutionPipeline::~ExecutionPipeline() = default;
 
 std::unique_ptr<PipelineThreadContext>
 ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) {
     auto ctx = std::make_unique<PipelineThreadContext>();
     ctx->thread_idx = thread_idx;
-    ctx->ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    ctx->ctx = get_shared_secp256k1_context();
     if (!ctx->ctx) {
         std::cerr << "Failed to create secp256k1 context\n";
         return nullptr;
@@ -137,12 +144,12 @@ void ExecutionPipeline::flush(PipelineThreadContext& ctx,
 }
 
 void ExecutionPipeline::verify_and_print_result(const std::vector<uint16_t>& mnemonic) const {
-    auto* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+    const auto* ctx = get_shared_secp256k1_context();
     const char* pp = cfg_.passphrase.empty() ? nullptr : cfg_.passphrase.data();
+    auto mnemonic_span = std::span<const uint16_t>(mnemonic);
     const std::string addr = (cfg_.coin == CoinTarget::BTC)
         ? Bip39Deriver::derive_btc_address(ctx, mnemonic, cfg_.wordlist, pp, cfg_.passphrase.size(), cfg_.pbkdf2_rounds, cfg_.separator)
-        : Bip39Deriver::derive_eth_address(ctx, mnemonic, cfg_.wordlist, pp, cfg_.passphrase.size(), cfg_.pbkdf2_rounds, cfg_.separator);
-    secp256k1_context_destroy(ctx);
+        : Bip39Deriver::derive_eth_address(*ctx, mnemonic_span, cfg_.wordlist, pp, cfg_.passphrase.size(), cfg_.pbkdf2_rounds, cfg_.separator);
 
     std::string mnem_str;
     for (size_t i = 0; i < mnemonic.size(); ++i) {

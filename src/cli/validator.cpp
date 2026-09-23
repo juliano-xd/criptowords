@@ -110,6 +110,14 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     }
     cfg.strategy = cfg.strategies[0];
 
+    // O --help promete o intervalo 1-3; sem esta checagem qualquer valor era
+    // aceito silenciosamente (ex.: --max-distance 0 ou 99).
+    if (cfg.max_distance < 1 || cfg.max_distance > 3) {
+        return std::unexpected(std::format(
+            "Valor inválido para --max-distance: {}. O intervalo suportado é 1-3.",
+            cfg.max_distance));
+    }
+
     cfg.mnemonics.resize(raw_size, AppConfig::UNKNOWN_WORD);
     cfg.unknows = raw_size;
 
@@ -270,9 +278,11 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             }
         }
     } else {
-        if (cfg.num_threads == 0) {
-            cfg.num_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
-        }
+        // Mantém 0 = AUTO. Quem resolve o número de threads é o
+        // HardwareAdvisor::apply_tuning (ex.: 1 thread por núcleo FÍSICO em
+        // CPUs AVX-512 com >=16 núcleos). Preencher aqui com
+        // hardware_concurrency() tornava essa análise inalcançável.
+        cfg.num_threads = raw.num_threads;
     }
 
     if (!cfg.target.empty()) {

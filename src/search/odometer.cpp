@@ -86,7 +86,7 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
 #if defined(__SHA__)
             if (byte_pos >= 16 && byte_pos + 2 < 32) {
                 const __m128i MASK = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
-                uint32_t init_state[8] = {
+                std::array<uint32_t, 8> init_state = {
                     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
                 };
@@ -172,8 +172,14 @@ void GenericOdometer::init_state(PipelineThreadContext& ctx, size_t thread_idx,
     ctx.current_ids = opt.base_mnemonic;
 
     if (opt.has_valid_pairs) {
-        ctx.pair_idx = thread_idx;
-        if (ctx.pair_idx >= opt.valid_pairs.size()) {
+        const size_t total = opt.valid_pairs.size();
+        const size_t chunk = (total + num_threads - 1) / num_threads;
+        const size_t start = thread_idx * chunk;
+        const size_t end   = std::min(start + chunk, total);
+
+        ctx.pair_idx = start;
+        ctx.pair_end = end;
+        if (start >= end) {
             ctx.is_done = true;
             return;
         }
@@ -230,8 +236,8 @@ bool GenericOdometer::advance(PipelineThreadContext& ctx, const OptimizedMnemoni
     if (ctx.is_done) return false;
 
     if (opt.has_valid_pairs) {
-        ctx.pair_idx += ctx.step_size;
-        if (ctx.pair_idx >= opt.valid_pairs.size()) {
+        ++ctx.pair_idx;
+        if (ctx.pair_idx >= ctx.pair_end) {
             ctx.is_done = true;
             return false;
         }

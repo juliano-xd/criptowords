@@ -1,9 +1,9 @@
 #include "../../include/crypto/base58.hpp"
 #include "../../include/crypto/sha256.hpp"
+#include "../../include/math/UInt.hpp"
 #include <cstdint>
 #include <cstring>
 #include <string>
-#include <vector>
 
 namespace cryptowords {
 namespace base58 {
@@ -16,38 +16,34 @@ namespace base58 {
         while (leading < address.size() && address[leading] == '1') ++leading;
         if (leading >= 25) return false;
 
-        // Big-number base58 -> bytes little-endian.
-        std::vector<uint8_t> bytes;
-        bytes.reserve(25);
+        UInt<4> val = 0;
         for (char c : address) {
-            const char* p = strchr(BASE58_ALPHABET, c);
+            const char* p = std::strchr(BASE58_ALPHABET, c);
             if (!p) return false;
-            int carry = static_cast<int>(p - BASE58_ALPHABET);
-            for (auto& b : bytes) {
-                carry += b * 58;
-                b      = static_cast<uint8_t>(carry & 0xFF);
-                carry >>= 8;
-            }
-            while (carry > 0) {
-                bytes.push_back(static_cast<uint8_t>(carry & 0xFF));
-                carry >>= 8;
-            }
+            val *= 58ULL;
+            val += static_cast<u64>(p - BASE58_ALPHABET);
         }
 
-        while (bytes.size() < 25 - leading) bytes.push_back(0);
-        if (bytes.size() + leading != 25) return false;
-
         uint8_t decoded[25] = {};
-        for (size_t i = 0; i < bytes.size(); ++i) decoded[24 - i] = bytes[i];
+        for (int i = 0; i < 4; ++i) {
+            uint64_t w = val.bits[i];
+            for (int b = 0; b < 8; ++b) {
+                int pos = 24 - (i * 8 + b);
+                if (pos >= 0) {
+                    decoded[pos] = static_cast<uint8_t>(w & 0xFF);
+                }
+                w >>= 8;
+            }
+        }
 
         if (decoded[0] != 0x00) return false;
 
         uint8_t checksum[32];
         crypto::SHA256::hash(decoded, 21, checksum);
         crypto::SHA256::hash(checksum, 32, checksum);
-        if (memcmp(decoded + 21, checksum, 4) != 0) return false;
+        if (std::memcmp(decoded + 21, checksum, 4) != 0) return false;
 
-        memcpy(out_ripemd, decoded + 1, 20);
+        std::memcpy(out_ripemd, decoded + 1, 20);
         return true;
     }
 
@@ -57,32 +53,36 @@ size_t encode_raw(const uint8_t* payload, size_t len, char* out_buf) {
         leading_zeros++;
     }
 
-    std::vector<uint8_t> num;
-    num.reserve(len * 2);
+    if (len == 0) {
+        out_buf[0] = '\0';
+        return 0;
+    }
 
-    for (size_t i = 0; i < len; ++i) {
-        uint32_t carry = payload[i];
-        for (size_t j = 0; j < num.size(); ++j) {
-            carry += num[j] * 256;
-            num[j] = carry % 58;
-            carry /= 58;
-        }
-        while (carry > 0) {
-            num.push_back(carry % 58);
-            carry /= 58;
-        }
+    // Carrega payload em big-endian no UInt<4> (até 25 bytes / 200 bits)
+    UInt<4> val = 0;
+    for (size_t i = leading_zeros; i < len; ++i) {
+        val <<= 8;
+        val += payload[i];
+    }
+
+    char tmp[64];
+    size_t tmp_len = 0;
+    while (!val.eqz()) {
+        auto [q, rem] = val.divmod(58ULL);
+        val = q;
+        tmp[tmp_len++] = BASE58_ALPHABET[rem];
     }
 
     size_t out_len = 0;
     for (size_t i = 0; i < leading_zeros; ++i) {
         out_buf[out_len++] = BASE58_ALPHABET[0];
     }
-
-    for (auto it = num.rbegin(); it != num.rend(); ++it) {
-        out_buf[out_len++] = BASE58_ALPHABET[*it];
+    for (size_t i = 0; i < tmp_len; ++i) {
+        out_buf[out_len++] = tmp[tmp_len - 1 - i];
     }
-
-    if (out_len == 0) out_buf[out_len++] = BASE58_ALPHABET[0];
+    if (out_len == 0) {
+        out_buf[out_len++] = BASE58_ALPHABET[0];
+    }
 
     out_buf[out_len] = '\0';
     return out_len;

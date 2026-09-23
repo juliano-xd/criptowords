@@ -1,9 +1,16 @@
 #pragma once
 #include "sha512.hpp"
-#include <cstring>
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <immintrin.h>
-alignas(64) static constexpr uint64_t K512_SIMD[80] = {
+
+namespace pbkdf2_simd_detail {
+
+// ============================================================================
+// Constantes (uma única cópia para todas as ISAs)
+// ============================================================================
+alignas(64) inline constexpr uint64_t K512[80] = {
     0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
     0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
     0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
@@ -26,10 +33,113 @@ alignas(64) static constexpr uint64_t K512_SIMD[80] = {
     0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
 };
 
+inline constexpr uint64_t IV[8] = {
+    0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
+    0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+    0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
+    0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
+};
+
+// ============================================================================
+// Helpers escalares (portáveis, endian-safe, sem UB)
+// ============================================================================
+[[gnu::always_inline]] inline uint64_t bswap64(uint64_t x) noexcept {
+    if constexpr (std::endian::native == std::endian::little)
+        return __builtin_bswap64(x);
+    else
+        return x;
+}
+
+[[gnu::always_inline]] inline uint64_t load_be64(const uint8_t* p) noexcept {
+    uint64_t v; std::memcpy(&v, p, sizeof(v));
+    if constexpr (std::endian::native == std::endian::little)
+        v = __builtin_bswap64(v);
+    return v;
+}
+
+// Lê a chave (normalizando p/ 128 bytes) e já aplica XOR com o pad.
+// Saída: W[i] = big-endian word da chave XORed com `pad` repetido.
+inline void prepare_key_W(const void* pass, size_t len, uint8_t pad,
+                          uint64_t W[16]) noexcept
+{
+    alignas(16) uint8_t K[128] = {};
+    if (len > 128)            crypto::SHA512::hash(pass, len, K);
+    else if (len > 0)         std::memcpy(K, pass, len);
+
+    const uint64_t pad_word = 0x0101010101010101ULL * pad;
+    for (int i = 0; i < 16; ++i) {
+        uint64_t v; std::memcpy(&v, K + i * 8, 8);
+        // Aritmética XOR feita no valor big-endian diretamente.
+        if constexpr (std::endian::native == std::endian::little)
+            v = __builtin_bswap64(v);
+        W[i] = v ^ pad_word;
+    }
+}
+
+// Preenche W_ipad/W_opad para LANES chaves de uma vez.
+template <size_t LANES>
+inline void prepare_pads(const void* const* passes, const size_t* lens,
+                         uint64_t W_ipad[16][LANES],
+                         uint64_t W_opad[16][LANES]) noexcept
+{
+    for (size_t l = 0; l < LANES; ++l) {
+        uint64_t tmp[16];
+        prepare_key_W(passes[l], lens[l], 0x36, tmp);
+        for (int w = 0; w < 16; ++w) W_ipad[w][l] = tmp[w];
+        prepare_key_W(passes[l], lens[l], 0x5c, tmp);
+        for (int w = 0; w < 16; ++w) W_opad[w][l] = tmp[w];
+    }
+}
+
+// W[16] do bloco "salt || 0x00000001 || 0x80 || ... || bitlen".
+// Requer salt_len <= 107 (senão não cabe em um bloco).
+inline void prepare_salt_W(const uint8_t* salt, size_t salt_len,
+                           uint64_t W[16]) noexcept
+{
+    alignas(16) uint8_t buf[128] = {};
+    if (salt_len) std::memcpy(buf, salt, salt_len);
+    buf[salt_len + 3] = 1;      // contador BE = 1
+    buf[salt_len + 4] = 0x80;   // padding SHA-512
+    for (int i = 0; i < 15; ++i) W[i] = load_be64(buf + i * 8);
+    W[15] = static_cast<uint64_t>(128 + salt_len + 4) * 8;
+}
+
+// W[80] já somado com K512 (para o "fast forward" do bloco de salt).
+inline void precompute_kw_salt_from_W(const uint64_t salt_W[16],
+                                      uint64_t kw_salt[80]) noexcept
+{
+    uint64_t W[80];
+    for (int i = 0; i < 16; ++i) W[i] = salt_W[i];
+    for (int i = 16; i < 80; ++i) {
+        const uint64_t s0 = std::rotr(W[i-15], 1) ^ std::rotr(W[i-15], 8) ^ (W[i-15] >> 7);
+        const uint64_t s1 = std::rotr(W[i-2], 19) ^ std::rotr(W[i-2], 61) ^ (W[i-2] >> 6);
+        W[i] = W[i-16] + s0 + W[i-7] + s1;
+    }
+    for (int i = 0; i < 80; ++i) kw_salt[i] = K512[i] + W[i];
+}
+
+// Serialização BE de LANES digests (word-major) em LANES buffers.
+template <size_t LANES>
+[[gnu::always_inline]]
+inline void store_digests_be(const uint64_t digest[8][LANES],
+                             uint8_t* const* out) noexcept
+{
+    for (int i = 0; i < 8; ++i)
+        for (size_t l = 0; l < LANES; ++l) {
+            const uint64_t b = bswap64(digest[i][l]);
+            std::memcpy(out[l] + i * 8, &b, 8);
+        }
+}
+
+}  // namespace pbkdf2_simd_detail
+
+// ============================================================================
+// Broadcasters de K / IV por ISA
+// ============================================================================
 [[gnu::target("sse4.1"), gnu::always_inline]]
 static inline const __m128i* get_k512_sse() {
     alignas(16) static const __m128i K[80] = {
-#define K_SSE(i) _mm_set1_epi64x((long long)K512_SIMD[i])
+#define K_SSE(i) _mm_set1_epi64x((long long)pbkdf2_simd_detail::K512[i])
         K_SSE(0),  K_SSE(1),  K_SSE(2),  K_SSE(3),  K_SSE(4),  K_SSE(5),  K_SSE(6),  K_SSE(7),
         K_SSE(8),  K_SSE(9),  K_SSE(10), K_SSE(11), K_SSE(12), K_SSE(13), K_SSE(14), K_SSE(15),
         K_SSE(16), K_SSE(17), K_SSE(18), K_SSE(19), K_SSE(20), K_SSE(21), K_SSE(22), K_SSE(23),
@@ -47,23 +157,23 @@ static inline const __m128i* get_k512_sse() {
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
 static inline const __m128i* get_iv_sse() {
-    alignas(16) static const __m128i IV[8] = {
-        _mm_set1_epi64x((long long)0x6a09e667f3bcc908ULL),
-        _mm_set1_epi64x((long long)0xbb67ae8584caa73bULL),
-        _mm_set1_epi64x((long long)0x3c6ef372fe94f82bULL),
-        _mm_set1_epi64x((long long)0xa54ff53a5f1d36f1ULL),
-        _mm_set1_epi64x((long long)0x510e527fade682d1ULL),
-        _mm_set1_epi64x((long long)0x9b05688c2b3e6c1fULL),
-        _mm_set1_epi64x((long long)0x1f83d9abfb41bd6bULL),
-        _mm_set1_epi64x((long long)0x5be0cd19137e2179ULL)
+    alignas(16) static const __m128i V[8] = {
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[0]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[1]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[2]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[3]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[4]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[5]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[6]),
+        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[7])
     };
-    return IV;
+    return V;
 }
 
 [[gnu::target("avx2"), gnu::always_inline]]
 static inline const __m256i* get_k512_avx2() {
     alignas(32) static const __m256i K[80] = {
-#define K_AVX2(i) _mm256_set1_epi64x((long long)K512_SIMD[i])
+#define K_AVX2(i) _mm256_set1_epi64x((long long)pbkdf2_simd_detail::K512[i])
         K_AVX2(0),  K_AVX2(1),  K_AVX2(2),  K_AVX2(3),  K_AVX2(4),  K_AVX2(5),  K_AVX2(6),  K_AVX2(7),
         K_AVX2(8),  K_AVX2(9),  K_AVX2(10), K_AVX2(11), K_AVX2(12), K_AVX2(13), K_AVX2(14), K_AVX2(15),
         K_AVX2(16), K_AVX2(17), K_AVX2(18), K_AVX2(19), K_AVX2(20), K_AVX2(21), K_AVX2(22), K_AVX2(23),
@@ -81,23 +191,23 @@ static inline const __m256i* get_k512_avx2() {
 
 [[gnu::target("avx2"), gnu::always_inline]]
 static inline const __m256i* get_iv_avx2() {
-    alignas(32) static const __m256i IV[8] = {
-        _mm256_set1_epi64x((long long)0x6a09e667f3bcc908ULL),
-        _mm256_set1_epi64x((long long)0xbb67ae8584caa73bULL),
-        _mm256_set1_epi64x((long long)0x3c6ef372fe94f82bULL),
-        _mm256_set1_epi64x((long long)0xa54ff53a5f1d36f1ULL),
-        _mm256_set1_epi64x((long long)0x510e527fade682d1ULL),
-        _mm256_set1_epi64x((long long)0x9b05688c2b3e6c1fULL),
-        _mm256_set1_epi64x((long long)0x1f83d9abfb41bd6bULL),
-        _mm256_set1_epi64x((long long)0x5be0cd19137e2179ULL)
+    alignas(32) static const __m256i V[8] = {
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[0]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[1]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[2]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[3]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[4]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[5]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[6]),
+        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[7])
     };
-    return IV;
+    return V;
 }
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
 static inline const __m512i* get_k512_avx512() {
     alignas(64) static const __m512i K[80] = {
-#define K_AVX512(i) _mm512_set1_epi64((long long)K512_SIMD[i])
+#define K_AVX512(i) _mm512_set1_epi64((long long)pbkdf2_simd_detail::K512[i])
         K_AVX512(0),  K_AVX512(1),  K_AVX512(2),  K_AVX512(3),  K_AVX512(4),  K_AVX512(5),  K_AVX512(6),  K_AVX512(7),
         K_AVX512(8),  K_AVX512(9),  K_AVX512(10), K_AVX512(11), K_AVX512(12), K_AVX512(13), K_AVX512(14), K_AVX512(15),
         K_AVX512(16), K_AVX512(17), K_AVX512(18), K_AVX512(19), K_AVX512(20), K_AVX512(21), K_AVX512(22), K_AVX512(23),
@@ -115,34 +225,31 @@ static inline const __m512i* get_k512_avx512() {
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
 static inline const __m512i* get_iv_avx512() {
-    alignas(64) static const __m512i IV[8] = {
-        _mm512_set1_epi64((long long)0x6a09e667f3bcc908ULL),
-        _mm512_set1_epi64((long long)0xbb67ae8584caa73bULL),
-        _mm512_set1_epi64((long long)0x3c6ef372fe94f82bULL),
-        _mm512_set1_epi64((long long)0xa54ff53a5f1d36f1ULL),
-        _mm512_set1_epi64((long long)0x510e527fade682d1ULL),
-        _mm512_set1_epi64((long long)0x9b05688c2b3e6c1fULL),
-        _mm512_set1_epi64((long long)0x1f83d9abfb41bd6bULL),
-        _mm512_set1_epi64((long long)0x5be0cd19137e2179ULL)
+    alignas(64) static const __m512i V[8] = {
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[0]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[1]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[2]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[3]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[4]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[5]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[6]),
+        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[7])
     };
-    return IV;
+    return V;
 }
 
+// Máscaras de byte-shuffle para o ROR8 dentro do small-sigma0.
 alignas(16) static constexpr uint8_t SHUF_ROR8_SSE[16] = {
-    1, 2, 3, 4, 5, 6, 7, 0,
-    9, 10, 11, 12, 13, 14, 15, 8
+    1,2,3,4,5,6,7,0, 9,10,11,12,13,14,15,8
 };
-
 alignas(32) static constexpr uint8_t SHUF_ROR8_AVX2[32] = {
-    1, 2, 3, 4, 5, 6, 7, 0,
-    9, 10, 11, 12, 13, 14, 15, 8,
-    1, 2, 3, 4, 5, 6, 7, 0,
-    9, 10, 11, 12, 13, 14, 15, 8
+    1,2,3,4,5,6,7,0, 9,10,11,12,13,14,15,8,
+    1,2,3,4,5,6,7,0, 9,10,11,12,13,14,15,8
 };
 
-// =========================================================================
-// SSE4.1
-// =========================================================================
+// ============================================================================
+// SSE 4.1
+// ============================================================================
 #define ROR128_64(x, n) _mm_xor_si128(_mm_srli_epi64(x, n), _mm_slli_epi64(x, 64 - (n)))
 #define CH_SSE(x, y, z) _mm_xor_si128(z, _mm_and_si128(x, _mm_xor_si128(y, z)))
 #define MAJ_SSE(x, y, z) _mm_xor_si128(_mm_and_si128(x, y), _mm_and_si128(z, _mm_xor_si128(x, y)))
@@ -152,36 +259,26 @@ alignas(32) static constexpr uint8_t SHUF_ROR8_AVX2[32] = {
 #define s1_SSE(x) _mm_xor_si128(_mm_xor_si128(ROR128_64(x, 19), ROR128_64(x, 61)), _mm_srli_epi64(x, 6))
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
-static inline void sha512_block64_sse(
-    const __m128i iv[8],
-    __m128i W[16],
-    __m128i out[8])
-{
-    __m128i a = iv[0]; __m128i b = iv[1]; __m128i c = iv[2]; __m128i d = iv[3];
-    __m128i e = iv[4]; __m128i f = iv[5]; __m128i g = iv[6]; __m128i h = iv[7];
-
+static inline void sha512_block64_sse(const __m128i iv[8], __m128i W[16], __m128i out[8]) {
+    __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m128i* k_tbl = get_k512_sse();
     #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m128i h_s1  = _mm_add_epi64(h, S1_SSE(e));
-            __m128i ch_k  = _mm_add_epi64(CH_SSE(e, f, g), k_tbl[r * 16 + i]);
+            __m128i ch_k  = _mm_add_epi64(CH_SSE(e, f, g), k_tbl[r*16+i]);
             __m128i ch_kw = _mm_add_epi64(ch_k, W[i]);
             __m128i T1    = _mm_add_epi64(h_s1, ch_kw);
             __m128i T2    = _mm_add_epi64(S0_SSE(a), MAJ_SSE(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m128i w1  = W[(i + 1)  & 15];
-                const __m128i w9  = W[(i + 9)  & 15];
-                const __m128i w14 = W[(i + 14) & 15];
-                W[i] = _mm_add_epi64(W[i],
-                        _mm_add_epi64(_mm_add_epi64(s0_SSE(w1), w9), s1_SSE(w14)));
+                W[i] = _mm_add_epi64(W[i], _mm_add_epi64(
+                       _mm_add_epi64(s0_SSE(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_SSE(W[(i+14)&15])));
             }
         }
     }
@@ -192,38 +289,22 @@ static inline void sha512_block64_sse(
 }
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
-static inline void inline_transform_sse(SHA512_SSE_State* ctx, const uint64_t W_in[16][2]) {
-    __m128i iv[8], W[16], out[8];
-    for (int i = 0; i < 8; ++i) iv[i] = _mm_loadu_si128((const __m128i*)ctx->state[i]);
-    for (int i = 0; i < 16; ++i) W[i] = _mm_loadu_si128((const __m128i*)W_in[i]);
-    sha512_block64_sse(iv, W, out);
-    for (int i = 0; i < 8; ++i) _mm_storeu_si128((__m128i*)ctx->state[i], out[i]);
-}
+static inline void sha512_padded_block64_sse(const __m128i iv[8], __m128i W[16], __m128i out[8]) {
+    alignas(16) static const __m128i C_S1_W15  = _mm_set1_epi64x(0x00c0000000003018ULL);
+    alignas(16) static const __m128i C_S0_W8   = _mm_set1_epi64x(0x4180000000000000ULL);
+    alignas(16) static const __m128i C_S0_W15  = _mm_set1_epi64x(0x000000000000030aULL);
+    alignas(16) static const __m128i C_W8      = _mm_set1_epi64x(0x8000000000000000ULL);
+    alignas(16) static const __m128i C_W15     = _mm_set1_epi64x(0x0000000000000600ULL);
+    alignas(16) static const __m128i K_FUSED_8  = _mm_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
+    alignas(16) static const __m128i K_FUSED_15 = _mm_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
 
-[[gnu::target("sse4.1"), gnu::always_inline]]
-static inline void sha512_padded_block64_sse(
-    const __m128i iv[8],
-    __m128i W[16],
-    __m128i out[8])
-{
-    alignas(16) static const __m128i CONST_S1_W15 = _mm_set1_epi64x(0x00c0000000003018ULL);
-    alignas(16) static const __m128i CONST_S0_W8  = _mm_set1_epi64x(0x4180000000000000ULL);
-    alignas(16) static const __m128i CONST_S0_W15 = _mm_set1_epi64x(0x000000000000030aULL);
-    alignas(16) static const __m128i CONST_W8     = _mm_set1_epi64x(0x8000000000000000ULL);
-    alignas(16) static const __m128i CONST_W15    = _mm_set1_epi64x(0x0000000000000600ULL);
-    alignas(16) static const __m128i K_FUSED_8    = _mm_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(16) static const __m128i K_FUSED_15   = _mm_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
-
-    __m128i a = iv[0]; __m128i b = iv[1]; __m128i c = iv[2]; __m128i d = iv[3];
-    __m128i e = iv[4]; __m128i f = iv[5]; __m128i g = iv[6]; __m128i h = iv[7];
-
+    __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m128i* k_tbl = get_k512_sse();
 
     #define STEP_SSE(k_term, w_val) do { \
         __m128i h_s1  = _mm_add_epi64(h, S1_SSE(e)); \
         __m128i ch_k  = _mm_add_epi64(CH_SSE(e, f, g), (k_term)); \
-        __m128i ch_kw = _mm_add_epi64(ch_k, (w_val)); \
-        __m128i T1    = _mm_add_epi64(h_s1, ch_kw); \
+        __m128i T1    = _mm_add_epi64(_mm_add_epi64(h_s1, ch_k), (w_val)); \
         __m128i T2    = _mm_add_epi64(S0_SSE(a), MAJ_SSE(a, b, c)); \
         h = g; g = f; f = e; \
         e = _mm_add_epi64(d, T1); \
@@ -242,55 +323,23 @@ static inline void sha512_padded_block64_sse(
         a = _mm_add_epi64(T1, T2); \
     } while(0)
 
-    // === Round 0: Steps 0..7 ===
-    STEP_SSE(k_tbl[0], W[0]);
-    W[0] = _mm_add_epi64(W[0], s0_SSE(W[1]));
+    STEP_SSE(k_tbl[0], W[0]);  W[0] = _mm_add_epi64(W[0], s0_SSE(W[1]));
+    STEP_SSE(k_tbl[1], W[1]);  W[1] = _mm_add_epi64(W[1], _mm_add_epi64(s0_SSE(W[2]), C_S1_W15));
+    STEP_SSE(k_tbl[2], W[2]);  W[2] = _mm_add_epi64(W[2], _mm_add_epi64(s0_SSE(W[3]), s1_SSE(W[0])));
+    STEP_SSE(k_tbl[3], W[3]);  W[3] = _mm_add_epi64(W[3], _mm_add_epi64(s0_SSE(W[4]), s1_SSE(W[1])));
+    STEP_SSE(k_tbl[4], W[4]);  W[4] = _mm_add_epi64(W[4], _mm_add_epi64(s0_SSE(W[5]), s1_SSE(W[2])));
+    STEP_SSE(k_tbl[5], W[5]);  W[5] = _mm_add_epi64(W[5], _mm_add_epi64(s0_SSE(W[6]), s1_SSE(W[3])));
+    STEP_SSE(k_tbl[6], W[6]);  W[6] = _mm_add_epi64(W[6], _mm_add_epi64(_mm_add_epi64(s0_SSE(W[7]), C_W15), s1_SSE(W[4])));
+    STEP_SSE(k_tbl[7], W[7]);  W[7] = _mm_add_epi64(W[7], _mm_add_epi64(_mm_add_epi64(C_S0_W8, W[0]), s1_SSE(W[5])));
 
-    STEP_SSE(k_tbl[1], W[1]);
-    W[1] = _mm_add_epi64(W[1], _mm_add_epi64(s0_SSE(W[2]), CONST_S1_W15));
-
-    STEP_SSE(k_tbl[2], W[2]);
-    W[2] = _mm_add_epi64(W[2], _mm_add_epi64(s0_SSE(W[3]), s1_SSE(W[0])));
-
-    STEP_SSE(k_tbl[3], W[3]);
-    W[3] = _mm_add_epi64(W[3], _mm_add_epi64(s0_SSE(W[4]), s1_SSE(W[1])));
-
-    STEP_SSE(k_tbl[4], W[4]);
-    W[4] = _mm_add_epi64(W[4], _mm_add_epi64(s0_SSE(W[5]), s1_SSE(W[2])));
-
-    STEP_SSE(k_tbl[5], W[5]);
-    W[5] = _mm_add_epi64(W[5], _mm_add_epi64(s0_SSE(W[6]), s1_SSE(W[3])));
-
-    STEP_SSE(k_tbl[6], W[6]);
-    W[6] = _mm_add_epi64(W[6], _mm_add_epi64(_mm_add_epi64(s0_SSE(W[7]), CONST_W15), s1_SSE(W[4])));
-
-    STEP_SSE(k_tbl[7], W[7]);
-    W[7] = _mm_add_epi64(W[7], _mm_add_epi64(_mm_add_epi64(CONST_S0_W8, W[0]), s1_SSE(W[5])));
-
-    // === Round 0: Steps 8..15 ===
-    STEP_FUSED_SSE(K_FUSED_8);
-    W[8] = _mm_add_epi64(CONST_W8, _mm_add_epi64(W[1], s1_SSE(W[6])));
-
-    STEP_FUSED_SSE(k_tbl[9]);
-    W[9] = _mm_add_epi64(W[2], s1_SSE(W[7]));
-
-    STEP_FUSED_SSE(k_tbl[10]);
-    W[10] = _mm_add_epi64(W[3], s1_SSE(W[8]));
-
-    STEP_FUSED_SSE(k_tbl[11]);
-    W[11] = _mm_add_epi64(W[4], s1_SSE(W[9]));
-
-    STEP_FUSED_SSE(k_tbl[12]);
-    W[12] = _mm_add_epi64(W[5], s1_SSE(W[10]));
-
-    STEP_FUSED_SSE(k_tbl[13]);
-    W[13] = _mm_add_epi64(W[6], s1_SSE(W[11]));
-
-    STEP_FUSED_SSE(k_tbl[14]);
-    W[14] = _mm_add_epi64(CONST_S0_W15, _mm_add_epi64(W[7], s1_SSE(W[12])));
-
-    STEP_FUSED_SSE(K_FUSED_15);
-    W[15] = _mm_add_epi64(_mm_add_epi64(CONST_W15, s0_SSE(W[0])), _mm_add_epi64(W[8], s1_SSE(W[13])));
+    STEP_FUSED_SSE(K_FUSED_8);  W[8]  = _mm_add_epi64(C_W8, _mm_add_epi64(W[1], s1_SSE(W[6])));
+    STEP_FUSED_SSE(k_tbl[9]);   W[9]  = _mm_add_epi64(W[2], s1_SSE(W[7]));
+    STEP_FUSED_SSE(k_tbl[10]);  W[10] = _mm_add_epi64(W[3], s1_SSE(W[8]));
+    STEP_FUSED_SSE(k_tbl[11]);  W[11] = _mm_add_epi64(W[4], s1_SSE(W[9]));
+    STEP_FUSED_SSE(k_tbl[12]);  W[12] = _mm_add_epi64(W[5], s1_SSE(W[10]));
+    STEP_FUSED_SSE(k_tbl[13]);  W[13] = _mm_add_epi64(W[6], s1_SSE(W[11]));
+    STEP_FUSED_SSE(k_tbl[14]);  W[14] = _mm_add_epi64(C_S0_W15, _mm_add_epi64(W[7], s1_SSE(W[12])));
+    STEP_FUSED_SSE(K_FUSED_15); W[15] = _mm_add_epi64(_mm_add_epi64(C_W15, s0_SSE(W[0])), _mm_add_epi64(W[8], s1_SSE(W[13])));
 
     #undef STEP_SSE
     #undef STEP_FUSED_SSE
@@ -300,26 +349,20 @@ static inline void sha512_padded_block64_sse(
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m128i h_s1  = _mm_add_epi64(h, S1_SSE(e));
-            __m128i ch_k  = _mm_add_epi64(CH_SSE(e, f, g), k_tbl[r * 16 + i]);
-            __m128i ch_kw = _mm_add_epi64(ch_k, W[i]);
-            __m128i T1    = _mm_add_epi64(h_s1, ch_kw);
+            __m128i ch_k  = _mm_add_epi64(CH_SSE(e, f, g), k_tbl[r*16+i]);
+            __m128i T1    = _mm_add_epi64(_mm_add_epi64(h_s1, ch_k), W[i]);
             __m128i T2    = _mm_add_epi64(S0_SSE(a), MAJ_SSE(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m128i w1  = W[(i + 1)  & 15];
-                const __m128i w9  = W[(i + 9)  & 15];
-                const __m128i w14 = W[(i + 14) & 15];
-                W[i] = _mm_add_epi64(W[i],
-                        _mm_add_epi64(_mm_add_epi64(s0_SSE(w1), w9), s1_SSE(w14)));
+                W[i] = _mm_add_epi64(W[i], _mm_add_epi64(
+                       _mm_add_epi64(s0_SSE(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_SSE(W[(i+14)&15])));
             }
         }
     }
-
     out[0] = _mm_add_epi64(iv[0], a); out[1] = _mm_add_epi64(iv[1], b);
     out[2] = _mm_add_epi64(iv[2], c); out[3] = _mm_add_epi64(iv[3], d);
     out[4] = _mm_add_epi64(iv[4], e); out[5] = _mm_add_epi64(iv[5], f);
@@ -329,37 +372,26 @@ static inline void sha512_padded_block64_sse(
 [[gnu::target("sse4.1"), gnu::always_inline]]
 static inline void pbkdf2_2lane_fused_stream(
     const __m128i ipad_iv[8], const __m128i opad_iv[8],
-    const __m128i initial_digest[8],
-    __m128i T[8],
-    uint32_t iterations)
+    const __m128i initial_digest[8], __m128i T[8], uint32_t iterations)
 {
     __m128i W[16];
-
     #pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) W[i] = initial_digest[i];
 
-    for (uint32_t iter = 1; iter < iterations; ++iter) {
-        // In-place zero-copy with specialized padded schedule
+    for (uint32_t it = 1; it < iterations; ++it) {
         sha512_padded_block64_sse(ipad_iv, W, W);
-
         sha512_padded_block64_sse(opad_iv, W, W);
-
         #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) {
-            T[i] = _mm_xor_si128(T[i], W[i]);
-        }
+        for (int i = 0; i < 8; ++i) T[i] = _mm_xor_si128(T[i], W[i]);
     }
 }
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
-static inline void sha512_salt_fastforward_sse(
-    const __m128i iv[8],
-    const uint64_t kw_salt[80],
-    __m128i out[8])
+static inline void sha512_salt_fastforward_sse(const __m128i iv[8],
+                                               const uint64_t kw_salt[80],
+                                               __m128i out[8])
 {
-    __m128i a = iv[0]; __m128i b = iv[1]; __m128i c = iv[2]; __m128i d = iv[3];
-    __m128i e = iv[4]; __m128i f = iv[5]; __m128i g = iv[6]; __m128i h = iv[7];
-
+    __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m128i kw    = _mm_set1_epi64x((long long)kw_salt[i]);
@@ -367,13 +399,11 @@ static inline void sha512_salt_fastforward_sse(
         __m128i ch_kw = _mm_add_epi64(CH_SSE(e, f, g), kw);
         __m128i T1    = _mm_add_epi64(h_s1, ch_kw);
         __m128i T2    = _mm_add_epi64(S0_SSE(a), MAJ_SSE(a, b, c));
-
         h = g; g = f; f = e;
         e = _mm_add_epi64(d, T1);
         d = c; c = b; b = a;
         a = _mm_add_epi64(T1, T2);
     }
-
     out[0] = _mm_add_epi64(iv[0], a); out[1] = _mm_add_epi64(iv[1], b);
     out[2] = _mm_add_epi64(iv[2], c); out[3] = _mm_add_epi64(iv[3], d);
     out[4] = _mm_add_epi64(iv[4], e); out[5] = _mm_add_epi64(iv[5], f);
@@ -382,111 +412,93 @@ static inline void sha512_salt_fastforward_sse(
 
 [[gnu::target("sse4.1")]]
 inline void pbkdf2_hmac_sha512_4way_sse(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,
-    const uint8_t* salt, size_t salt_len,
-    uint32_t iterations,
+    const char* p1, size_t l1, const char* p2, size_t l2,
+    const char* p3, size_t l3, const char* p4, size_t l4,
+    const uint8_t* salt, size_t salt_len, uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
     const uint64_t* precomputed_kw_salt = nullptr)
 {
-    auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][2], uint64_t W_opad[16][2]) {
-        uint8_t K[128] = {};
-        if (len > 128) { crypto::SHA512::hash(pass, len, K); }
-        else { memcpy(K, pass, len); }
+    using namespace pbkdf2_simd_detail;
 
-        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
-        for (int w = 0; w < 16; w++) {
-            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
-            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
-        }
-    };
-    uint64_t W_ipad1[16][2] = {}; uint64_t W_opad1[16][2] = {};
-    populate_W(p1, l1, 0, W_ipad1, W_opad1);
-    populate_W(p2, l2, 1, W_ipad1, W_opad1);
+    // --- 1. Preparação dos pads por lane ---
+    const void*  passes[4] = { p1, p2, p3, p4 };
+    const size_t lens  [4] = { l1, l2, l3, l4 };
+    uint64_t ipad_all[16][4], opad_all[16][4];
+    prepare_pads<4>(passes, lens, ipad_all, opad_all);
 
-    uint64_t W_ipad2[16][2] = {}; uint64_t W_opad2[16][2] = {};
-    populate_W(p3, l3, 0, W_ipad2, W_opad2);
-    populate_W(p4, l4, 1, W_ipad2, W_opad2);
+    alignas(16) uint64_t ipad_lo[16][2], ipad_hi[16][2];
+    alignas(16) uint64_t opad_lo[16][2], opad_hi[16][2];
+    for (int w = 0; w < 16; ++w) {
+        ipad_lo[w][0]=ipad_all[w][0]; ipad_lo[w][1]=ipad_all[w][1];
+        ipad_hi[w][0]=ipad_all[w][2]; ipad_hi[w][1]=ipad_all[w][3];
+        opad_lo[w][0]=opad_all[w][0]; opad_lo[w][1]=opad_all[w][1];
+        opad_hi[w][0]=opad_all[w][2]; opad_hi[w][1]=opad_all[w][3];
+    }
 
-    __m128i ipad1_vec[8], opad1_vec[8];
-    __m128i ipad2_vec[8], opad2_vec[8];
-    __m128i W1[16], W2[16];
+    // --- 2. Estados pós ipad/opad ---
+    __m128i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
+    __m128i W[16];
+    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)ipad_lo[i]);
+    sha512_block64_sse(get_iv_sse(), W, ipad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)ipad_hi[i]);
+    sha512_block64_sse(get_iv_sse(), W, ipad_iv_hi);
+    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)opad_lo[i]);
+    sha512_block64_sse(get_iv_sse(), W, opad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)opad_hi[i]);
+    sha512_block64_sse(get_iv_sse(), W, opad_iv_hi);
 
-    for (int i = 0; i < 16; ++i) W1[i] = _mm_loadu_si128((const __m128i*)W_ipad1[i]);
-    sha512_block64_sse(get_iv_sse(), W1, ipad1_vec);
-
-    for (int i = 0; i < 16; ++i) W1[i] = _mm_loadu_si128((const __m128i*)W_opad1[i]);
-    sha512_block64_sse(get_iv_sse(), W1, opad1_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm_loadu_si128((const __m128i*)W_ipad2[i]);
-    sha512_block64_sse(get_iv_sse(), W2, ipad2_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm_loadu_si128((const __m128i*)W_opad2[i]);
-    sha512_block64_sse(get_iv_sse(), W2, opad2_vec);
-
-    __m128i s1[8], s2[8];
-    if (precomputed_kw_salt != nullptr) {
-        sha512_salt_fastforward_sse(ipad1_vec, precomputed_kw_salt, s1);
-        sha512_salt_fastforward_sse(ipad2_vec, precomputed_kw_salt, s2);
+    // --- 3. Bloco do salt (U_1) ---
+    __m128i s_lo[8], s_hi[8];
+    if (precomputed_kw_salt) {
+        sha512_salt_fastforward_sse(ipad_iv_lo, precomputed_kw_salt, s_lo);
+        sha512_salt_fastforward_sse(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
-        // Prepare Salt Block (shared across all lanes)
-        __m128i msg_salt[16] = {};
-        if (precomputed_salt_blk64 != nullptr) {
-            for (int w = 0; w < 16; ++w) {
-                msg_salt[w] = _mm_set1_epi64x((long long)precomputed_salt_blk64[w]);
-            }
+        uint64_t salt_W[16];
+        if (precomputed_salt_blk64) {
+            for (int i=0;i<16;++i) salt_W[i] = precomputed_salt_blk64[i];
         } else {
-            uint8_t salt_buf[128] = {};
-            memcpy(salt_buf, salt, salt_len);
-            salt_buf[salt_len]     = 0;
-            salt_buf[salt_len + 1] = 0;
-            salt_buf[salt_len + 2] = 0;
-            salt_buf[salt_len + 3] = 1;
-            salt_buf[salt_len + 4] = 0x80;
-
-            uint64_t s_blk[16];
-            memcpy(s_blk, salt_buf, 128);
-            for (int w = 0; w < 15; ++w) {
-                msg_salt[w] = _mm_set1_epi64x((long long)__builtin_bswap64(s_blk[w]));
-            }
-            msg_salt[15] = _mm_set1_epi64x((long long)(128 + salt_len + 4) * 8);
+            prepare_salt_W(salt, salt_len, salt_W);
         }
-
-        // Inner hash of salt
-        for (int w = 0; w < 16; ++w) { W1[w] = msg_salt[w]; W2[w] = msg_salt[w]; }
-        sha512_block64_sse(ipad1_vec, W1, s1);
-        sha512_block64_sse(ipad2_vec, W2, s2);
+        __m128i Wsalt[16];
+        for (int i=0;i<16;++i) Wsalt[i] = _mm_set1_epi64x((long long)salt_W[i]);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_sse(ipad_iv_lo, W, s_lo);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_sse(ipad_iv_hi, W, s_hi);
     }
 
-    // Outer hash: data is s1/s2 (64 bytes)
-    for (int i = 0; i < 8; ++i) { W1[i] = s1[i]; W2[i] = s2[i]; }
-    for (int i = 8; i < 16; ++i) { W1[i] = _mm_setzero_si128(); W2[i] = _mm_setzero_si128(); }
+    // --- 4. Outer hash de U_1 ---
+    __m128i T_lo[8], T_hi[8];
+    for (int i=0;i<8;++i) W[i] = s_lo[i];
+    for (int i=8;i<16;++i) W[i] = _mm_setzero_si128();
+    sha512_padded_block64_sse(opad_iv_lo, W, T_lo);
+    for (int i=0;i<8;++i) W[i] = s_hi[i];
+    for (int i=8;i<16;++i) W[i] = _mm_setzero_si128();
+    sha512_padded_block64_sse(opad_iv_hi, W, T_hi);
 
-    __m128i T1_vec[8], T2_vec[8];
-    sha512_padded_block64_sse(opad1_vec, W1, T1_vec);
-    sha512_padded_block64_sse(opad2_vec, W2, T2_vec);
+    // --- 5. Iterações 2..N ---
+    pbkdf2_2lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
+    pbkdf2_2lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // PBKDF2 remaining iterations (1..iterations-1)
-    pbkdf2_2lane_fused_stream(ipad1_vec, opad1_vec, T1_vec, T1_vec, iterations);
-    pbkdf2_2lane_fused_stream(ipad2_vec, opad2_vec, T2_vec, T2_vec, iterations);
-
-    alignas(16) uint64_t res1[8][2], res2[8][2];
-    for (int i = 0; i < 8; ++i) {
-        _mm_storeu_si128((__m128i*)res1[i], T1_vec[i]);
-        _mm_storeu_si128((__m128i*)res2[i], T2_vec[i]);
+    // --- 6. Serialização ---
+    alignas(16) uint64_t lo[8][2], hi[8][2];
+    for (int i=0;i<8;++i) {
+        _mm_storeu_si128((__m128i*)lo[i], T_lo[i]);
+        _mm_storeu_si128((__m128i*)hi[i], T_hi[i]);
     }
-
-    for(int i = 0; i < 8; ++i) {
-        uint64_t b1 = __builtin_bswap64(res1[i][0]); memcpy(out1 + i*8, &b1, 8);
-        uint64_t b2 = __builtin_bswap64(res1[i][1]); memcpy(out2 + i*8, &b2, 8);
-        uint64_t b3 = __builtin_bswap64(res2[i][0]); memcpy(out3 + i*8, &b3, 8);
-        uint64_t b4 = __builtin_bswap64(res2[i][1]); memcpy(out4 + i*8, &b4, 8);
+    uint64_t combined[8][4];
+    for (int i=0;i<8;++i) {
+        combined[i][0]=lo[i][0]; combined[i][1]=lo[i][1];
+        combined[i][2]=hi[i][0]; combined[i][3]=hi[i][1];
     }
+    uint8_t* outs[4] = { out1, out2, out3, out4 };
+    store_digests_be<4>(combined, outs);
 }
 
-// =========================================================================
+// ============================================================================
 // AVX2
-// =========================================================================
+// ============================================================================
 #define ROR256_64(x, n) _mm256_or_si256(_mm256_srli_epi64(x, n), _mm256_slli_epi64(x, 64 - (n)))
 #define CH_AVX2(x, y, z) _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z)))
 #define MAJ_AVX2(x, y, z) _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y)))
@@ -496,36 +508,25 @@ inline void pbkdf2_hmac_sha512_4way_sse(
 #define s1_AVX2(x) _mm256_xor_si256(_mm256_xor_si256(ROR256_64(x, 19), ROR256_64(x, 61)), _mm256_srli_epi64(x, 6))
 
 [[gnu::target("avx2"), gnu::always_inline]]
-static inline void sha512_block64_avx2(
-    const __m256i iv[8],
-    __m256i W[16],
-    __m256i out[8])
-{
-    __m256i a = iv[0]; __m256i b = iv[1]; __m256i c = iv[2]; __m256i d = iv[3];
-    __m256i e = iv[4]; __m256i f = iv[5]; __m256i g = iv[6]; __m256i h = iv[7];
-
+static inline void sha512_block64_avx2(const __m256i iv[8], __m256i W[16], __m256i out[8]) {
+    __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m256i* k_tbl = get_k512_avx2();
     #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m256i h_s1  = _mm256_add_epi64(h, S1_AVX2(e));
-            __m256i ch_k  = _mm256_add_epi64(CH_AVX2(e, f, g), k_tbl[r * 16 + i]);
-            __m256i ch_kw = _mm256_add_epi64(ch_k, W[i]);
-            __m256i T1    = _mm256_add_epi64(h_s1, ch_kw);
+            __m256i ch_k  = _mm256_add_epi64(CH_AVX2(e, f, g), k_tbl[r*16+i]);
+            __m256i T1    = _mm256_add_epi64(_mm256_add_epi64(h_s1, ch_k), W[i]);
             __m256i T2    = _mm256_add_epi64(S0_AVX2(a), MAJ_AVX2(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm256_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm256_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m256i w1  = W[(i + 1)  & 15];
-                const __m256i w9  = W[(i + 9)  & 15];
-                const __m256i w14 = W[(i + 14) & 15];
-                W[i] = _mm256_add_epi64(W[i],
-                        _mm256_add_epi64(_mm256_add_epi64(s0_AVX2(w1), w9), s1_AVX2(w14)));
+                W[i] = _mm256_add_epi64(W[i], _mm256_add_epi64(
+                       _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_AVX2(W[(i+14)&15])));
             }
         }
     }
@@ -536,38 +537,22 @@ static inline void sha512_block64_avx2(
 }
 
 [[gnu::target("avx2"), gnu::always_inline]]
-static inline void inline_transform_avx2(SHA512_AVX2_State* ctx, const uint64_t W_in[16][4]) {
-    __m256i iv[8], W[16], out[8];
-    for (int i = 0; i < 8; ++i) iv[i] = _mm256_loadu_si256((const __m256i*)ctx->state[i]);
-    for (int i = 0; i < 16; ++i) W[i] = _mm256_loadu_si256((const __m256i*)W_in[i]);
-    sha512_block64_avx2(iv, W, out);
-    for (int i = 0; i < 8; ++i) _mm256_storeu_si256((__m256i*)ctx->state[i], out[i]);
-}
+static inline void sha512_padded_block64_avx2(const __m256i iv[8], __m256i W[16], __m256i out[8]) {
+    alignas(32) static const __m256i C_S1_W15  = _mm256_set1_epi64x(0x00c0000000003018ULL);
+    alignas(32) static const __m256i C_S0_W8   = _mm256_set1_epi64x(0x4180000000000000ULL);
+    alignas(32) static const __m256i C_S0_W15  = _mm256_set1_epi64x(0x000000000000030aULL);
+    alignas(32) static const __m256i C_W8      = _mm256_set1_epi64x(0x8000000000000000ULL);
+    alignas(32) static const __m256i C_W15     = _mm256_set1_epi64x(0x0000000000000600ULL);
+    alignas(32) static const __m256i K_FUSED_8  = _mm256_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
+    alignas(32) static const __m256i K_FUSED_15 = _mm256_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
 
-[[gnu::target("avx2"), gnu::always_inline]]
-static inline void sha512_padded_block64_avx2(
-    const __m256i iv[8],
-    __m256i W[16],
-    __m256i out[8])
-{
-    alignas(32) static const __m256i CONST_S1_W15 = _mm256_set1_epi64x(0x00c0000000003018ULL);
-    alignas(32) static const __m256i CONST_S0_W8  = _mm256_set1_epi64x(0x4180000000000000ULL);
-    alignas(32) static const __m256i CONST_S0_W15 = _mm256_set1_epi64x(0x000000000000030aULL);
-    alignas(32) static const __m256i CONST_W8     = _mm256_set1_epi64x(0x8000000000000000ULL);
-    alignas(32) static const __m256i CONST_W15    = _mm256_set1_epi64x(0x0000000000000600ULL);
-    alignas(32) static const __m256i K_FUSED_8    = _mm256_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(32) static const __m256i K_FUSED_15   = _mm256_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
-
-    __m256i a = iv[0]; __m256i b = iv[1]; __m256i c = iv[2]; __m256i d = iv[3];
-    __m256i e = iv[4]; __m256i f = iv[5]; __m256i g = iv[6]; __m256i h = iv[7];
-
+    __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m256i* k_tbl = get_k512_avx2();
 
     #define STEP_AVX2(k_term, w_val) do { \
         __m256i h_s1  = _mm256_add_epi64(h, S1_AVX2(e)); \
         __m256i ch_k  = _mm256_add_epi64(CH_AVX2(e, f, g), (k_term)); \
-        __m256i ch_kw = _mm256_add_epi64(ch_k, (w_val)); \
-        __m256i T1    = _mm256_add_epi64(h_s1, ch_kw); \
+        __m256i T1    = _mm256_add_epi64(_mm256_add_epi64(h_s1, ch_k), (w_val)); \
         __m256i T2    = _mm256_add_epi64(S0_AVX2(a), MAJ_AVX2(a, b, c)); \
         h = g; g = f; f = e; \
         e = _mm256_add_epi64(d, T1); \
@@ -586,55 +571,23 @@ static inline void sha512_padded_block64_avx2(
         a = _mm256_add_epi64(T1, T2); \
     } while(0)
 
-    // === Round 0: Steps 0..7 ===
-    STEP_AVX2(k_tbl[0], W[0]);
-    W[0] = _mm256_add_epi64(W[0], s0_AVX2(W[1]));
+    STEP_AVX2(k_tbl[0], W[0]);  W[0] = _mm256_add_epi64(W[0], s0_AVX2(W[1]));
+    STEP_AVX2(k_tbl[1], W[1]);  W[1] = _mm256_add_epi64(W[1], _mm256_add_epi64(s0_AVX2(W[2]), C_S1_W15));
+    STEP_AVX2(k_tbl[2], W[2]);  W[2] = _mm256_add_epi64(W[2], _mm256_add_epi64(s0_AVX2(W[3]), s1_AVX2(W[0])));
+    STEP_AVX2(k_tbl[3], W[3]);  W[3] = _mm256_add_epi64(W[3], _mm256_add_epi64(s0_AVX2(W[4]), s1_AVX2(W[1])));
+    STEP_AVX2(k_tbl[4], W[4]);  W[4] = _mm256_add_epi64(W[4], _mm256_add_epi64(s0_AVX2(W[5]), s1_AVX2(W[2])));
+    STEP_AVX2(k_tbl[5], W[5]);  W[5] = _mm256_add_epi64(W[5], _mm256_add_epi64(s0_AVX2(W[6]), s1_AVX2(W[3])));
+    STEP_AVX2(k_tbl[6], W[6]);  W[6] = _mm256_add_epi64(W[6], _mm256_add_epi64(_mm256_add_epi64(s0_AVX2(W[7]), C_W15), s1_AVX2(W[4])));
+    STEP_AVX2(k_tbl[7], W[7]);  W[7] = _mm256_add_epi64(W[7], _mm256_add_epi64(_mm256_add_epi64(C_S0_W8, W[0]), s1_AVX2(W[5])));
 
-    STEP_AVX2(k_tbl[1], W[1]);
-    W[1] = _mm256_add_epi64(W[1], _mm256_add_epi64(s0_AVX2(W[2]), CONST_S1_W15));
-
-    STEP_AVX2(k_tbl[2], W[2]);
-    W[2] = _mm256_add_epi64(W[2], _mm256_add_epi64(s0_AVX2(W[3]), s1_AVX2(W[0])));
-
-    STEP_AVX2(k_tbl[3], W[3]);
-    W[3] = _mm256_add_epi64(W[3], _mm256_add_epi64(s0_AVX2(W[4]), s1_AVX2(W[1])));
-
-    STEP_AVX2(k_tbl[4], W[4]);
-    W[4] = _mm256_add_epi64(W[4], _mm256_add_epi64(s0_AVX2(W[5]), s1_AVX2(W[2])));
-
-    STEP_AVX2(k_tbl[5], W[5]);
-    W[5] = _mm256_add_epi64(W[5], _mm256_add_epi64(s0_AVX2(W[6]), s1_AVX2(W[3])));
-
-    STEP_AVX2(k_tbl[6], W[6]);
-    W[6] = _mm256_add_epi64(W[6], _mm256_add_epi64(_mm256_add_epi64(s0_AVX2(W[7]), CONST_W15), s1_AVX2(W[4])));
-
-    STEP_AVX2(k_tbl[7], W[7]);
-    W[7] = _mm256_add_epi64(W[7], _mm256_add_epi64(_mm256_add_epi64(CONST_S0_W8, W[0]), s1_AVX2(W[5])));
-
-    // === Round 0: Steps 8..15 ===
-    STEP_FUSED_AVX2(K_FUSED_8);
-    W[8] = _mm256_add_epi64(CONST_W8, _mm256_add_epi64(W[1], s1_AVX2(W[6])));
-
-    STEP_FUSED_AVX2(k_tbl[9]);
-    W[9] = _mm256_add_epi64(W[2], s1_AVX2(W[7]));
-
-    STEP_FUSED_AVX2(k_tbl[10]);
-    W[10] = _mm256_add_epi64(W[3], s1_AVX2(W[8]));
-
-    STEP_FUSED_AVX2(k_tbl[11]);
-    W[11] = _mm256_add_epi64(W[4], s1_AVX2(W[9]));
-
-    STEP_FUSED_AVX2(k_tbl[12]);
-    W[12] = _mm256_add_epi64(W[5], s1_AVX2(W[10]));
-
-    STEP_FUSED_AVX2(k_tbl[13]);
-    W[13] = _mm256_add_epi64(W[6], s1_AVX2(W[11]));
-
-    STEP_FUSED_AVX2(k_tbl[14]);
-    W[14] = _mm256_add_epi64(CONST_S0_W15, _mm256_add_epi64(W[7], s1_AVX2(W[12])));
-
-    STEP_FUSED_AVX2(K_FUSED_15);
-    W[15] = _mm256_add_epi64(_mm256_add_epi64(CONST_W15, s0_AVX2(W[0])), _mm256_add_epi64(W[8], s1_AVX2(W[13])));
+    STEP_FUSED_AVX2(K_FUSED_8);  W[8]  = _mm256_add_epi64(C_W8, _mm256_add_epi64(W[1], s1_AVX2(W[6])));
+    STEP_FUSED_AVX2(k_tbl[9]);   W[9]  = _mm256_add_epi64(W[2], s1_AVX2(W[7]));
+    STEP_FUSED_AVX2(k_tbl[10]);  W[10] = _mm256_add_epi64(W[3], s1_AVX2(W[8]));
+    STEP_FUSED_AVX2(k_tbl[11]);  W[11] = _mm256_add_epi64(W[4], s1_AVX2(W[9]));
+    STEP_FUSED_AVX2(k_tbl[12]);  W[12] = _mm256_add_epi64(W[5], s1_AVX2(W[10]));
+    STEP_FUSED_AVX2(k_tbl[13]);  W[13] = _mm256_add_epi64(W[6], s1_AVX2(W[11]));
+    STEP_FUSED_AVX2(k_tbl[14]);  W[14] = _mm256_add_epi64(C_S0_W15, _mm256_add_epi64(W[7], s1_AVX2(W[12])));
+    STEP_FUSED_AVX2(K_FUSED_15); W[15] = _mm256_add_epi64(_mm256_add_epi64(C_W15, s0_AVX2(W[0])), _mm256_add_epi64(W[8], s1_AVX2(W[13])));
 
     #undef STEP_AVX2
     #undef STEP_FUSED_AVX2
@@ -644,26 +597,20 @@ static inline void sha512_padded_block64_avx2(
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m256i h_s1  = _mm256_add_epi64(h, S1_AVX2(e));
-            __m256i ch_k  = _mm256_add_epi64(CH_AVX2(e, f, g), k_tbl[r * 16 + i]);
-            __m256i ch_kw = _mm256_add_epi64(ch_k, W[i]);
-            __m256i T1    = _mm256_add_epi64(h_s1, ch_kw);
+            __m256i ch_k  = _mm256_add_epi64(CH_AVX2(e, f, g), k_tbl[r*16+i]);
+            __m256i T1    = _mm256_add_epi64(_mm256_add_epi64(h_s1, ch_k), W[i]);
             __m256i T2    = _mm256_add_epi64(S0_AVX2(a), MAJ_AVX2(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm256_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm256_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m256i w1  = W[(i + 1)  & 15];
-                const __m256i w9  = W[(i + 9)  & 15];
-                const __m256i w14 = W[(i + 14) & 15];
-                W[i] = _mm256_add_epi64(W[i],
-                        _mm256_add_epi64(_mm256_add_epi64(s0_AVX2(w1), w9), s1_AVX2(w14)));
+                W[i] = _mm256_add_epi64(W[i], _mm256_add_epi64(
+                       _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_AVX2(W[(i+14)&15])));
             }
         }
     }
-
     out[0] = _mm256_add_epi64(iv[0], a); out[1] = _mm256_add_epi64(iv[1], b);
     out[2] = _mm256_add_epi64(iv[2], c); out[3] = _mm256_add_epi64(iv[3], d);
     out[4] = _mm256_add_epi64(iv[4], e); out[5] = _mm256_add_epi64(iv[5], f);
@@ -673,54 +620,26 @@ static inline void sha512_padded_block64_avx2(
 [[gnu::target("avx2"), gnu::always_inline]]
 static inline void pbkdf2_4lane_fused_stream(
     const __m256i ipad_iv[8], const __m256i opad_iv[8],
-    const __m256i initial_digest[8],
-    __m256i T[8],
-    uint32_t iterations)
+    const __m256i initial_digest[8], __m256i T[8], uint32_t iterations)
 {
     __m256i W[16];
-
     #pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) W[i] = initial_digest[i];
 
-    for (uint32_t iter = 1; iter < iterations; ++iter) {
-        // In-place zero-copy with specialized padded schedule
+    for (uint32_t it = 1; it < iterations; ++it) {
         sha512_padded_block64_avx2(ipad_iv, W, W);
-
         sha512_padded_block64_avx2(opad_iv, W, W);
-
         #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) {
-            T[i] = _mm256_xor_si256(T[i], W[i]);
-        }
-    }
-}
-
-inline void precompute_kw_salt(const uint64_t salt_blk64[16], uint64_t kw_salt[80]) {
-    uint64_t W[80];
-    for (int i = 0; i < 16; ++i) W[i] = salt_blk64[i];
-
-    auto ror64 = [](uint64_t x, int n) { return (x >> n) | (x << (64 - n)); };
-    auto s0 = [&](uint64_t x) { return ror64(x, 1) ^ ror64(x, 8) ^ (x >> 7); };
-    auto s1 = [&](uint64_t x) { return ror64(x, 19) ^ ror64(x, 61) ^ (x >> 6); };
-
-    for (int i = 16; i < 80; ++i) {
-        W[i] = W[i - 16] + s0(W[i - 15]) + W[i - 7] + s1(W[i - 2]);
-    }
-
-    for (int i = 0; i < 80; ++i) {
-        kw_salt[i] = K512_SIMD[i] + W[i];
+        for (int i = 0; i < 8; ++i) T[i] = _mm256_xor_si256(T[i], W[i]);
     }
 }
 
 [[gnu::target("avx2"), gnu::always_inline]]
-static inline void sha512_salt_fastforward_avx2(
-    const __m256i iv[8],
-    const uint64_t kw_salt[80],
-    __m256i out[8])
+static inline void sha512_salt_fastforward_avx2(const __m256i iv[8],
+                                                const uint64_t kw_salt[80],
+                                                __m256i out[8])
 {
-    __m256i a = iv[0]; __m256i b = iv[1]; __m256i c = iv[2]; __m256i d = iv[3];
-    __m256i e = iv[4]; __m256i f = iv[5]; __m256i g = iv[6]; __m256i h = iv[7];
-
+    __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m256i kw    = _mm256_set1_epi64x((long long)kw_salt[i]);
@@ -728,172 +647,142 @@ static inline void sha512_salt_fastforward_avx2(
         __m256i ch_kw = _mm256_add_epi64(CH_AVX2(e, f, g), kw);
         __m256i T1    = _mm256_add_epi64(h_s1, ch_kw);
         __m256i T2    = _mm256_add_epi64(S0_AVX2(a), MAJ_AVX2(a, b, c));
-
         h = g; g = f; f = e;
         e = _mm256_add_epi64(d, T1);
         d = c; c = b; b = a;
         a = _mm256_add_epi64(T1, T2);
     }
-
     out[0] = _mm256_add_epi64(iv[0], a); out[1] = _mm256_add_epi64(iv[1], b);
     out[2] = _mm256_add_epi64(iv[2], c); out[3] = _mm256_add_epi64(iv[3], d);
     out[4] = _mm256_add_epi64(iv[4], e); out[5] = _mm256_add_epi64(iv[5], f);
     out[6] = _mm256_add_epi64(iv[6], g); out[7] = _mm256_add_epi64(iv[7], h);
 }
 
+// Compat: mantém a assinatura antiga (recebe salt_blk64 já pronto).
+inline void precompute_kw_salt(const uint64_t salt_blk64[16], uint64_t kw_salt[80]) {
+    pbkdf2_simd_detail::precompute_kw_salt_from_W(salt_blk64, kw_salt);
+}
+
 [[gnu::target("avx2")]]
 inline void pbkdf2_hmac_sha512_8way_avx2(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8,
-    const uint8_t* salt, size_t salt_len,
-    uint32_t iterations,
-    uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64],
+    const char* p1, size_t l1, const char* p2, size_t l2,
+    const char* p3, size_t l3, const char* p4, size_t l4,
+    const char* p5, size_t l5, const char* p6, size_t l6,
+    const char* p7, size_t l7, const char* p8, size_t l8,
+    const uint8_t* salt, size_t salt_len, uint32_t iterations,
+    uint8_t out1[64],  uint8_t out2[64],  uint8_t out3[64],  uint8_t out4[64],
+    uint8_t out5[64],  uint8_t out6[64],  uint8_t out7[64],  uint8_t out8[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
     const uint64_t* precomputed_kw_salt = nullptr)
 {
-    auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][4], uint64_t W_opad[16][4]) {
-        uint8_t K[128] = {};
-        if (len > 128) { crypto::SHA512::hash(pass, len, K); }
-        else { memcpy(K, pass, len); }
+    using namespace pbkdf2_simd_detail;
 
-        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
-        for (int w = 0; w < 16; w++) {
-            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
-            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
+    // --- 1. Preparação dos pads por lane ---
+    const void*  passes[8] = { p1, p2, p3, p4, p5, p6, p7, p8 };
+    const size_t lens  [8] = { l1, l2, l3, l4, l5, l6, l7, l8 };
+    uint64_t ipad_all[16][8], opad_all[16][8];
+    prepare_pads<8>(passes, lens, ipad_all, opad_all);
+
+    alignas(32) uint64_t ipad_lo[16][4], ipad_hi[16][4];
+    alignas(32) uint64_t opad_lo[16][4], opad_hi[16][4];
+    for (int w = 0; w < 16; ++w) {
+        for (int l = 0; l < 4; ++l) {
+            ipad_lo[w][l] = ipad_all[w][l];
+            ipad_hi[w][l] = ipad_all[w][4 + l];
+            opad_lo[w][l] = opad_all[w][l];
+            opad_hi[w][l] = opad_all[w][4 + l];
         }
-    };
-    uint64_t W_ipad1[16][4] = {}; uint64_t W_opad1[16][4] = {};
-    populate_W(p1, l1, 0, W_ipad1, W_opad1);
-    populate_W(p2, l2, 1, W_ipad1, W_opad1);
-    populate_W(p3, l3, 2, W_ipad1, W_opad1);
-    populate_W(p4, l4, 3, W_ipad1, W_opad1);
+    }
 
-    uint64_t W_ipad2[16][4] = {}; uint64_t W_opad2[16][4] = {};
-    populate_W(p5, l5, 0, W_ipad2, W_opad2);
-    populate_W(p6, l6, 1, W_ipad2, W_opad2);
-    populate_W(p7, l7, 2, W_ipad2, W_opad2);
-    populate_W(p8, l8, 3, W_ipad2, W_opad2);
+    // --- 2. Estados pós ipad/opad ---
+    __m256i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
+    __m256i W[16];
+    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)ipad_lo[i]);
+    sha512_block64_avx2(get_iv_avx2(), W, ipad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)ipad_hi[i]);
+    sha512_block64_avx2(get_iv_avx2(), W, ipad_iv_hi);
+    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)opad_lo[i]);
+    sha512_block64_avx2(get_iv_avx2(), W, opad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)opad_hi[i]);
+    sha512_block64_avx2(get_iv_avx2(), W, opad_iv_hi);
 
-    __m256i ipad1_vec[8], opad1_vec[8];
-    __m256i ipad2_vec[8], opad2_vec[8];
-    __m256i W1[16], W2[16];
-
-    for (int i = 0; i < 16; ++i) W1[i] = _mm256_loadu_si256((const __m256i*)W_ipad1[i]);
-    sha512_block64_avx2(get_iv_avx2(), W1, ipad1_vec);
-
-    for (int i = 0; i < 16; ++i) W1[i] = _mm256_loadu_si256((const __m256i*)W_opad1[i]);
-    sha512_block64_avx2(get_iv_avx2(), W1, opad1_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm256_loadu_si256((const __m256i*)W_ipad2[i]);
-    sha512_block64_avx2(get_iv_avx2(), W2, ipad2_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm256_loadu_si256((const __m256i*)W_opad2[i]);
-    sha512_block64_avx2(get_iv_avx2(), W2, opad2_vec);
-
-    __m256i s1[8], s2[8];
-    if (precomputed_kw_salt != nullptr) {
-        sha512_salt_fastforward_avx2(ipad1_vec, precomputed_kw_salt, s1);
-        sha512_salt_fastforward_avx2(ipad2_vec, precomputed_kw_salt, s2);
+    // --- 3. Bloco do salt (U_1) ---
+    __m256i s_lo[8], s_hi[8];
+    if (precomputed_kw_salt) {
+        sha512_salt_fastforward_avx2(ipad_iv_lo, precomputed_kw_salt, s_lo);
+        sha512_salt_fastforward_avx2(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
-        // Prepare Salt Block (shared across all lanes)
-        __m256i msg_salt[16] = {};
-        if (precomputed_salt_blk64 != nullptr) {
-            for (int w = 0; w < 16; ++w) {
-                msg_salt[w] = _mm256_set1_epi64x((long long)precomputed_salt_blk64[w]);
-            }
+        uint64_t salt_W[16];
+        if (precomputed_salt_blk64) {
+            for (int i=0;i<16;++i) salt_W[i] = precomputed_salt_blk64[i];
         } else {
-            uint8_t salt_buf[128] = {};
-            memcpy(salt_buf, salt, salt_len);
-            salt_buf[salt_len]     = 0;
-            salt_buf[salt_len + 1] = 0;
-            salt_buf[salt_len + 2] = 0;
-            salt_buf[salt_len + 3] = 1;
-            salt_buf[salt_len + 4] = 0x80;
-
-            uint64_t s_blk[16];
-            memcpy(s_blk, salt_buf, 128);
-            for (int w = 0; w < 15; ++w) {
-                msg_salt[w] = _mm256_set1_epi64x((long long)__builtin_bswap64(s_blk[w]));
-            }
-            msg_salt[15] = _mm256_set1_epi64x((long long)(128 + salt_len + 4) * 8);
+            prepare_salt_W(salt, salt_len, salt_W);
         }
-
-        // Inner hash of salt
-        for (int w = 0; w < 16; ++w) { W1[w] = msg_salt[w]; W2[w] = msg_salt[w]; }
-        sha512_block64_avx2(ipad1_vec, W1, s1);
-        sha512_block64_avx2(ipad2_vec, W2, s2);
+        __m256i Wsalt[16];
+        for (int i=0;i<16;++i) Wsalt[i] = _mm256_set1_epi64x((long long)salt_W[i]);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_avx2(ipad_iv_lo, W, s_lo);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_avx2(ipad_iv_hi, W, s_hi);
     }
 
-    // Outer hash: data is s1/s2 (64 bytes)
-    for (int i = 0; i < 8; ++i) { W1[i] = s1[i]; W2[i] = s2[i]; }
-    for (int i = 8; i < 16; ++i) { W1[i] = _mm256_setzero_si256(); W2[i] = _mm256_setzero_si256(); }
+    // --- 4. Outer hash de U_1 ---
+    __m256i T_lo[8], T_hi[8];
+    for (int i=0;i<8;++i) W[i] = s_lo[i];
+    for (int i=8;i<16;++i) W[i] = _mm256_setzero_si256();
+    sha512_padded_block64_avx2(opad_iv_lo, W, T_lo);
+    for (int i=0;i<8;++i) W[i] = s_hi[i];
+    for (int i=8;i<16;++i) W[i] = _mm256_setzero_si256();
+    sha512_padded_block64_avx2(opad_iv_hi, W, T_hi);
 
-    __m256i T1_vec[8], T2_vec[8];
-    sha512_padded_block64_avx2(opad1_vec, W1, T1_vec);
-    sha512_padded_block64_avx2(opad2_vec, W2, T2_vec);
+    // --- 5. Iterações 2..N ---
+    pbkdf2_4lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
+    pbkdf2_4lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // PBKDF2 remaining iterations (1..iterations-1)
-    pbkdf2_4lane_fused_stream(ipad1_vec, opad1_vec, T1_vec, T1_vec, iterations);
-    pbkdf2_4lane_fused_stream(ipad2_vec, opad2_vec, T2_vec, T2_vec, iterations);
-
-    alignas(32) uint64_t res1[8][4], res2[8][4];
-    for (int i = 0; i < 8; ++i) {
-        _mm256_storeu_si256((__m256i*)res1[i], T1_vec[i]);
-        _mm256_storeu_si256((__m256i*)res2[i], T2_vec[i]);
+    // --- 6. Serialização ---
+    alignas(32) uint64_t lo[8][4], hi[8][4];
+    for (int i=0;i<8;++i) {
+        _mm256_storeu_si256((__m256i*)lo[i], T_lo[i]);
+        _mm256_storeu_si256((__m256i*)hi[i], T_hi[i]);
     }
-
-    for (int i = 0; i < 8; ++i) {
-        uint64_t b1 = __builtin_bswap64(res1[i][0]); memcpy(out1 + i*8, &b1, 8);
-        uint64_t b2 = __builtin_bswap64(res1[i][1]); memcpy(out2 + i*8, &b2, 8);
-        uint64_t b3 = __builtin_bswap64(res1[i][2]); memcpy(out3 + i*8, &b3, 8);
-        uint64_t b4 = __builtin_bswap64(res1[i][3]); memcpy(out4 + i*8, &b4, 8);
-        uint64_t b5 = __builtin_bswap64(res2[i][0]); memcpy(out5 + i*8, &b5, 8);
-        uint64_t b6 = __builtin_bswap64(res2[i][1]); memcpy(out6 + i*8, &b6, 8);
-        uint64_t b7 = __builtin_bswap64(res2[i][2]); memcpy(out7 + i*8, &b7, 8);
-        uint64_t b8 = __builtin_bswap64(res2[i][3]); memcpy(out8 + i*8, &b8, 8);
+    uint64_t combined[8][8];
+    for (int i=0;i<8;++i) {
+        for (int l=0;l<4;++l) { combined[i][l]=lo[i][l]; combined[i][4+l]=hi[i][l]; }
     }
+    uint8_t* outs[8] = { out1, out2, out3, out4, out5, out6, out7, out8 };
+    store_digests_be<8>(combined, outs);
 }
 
-// =========================================================================
+// ============================================================================
 // AVX-512
-// =========================================================================
-#define CH_AVX512(x, y, z) _mm512_ternarylogic_epi64(x, y, z, 0xCA)
+// ============================================================================
+#define CH_AVX512(x, y, z)  _mm512_ternarylogic_epi64(x, y, z, 0xCA)
 #define MAJ_AVX512(x, y, z) _mm512_ternarylogic_epi64(x, y, z, 0xE8)
-#define S0_AVX512(x) _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 28), _mm512_ror_epi64(x, 34)), _mm512_ror_epi64(x, 39))
-#define S1_AVX512(x) _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 14), _mm512_ror_epi64(x, 18)), _mm512_ror_epi64(x, 41))
-#define s0_AVX512(x) _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 1), _mm512_ror_epi64(x, 8)), _mm512_srli_epi64(x, 7))
-#define s1_AVX512(x) _mm512_xor_si512(_mm512_xor_si512(_mm512_ror_epi64(x, 19), _mm512_ror_epi64(x, 61)), _mm512_srli_epi64(x, 6))
+#define S0_AVX512(x) _mm512_ternarylogic_epi64(_mm512_ror_epi64(x,28), _mm512_ror_epi64(x,34), _mm512_ror_epi64(x,39), 0x96)
+#define S1_AVX512(x) _mm512_ternarylogic_epi64(_mm512_ror_epi64(x,14), _mm512_ror_epi64(x,18), _mm512_ror_epi64(x,41), 0x96)
+#define s0_AVX512(x) _mm512_ternarylogic_epi64(_mm512_ror_epi64(x,1),  _mm512_ror_epi64(x,8),  _mm512_srli_epi64(x,7),  0x96)
+#define s1_AVX512(x) _mm512_ternarylogic_epi64(_mm512_ror_epi64(x,19), _mm512_ror_epi64(x,61), _mm512_srli_epi64(x,6),  0x96)
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline void sha512_block64_avx512(
-    const __m512i iv[8],
-    __m512i W[16],
-    __m512i out[8])
-{
-    __m512i a = iv[0]; __m512i b = iv[1]; __m512i c = iv[2]; __m512i d = iv[3];
-    __m512i e = iv[4]; __m512i f = iv[5]; __m512i g = iv[6]; __m512i h = iv[7];
-
+static inline void sha512_block64_avx512(const __m512i iv[8], __m512i W[16], __m512i out[8]) {
+    __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m512i* k_tbl = get_k512_avx512();
     #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m512i h_s1  = _mm512_add_epi64(h, S1_AVX512(e));
-            __m512i ch_k  = _mm512_add_epi64(CH_AVX512(e, f, g), k_tbl[r * 16 + i]);
-            __m512i ch_kw = _mm512_add_epi64(ch_k, W[i]);
-            __m512i T1    = _mm512_add_epi64(h_s1, ch_kw);
+            __m512i ch_k  = _mm512_add_epi64(CH_AVX512(e, f, g), k_tbl[r*16+i]);
+            __m512i T1    = _mm512_add_epi64(_mm512_add_epi64(h_s1, ch_k), W[i]);
             __m512i T2    = _mm512_add_epi64(S0_AVX512(a), MAJ_AVX512(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm512_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm512_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m512i w1  = W[(i + 1)  & 15];
-                const __m512i w9  = W[(i + 9)  & 15];
-                const __m512i w14 = W[(i + 14) & 15];
-                W[i] = _mm512_add_epi64(W[i],
-                        _mm512_add_epi64(_mm512_add_epi64(s0_AVX512(w1), w9), s1_AVX512(w14)));
+                W[i] = _mm512_add_epi64(W[i], _mm512_add_epi64(
+                       _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_AVX512(W[(i+14)&15])));
             }
         }
     }
@@ -904,38 +793,22 @@ static inline void sha512_block64_avx512(
 }
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline void inline_transform_avx512(SHA512_AVX512_State* ctx, const uint64_t W_in[16][8]) {
-    __m512i iv[8], W[16], out[8];
-    for (int i = 0; i < 8; ++i) iv[i] = _mm512_loadu_si512((const __m512i*)ctx->state[i]);
-    for (int i = 0; i < 16; ++i) W[i] = _mm512_loadu_si512((const __m512i*)W_in[i]);
-    sha512_block64_avx512(iv, W, out);
-    for (int i = 0; i < 8; ++i) _mm512_storeu_si512((__m512i*)ctx->state[i], out[i]);
-}
+static inline void sha512_padded_block64_avx512(const __m512i iv[8], __m512i W[16], __m512i out[8]) {
+    alignas(64) static const __m512i C_S1_W15  = _mm512_set1_epi64(0x00c0000000003018ULL);
+    alignas(64) static const __m512i C_S0_W8   = _mm512_set1_epi64(0x4180000000000000ULL);
+    alignas(64) static const __m512i C_S0_W15  = _mm512_set1_epi64(0x000000000000030aULL);
+    alignas(64) static const __m512i C_W8      = _mm512_set1_epi64(0x8000000000000000ULL);
+    alignas(64) static const __m512i C_W15     = _mm512_set1_epi64(0x0000000000000600ULL);
+    alignas(64) static const __m512i K_FUSED_8  = _mm512_set1_epi64(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
+    alignas(64) static const __m512i K_FUSED_15 = _mm512_set1_epi64(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
 
-[[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline void sha512_padded_block64_avx512(
-    const __m512i iv[8],
-    __m512i W[16],
-    __m512i out[8])
-{
-    alignas(64) static const __m512i CONST_S1_W15 = _mm512_set1_epi64(0x00c0000000003018ULL);
-    alignas(64) static const __m512i CONST_S0_W8  = _mm512_set1_epi64(0x4180000000000000ULL);
-    alignas(64) static const __m512i CONST_S0_W15 = _mm512_set1_epi64(0x000000000000030aULL);
-    alignas(64) static const __m512i CONST_W8     = _mm512_set1_epi64(0x8000000000000000ULL);
-    alignas(64) static const __m512i CONST_W15    = _mm512_set1_epi64(0x0000000000000600ULL);
-    alignas(64) static const __m512i K_FUSED_8    = _mm512_set1_epi64(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(64) static const __m512i K_FUSED_15   = _mm512_set1_epi64(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
-
-    __m512i a = iv[0]; __m512i b = iv[1]; __m512i c = iv[2]; __m512i d = iv[3];
-    __m512i e = iv[4]; __m512i f = iv[5]; __m512i g = iv[6]; __m512i h = iv[7];
-
+    __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m512i* k_tbl = get_k512_avx512();
 
     #define STEP_AVX512(k_term, w_val) do { \
         __m512i h_s1  = _mm512_add_epi64(h, S1_AVX512(e)); \
         __m512i ch_k  = _mm512_add_epi64(CH_AVX512(e, f, g), (k_term)); \
-        __m512i ch_kw = _mm512_add_epi64(ch_k, (w_val)); \
-        __m512i T1    = _mm512_add_epi64(h_s1, ch_kw); \
+        __m512i T1    = _mm512_add_epi64(_mm512_add_epi64(h_s1, ch_k), (w_val)); \
         __m512i T2    = _mm512_add_epi64(S0_AVX512(a), MAJ_AVX512(a, b, c)); \
         h = g; g = f; f = e; \
         e = _mm512_add_epi64(d, T1); \
@@ -954,55 +827,23 @@ static inline void sha512_padded_block64_avx512(
         a = _mm512_add_epi64(T1, T2); \
     } while(0)
 
-    // === Round 0: Steps 0..7 ===
-    STEP_AVX512(k_tbl[0], W[0]);
-    W[0] = _mm512_add_epi64(W[0], s0_AVX512(W[1]));
+    STEP_AVX512(k_tbl[0], W[0]);  W[0] = _mm512_add_epi64(W[0], s0_AVX512(W[1]));
+    STEP_AVX512(k_tbl[1], W[1]);  W[1] = _mm512_add_epi64(W[1], _mm512_add_epi64(s0_AVX512(W[2]), C_S1_W15));
+    STEP_AVX512(k_tbl[2], W[2]);  W[2] = _mm512_add_epi64(W[2], _mm512_add_epi64(s0_AVX512(W[3]), s1_AVX512(W[0])));
+    STEP_AVX512(k_tbl[3], W[3]);  W[3] = _mm512_add_epi64(W[3], _mm512_add_epi64(s0_AVX512(W[4]), s1_AVX512(W[1])));
+    STEP_AVX512(k_tbl[4], W[4]);  W[4] = _mm512_add_epi64(W[4], _mm512_add_epi64(s0_AVX512(W[5]), s1_AVX512(W[2])));
+    STEP_AVX512(k_tbl[5], W[5]);  W[5] = _mm512_add_epi64(W[5], _mm512_add_epi64(s0_AVX512(W[6]), s1_AVX512(W[3])));
+    STEP_AVX512(k_tbl[6], W[6]);  W[6] = _mm512_add_epi64(W[6], _mm512_add_epi64(_mm512_add_epi64(s0_AVX512(W[7]), C_W15), s1_AVX512(W[4])));
+    STEP_AVX512(k_tbl[7], W[7]);  W[7] = _mm512_add_epi64(W[7], _mm512_add_epi64(_mm512_add_epi64(C_S0_W8, W[0]), s1_AVX512(W[5])));
 
-    STEP_AVX512(k_tbl[1], W[1]);
-    W[1] = _mm512_add_epi64(W[1], _mm512_add_epi64(s0_AVX512(W[2]), CONST_S1_W15));
-
-    STEP_AVX512(k_tbl[2], W[2]);
-    W[2] = _mm512_add_epi64(W[2], _mm512_add_epi64(s0_AVX512(W[3]), s1_AVX512(W[0])));
-
-    STEP_AVX512(k_tbl[3], W[3]);
-    W[3] = _mm512_add_epi64(W[3], _mm512_add_epi64(s0_AVX512(W[4]), s1_AVX512(W[1])));
-
-    STEP_AVX512(k_tbl[4], W[4]);
-    W[4] = _mm512_add_epi64(W[4], _mm512_add_epi64(s0_AVX512(W[5]), s1_AVX512(W[2])));
-
-    STEP_AVX512(k_tbl[5], W[5]);
-    W[5] = _mm512_add_epi64(W[5], _mm512_add_epi64(s0_AVX512(W[6]), s1_AVX512(W[3])));
-
-    STEP_AVX512(k_tbl[6], W[6]);
-    W[6] = _mm512_add_epi64(W[6], _mm512_add_epi64(_mm512_add_epi64(s0_AVX512(W[7]), CONST_W15), s1_AVX512(W[4])));
-
-    STEP_AVX512(k_tbl[7], W[7]);
-    W[7] = _mm512_add_epi64(W[7], _mm512_add_epi64(_mm512_add_epi64(CONST_S0_W8, W[0]), s1_AVX512(W[5])));
-
-    // === Round 0: Steps 8..15 ===
-    STEP_FUSED_AVX512(K_FUSED_8);
-    W[8] = _mm512_add_epi64(CONST_W8, _mm512_add_epi64(W[1], s1_AVX512(W[6])));
-
-    STEP_FUSED_AVX512(k_tbl[9]);
-    W[9] = _mm512_add_epi64(W[2], s1_AVX512(W[7]));
-
-    STEP_FUSED_AVX512(k_tbl[10]);
-    W[10] = _mm512_add_epi64(W[3], s1_AVX512(W[8]));
-
-    STEP_FUSED_AVX512(k_tbl[11]);
-    W[11] = _mm512_add_epi64(W[4], s1_AVX512(W[9]));
-
-    STEP_FUSED_AVX512(k_tbl[12]);
-    W[12] = _mm512_add_epi64(W[5], s1_AVX512(W[10]));
-
-    STEP_FUSED_AVX512(k_tbl[13]);
-    W[13] = _mm512_add_epi64(W[6], s1_AVX512(W[11]));
-
-    STEP_FUSED_AVX512(k_tbl[14]);
-    W[14] = _mm512_add_epi64(CONST_S0_W15, _mm512_add_epi64(W[7], s1_AVX512(W[12])));
-
-    STEP_FUSED_AVX512(K_FUSED_15);
-    W[15] = _mm512_add_epi64(_mm512_add_epi64(CONST_W15, s0_AVX512(W[0])), _mm512_add_epi64(W[8], s1_AVX512(W[13])));
+    STEP_FUSED_AVX512(K_FUSED_8);  W[8]  = _mm512_add_epi64(C_W8, _mm512_add_epi64(W[1], s1_AVX512(W[6])));
+    STEP_FUSED_AVX512(k_tbl[9]);   W[9]  = _mm512_add_epi64(W[2], s1_AVX512(W[7]));
+    STEP_FUSED_AVX512(k_tbl[10]);  W[10] = _mm512_add_epi64(W[3], s1_AVX512(W[8]));
+    STEP_FUSED_AVX512(k_tbl[11]);  W[11] = _mm512_add_epi64(W[4], s1_AVX512(W[9]));
+    STEP_FUSED_AVX512(k_tbl[12]);  W[12] = _mm512_add_epi64(W[5], s1_AVX512(W[10]));
+    STEP_FUSED_AVX512(k_tbl[13]);  W[13] = _mm512_add_epi64(W[6], s1_AVX512(W[11]));
+    STEP_FUSED_AVX512(k_tbl[14]);  W[14] = _mm512_add_epi64(C_S0_W15, _mm512_add_epi64(W[7], s1_AVX512(W[12])));
+    STEP_FUSED_AVX512(K_FUSED_15); W[15] = _mm512_add_epi64(_mm512_add_epi64(C_W15, s0_AVX512(W[0])), _mm512_add_epi64(W[8], s1_AVX512(W[13])));
 
     #undef STEP_AVX512
     #undef STEP_FUSED_AVX512
@@ -1012,26 +853,20 @@ static inline void sha512_padded_block64_avx512(
         #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m512i h_s1  = _mm512_add_epi64(h, S1_AVX512(e));
-            __m512i ch_k  = _mm512_add_epi64(CH_AVX512(e, f, g), k_tbl[r * 16 + i]);
-            __m512i ch_kw = _mm512_add_epi64(ch_k, W[i]);
-            __m512i T1    = _mm512_add_epi64(h_s1, ch_kw);
+            __m512i ch_k  = _mm512_add_epi64(CH_AVX512(e, f, g), k_tbl[r*16+i]);
+            __m512i T1    = _mm512_add_epi64(_mm512_add_epi64(h_s1, ch_k), W[i]);
             __m512i T2    = _mm512_add_epi64(S0_AVX512(a), MAJ_AVX512(a, b, c));
-
             h = g; g = f; f = e;
             e = _mm512_add_epi64(d, T1);
             d = c; c = b; b = a;
             a = _mm512_add_epi64(T1, T2);
-
             if (r < 4) {
-                const __m512i w1  = W[(i + 1)  & 15];
-                const __m512i w9  = W[(i + 9)  & 15];
-                const __m512i w14 = W[(i + 14) & 15];
-                W[i] = _mm512_add_epi64(W[i],
-                        _mm512_add_epi64(_mm512_add_epi64(s0_AVX512(w1), w9), s1_AVX512(w14)));
+                W[i] = _mm512_add_epi64(W[i], _mm512_add_epi64(
+                       _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), W[(i+9)&15]),
+                       s1_AVX512(W[(i+14)&15])));
             }
         }
     }
-
     out[0] = _mm512_add_epi64(iv[0], a); out[1] = _mm512_add_epi64(iv[1], b);
     out[2] = _mm512_add_epi64(iv[2], c); out[3] = _mm512_add_epi64(iv[3], d);
     out[4] = _mm512_add_epi64(iv[4], e); out[5] = _mm512_add_epi64(iv[5], f);
@@ -1041,37 +876,26 @@ static inline void sha512_padded_block64_avx512(
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
 static inline void pbkdf2_8lane_fused_stream(
     const __m512i ipad_iv[8], const __m512i opad_iv[8],
-    const __m512i initial_digest[8],
-    __m512i T[8],
-    uint32_t iterations)
+    const __m512i initial_digest[8], __m512i T[8], uint32_t iterations)
 {
     __m512i W[16];
-
     #pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) W[i] = initial_digest[i];
 
-    for (uint32_t iter = 1; iter < iterations; ++iter) {
-        // In-place zero-copy with specialized padded schedule
+    for (uint32_t it = 1; it < iterations; ++it) {
         sha512_padded_block64_avx512(ipad_iv, W, W);
-
         sha512_padded_block64_avx512(opad_iv, W, W);
-
         #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) {
-            T[i] = _mm512_xor_si512(T[i], W[i]);
-        }
+        for (int i = 0; i < 8; ++i) T[i] = _mm512_xor_si512(T[i], W[i]);
     }
 }
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline void sha512_salt_fastforward_avx512(
-    const __m512i iv[8],
-    const uint64_t kw_salt[80],
-    __m512i out[8])
+static inline void sha512_salt_fastforward_avx512(const __m512i iv[8],
+                                                  const uint64_t kw_salt[80],
+                                                  __m512i out[8])
 {
-    __m512i a = iv[0]; __m512i b = iv[1]; __m512i c = iv[2]; __m512i d = iv[3];
-    __m512i e = iv[4]; __m512i f = iv[5]; __m512i g = iv[6]; __m512i h = iv[7];
-
+    __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m512i kw    = _mm512_set1_epi64((long long)kw_salt[i]);
@@ -1079,13 +903,11 @@ static inline void sha512_salt_fastforward_avx512(
         __m512i ch_kw = _mm512_add_epi64(CH_AVX512(e, f, g), kw);
         __m512i T1    = _mm512_add_epi64(h_s1, ch_kw);
         __m512i T2    = _mm512_add_epi64(S0_AVX512(a), MAJ_AVX512(a, b, c));
-
         h = g; g = f; f = e;
         e = _mm512_add_epi64(d, T1);
         d = c; c = b; b = a;
         a = _mm512_add_epi64(T1, T2);
     }
-
     out[0] = _mm512_add_epi64(iv[0], a); out[1] = _mm512_add_epi64(iv[1], b);
     out[2] = _mm512_add_epi64(iv[2], c); out[3] = _mm512_add_epi64(iv[3], d);
     out[4] = _mm512_add_epi64(iv[4], e); out[5] = _mm512_add_epi64(iv[5], f);
@@ -1094,130 +916,125 @@ static inline void sha512_salt_fastforward_avx512(
 
 [[gnu::target("avx512f,avx512vl")]]
 inline void pbkdf2_hmac_sha512_16way_avx512(
-    const char* p1, size_t l1,     const char* p2, size_t l2,     const char* p3, size_t l3,     const char* p4, size_t l4,     const char* p5, size_t l5,     const char* p6, size_t l6,     const char* p7, size_t l7,     const char* p8, size_t l8,     const char* p9, size_t l9,     const char* p10, size_t l10,     const char* p11, size_t l11,     const char* p12, size_t l12,     const char* p13, size_t l13,     const char* p14, size_t l14,     const char* p15, size_t l15,     const char* p16, size_t l16,
-    const uint8_t* salt, size_t salt_len,
-    uint32_t iterations,
-    uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64], uint8_t out5[64], uint8_t out6[64], uint8_t out7[64], uint8_t out8[64], uint8_t out9[64], uint8_t out10[64], uint8_t out11[64], uint8_t out12[64], uint8_t out13[64], uint8_t out14[64], uint8_t out15[64], uint8_t out16[64],
+    const char* p1,  size_t l1,  const char* p2,  size_t l2,
+    const char* p3,  size_t l3,  const char* p4,  size_t l4,
+    const char* p5,  size_t l5,  const char* p6,  size_t l6,
+    const char* p7,  size_t l7,  const char* p8,  size_t l8,
+    const char* p9,  size_t l9,  const char* p10, size_t l10,
+    const char* p11, size_t l11, const char* p12, size_t l12,
+    const char* p13, size_t l13, const char* p14, size_t l14,
+    const char* p15, size_t l15, const char* p16, size_t l16,
+    const uint8_t* salt, size_t salt_len, uint32_t iterations,
+    uint8_t out1[64],  uint8_t out2[64],  uint8_t out3[64],  uint8_t out4[64],
+    uint8_t out5[64],  uint8_t out6[64],  uint8_t out7[64],  uint8_t out8[64],
+    uint8_t out9[64],  uint8_t out10[64], uint8_t out11[64], uint8_t out12[64],
+    uint8_t out13[64], uint8_t out14[64], uint8_t out15[64], uint8_t out16[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
     const uint64_t* precomputed_kw_salt = nullptr)
 {
-    auto populate_W = [&](const char* pass, size_t len, int lane, uint64_t W_ipad[16][8], uint64_t W_opad[16][8]) {
-        uint8_t K[128] = {};
-        if (len > 128) { crypto::SHA512::hash(pass, len, K); }
-        else { memcpy(K, pass, len); }
+    using namespace pbkdf2_simd_detail;
 
-        const uint64_t* K64 = reinterpret_cast<const uint64_t*>(K);
-        for (int w = 0; w < 16; w++) {
-            W_ipad[w][lane] = __builtin_bswap64(K64[w] ^ 0x3636363636363636ULL);
-            W_opad[w][lane] = __builtin_bswap64(K64[w] ^ 0x5c5c5c5c5c5c5c5cULL);
+    // --- 1. Preparação dos pads por lane ---
+    const void*  passes[16] = { p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16 };
+    const size_t lens  [16] = { l1,l2,l3,l4,l5,l6,l7,l8,l9,l10,l11,l12,l13,l14,l15,l16 };
+    uint64_t ipad_all[16][16], opad_all[16][16];
+    prepare_pads<16>(passes, lens, ipad_all, opad_all);
+
+    alignas(64) uint64_t ipad_lo[16][8], ipad_hi[16][8];
+    alignas(64) uint64_t opad_lo[16][8], opad_hi[16][8];
+    for (int w = 0; w < 16; ++w) {
+        for (int l = 0; l < 8; ++l) {
+            ipad_lo[w][l] = ipad_all[w][l];
+            ipad_hi[w][l] = ipad_all[w][8 + l];
+            opad_lo[w][l] = opad_all[w][l];
+            opad_hi[w][l] = opad_all[w][8 + l];
         }
-    };
+    }
 
-    uint64_t W_ipad1[16][8] = {}; uint64_t W_opad1[16][8] = {};
-    populate_W(p1, l1, 0, W_ipad1, W_opad1);
-    populate_W(p2, l2, 1, W_ipad1, W_opad1);
-    populate_W(p3, l3, 2, W_ipad1, W_opad1);
-    populate_W(p4, l4, 3, W_ipad1, W_opad1);
-    populate_W(p5, l5, 4, W_ipad1, W_opad1);
-    populate_W(p6, l6, 5, W_ipad1, W_opad1);
-    populate_W(p7, l7, 6, W_ipad1, W_opad1);
-    populate_W(p8, l8, 7, W_ipad1, W_opad1);
+    // --- 2. Estados pós ipad/opad ---
+    __m512i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
+    __m512i W[16];
+    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)ipad_lo[i]);
+    sha512_block64_avx512(get_iv_avx512(), W, ipad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)ipad_hi[i]);
+    sha512_block64_avx512(get_iv_avx512(), W, ipad_iv_hi);
+    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)opad_lo[i]);
+    sha512_block64_avx512(get_iv_avx512(), W, opad_iv_lo);
+    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)opad_hi[i]);
+    sha512_block64_avx512(get_iv_avx512(), W, opad_iv_hi);
 
-    uint64_t W_ipad2[16][8] = {}; uint64_t W_opad2[16][8] = {};
-    populate_W(p9, l9, 0, W_ipad2, W_opad2);
-    populate_W(p10, l10, 1, W_ipad2, W_opad2);
-    populate_W(p11, l11, 2, W_ipad2, W_opad2);
-    populate_W(p12, l12, 3, W_ipad2, W_opad2);
-    populate_W(p13, l13, 4, W_ipad2, W_opad2);
-    populate_W(p14, l14, 5, W_ipad2, W_opad2);
-    populate_W(p15, l15, 6, W_ipad2, W_opad2);
-    populate_W(p16, l16, 7, W_ipad2, W_opad2);
-
-    __m512i ipad1_vec[8], opad1_vec[8];
-    __m512i ipad2_vec[8], opad2_vec[8];
-    __m512i W1[16], W2[16];
-
-    for (int i = 0; i < 16; ++i) W1[i] = _mm512_loadu_si512((const __m512i*)W_ipad1[i]);
-    sha512_block64_avx512(get_iv_avx512(), W1, ipad1_vec);
-
-    for (int i = 0; i < 16; ++i) W1[i] = _mm512_loadu_si512((const __m512i*)W_opad1[i]);
-    sha512_block64_avx512(get_iv_avx512(), W1, opad1_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm512_loadu_si512((const __m512i*)W_ipad2[i]);
-    sha512_block64_avx512(get_iv_avx512(), W2, ipad2_vec);
-
-    for (int i = 0; i < 16; ++i) W2[i] = _mm512_loadu_si512((const __m512i*)W_opad2[i]);
-    sha512_block64_avx512(get_iv_avx512(), W2, opad2_vec);
-
-    __m512i s1[8], s2[8];
-    if (precomputed_kw_salt != nullptr) {
-        sha512_salt_fastforward_avx512(ipad1_vec, precomputed_kw_salt, s1);
-        sha512_salt_fastforward_avx512(ipad2_vec, precomputed_kw_salt, s2);
+    // --- 3. Bloco do salt (U_1) ---
+    __m512i s_lo[8], s_hi[8];
+    if (precomputed_kw_salt) {
+        sha512_salt_fastforward_avx512(ipad_iv_lo, precomputed_kw_salt, s_lo);
+        sha512_salt_fastforward_avx512(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
-        // Prepare Salt Block (shared across all lanes)
-        __m512i msg_salt[16] = {};
-        if (precomputed_salt_blk64 != nullptr) {
-            for (int w = 0; w < 16; ++w) {
-                msg_salt[w] = _mm512_set1_epi64((long long)precomputed_salt_blk64[w]);
-            }
+        uint64_t salt_W[16];
+        if (precomputed_salt_blk64) {
+            for (int i=0;i<16;++i) salt_W[i] = precomputed_salt_blk64[i];
         } else {
-            uint8_t salt_buf[128] = {};
-            memcpy(salt_buf, salt, salt_len);
-            salt_buf[salt_len]     = 0;
-            salt_buf[salt_len + 1] = 0;
-            salt_buf[salt_len + 2] = 0;
-            salt_buf[salt_len + 3] = 1;
-            salt_buf[salt_len + 4] = 0x80;
-
-            uint64_t s_blk[16];
-            memcpy(s_blk, salt_buf, 128);
-            for (int w = 0; w < 15; ++w) {
-                msg_salt[w] = _mm512_set1_epi64((long long)__builtin_bswap64(s_blk[w]));
-            }
-            msg_salt[15] = _mm512_set1_epi64((long long)(128 + salt_len + 4) * 8);
+            prepare_salt_W(salt, salt_len, salt_W);
         }
-
-        // Inner hash of salt
-        for (int w = 0; w < 16; ++w) { W1[w] = msg_salt[w]; W2[w] = msg_salt[w]; }
-        sha512_block64_avx512(ipad1_vec, W1, s1);
-        sha512_block64_avx512(ipad2_vec, W2, s2);
+        __m512i Wsalt[16];
+        for (int i=0;i<16;++i) Wsalt[i] = _mm512_set1_epi64((long long)salt_W[i]);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_avx512(ipad_iv_lo, W, s_lo);
+        for (int i=0;i<16;++i) W[i] = Wsalt[i];
+        sha512_block64_avx512(ipad_iv_hi, W, s_hi);
     }
 
-    // Outer hash: data is s1/s2 (64 bytes)
-    for (int i = 0; i < 8; ++i) { W1[i] = s1[i]; W2[i] = s2[i]; }
-    for (int i = 8; i < 16; ++i) { W1[i] = _mm512_setzero_si512(); W2[i] = _mm512_setzero_si512(); }
+    // --- 4. Outer hash de U_1 ---
+    __m512i T_lo[8], T_hi[8];
+    for (int i=0;i<8;++i) W[i] = s_lo[i];
+    for (int i=8;i<16;++i) W[i] = _mm512_setzero_si512();
+    sha512_padded_block64_avx512(opad_iv_lo, W, T_lo);
+    for (int i=0;i<8;++i) W[i] = s_hi[i];
+    for (int i=8;i<16;++i) W[i] = _mm512_setzero_si512();
+    sha512_padded_block64_avx512(opad_iv_hi, W, T_hi);
 
-    __m512i T1_vec[8], T2_vec[8];
-    sha512_padded_block64_avx512(opad1_vec, W1, T1_vec);
-    sha512_padded_block64_avx512(opad2_vec, W2, T2_vec);
+    // --- 5. Iterações 2..N ---
+    pbkdf2_8lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
+    pbkdf2_8lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // PBKDF2 remaining iterations (1..iterations-1)
-    pbkdf2_8lane_fused_stream(ipad1_vec, opad1_vec, T1_vec, T1_vec, iterations);
-    pbkdf2_8lane_fused_stream(ipad2_vec, opad2_vec, T2_vec, T2_vec, iterations);
-
-    alignas(64) uint64_t res1[8][8], res2[8][8];
-    for (int i=0; i<8; i++) {
-        _mm512_storeu_si512((__m512i*)res1[i], T1_vec[i]);
-        _mm512_storeu_si512((__m512i*)res2[i], T2_vec[i]);
+    // --- 6. Serialização ---
+    alignas(64) uint64_t lo[8][8], hi[8][8];
+    for (int i=0;i<8;++i) {
+        _mm512_storeu_si512((__m512i*)lo[i], T_lo[i]);
+        _mm512_storeu_si512((__m512i*)hi[i], T_hi[i]);
     }
-
-    for(int i = 0; i < 8; i++) {
-        uint64_t b1 = __builtin_bswap64(res1[i][0]); memcpy(out1 + i*8, &b1, 8);
-        uint64_t b2 = __builtin_bswap64(res1[i][1]); memcpy(out2 + i*8, &b2, 8);
-        uint64_t b3 = __builtin_bswap64(res1[i][2]); memcpy(out3 + i*8, &b3, 8);
-        uint64_t b4 = __builtin_bswap64(res1[i][3]); memcpy(out4 + i*8, &b4, 8);
-        uint64_t b5 = __builtin_bswap64(res1[i][4]); memcpy(out5 + i*8, &b5, 8);
-        uint64_t b6 = __builtin_bswap64(res1[i][5]); memcpy(out6 + i*8, &b6, 8);
-        uint64_t b7 = __builtin_bswap64(res1[i][6]); memcpy(out7 + i*8, &b7, 8);
-        uint64_t b8 = __builtin_bswap64(res1[i][7]); memcpy(out8 + i*8, &b8, 8);
-
-        uint64_t b9 = __builtin_bswap64(res2[i][0]); memcpy(out9 + i*8, &b9, 8);
-        uint64_t b10 = __builtin_bswap64(res2[i][1]); memcpy(out10 + i*8, &b10, 8);
-        uint64_t b11 = __builtin_bswap64(res2[i][2]); memcpy(out11 + i*8, &b11, 8);
-        uint64_t b12 = __builtin_bswap64(res2[i][3]); memcpy(out12 + i*8, &b12, 8);
-        uint64_t b13 = __builtin_bswap64(res2[i][4]); memcpy(out13 + i*8, &b13, 8);
-        uint64_t b14 = __builtin_bswap64(res2[i][5]); memcpy(out14 + i*8, &b14, 8);
-        uint64_t b15 = __builtin_bswap64(res2[i][6]); memcpy(out15 + i*8, &b15, 8);
-        uint64_t b16 = __builtin_bswap64(res2[i][7]); memcpy(out16 + i*8, &b16, 8);
+    uint64_t combined[8][16];
+    for (int i=0;i<8;++i) {
+        for (int l=0;l<8;++l) { combined[i][l]=lo[i][l]; combined[i][8+l]=hi[i][l]; }
     }
+    uint8_t* outs[16] = {
+        out1, out2, out3, out4, out5, out6, out7, out8,
+        out9, out10, out11, out12, out13, out14, out15, out16
+    };
+    store_digests_be<16>(combined, outs);
 }
+
+// ============================================================================
+// Macros de limpeza (higiene de cabeçalho)
+// ============================================================================
+#undef ROR128_64
+#undef CH_SSE
+#undef MAJ_SSE
+#undef S0_SSE
+#undef S1_SSE
+#undef s0_SSE
+#undef s1_SSE
+
+#undef ROR256_64
+#undef CH_AVX2
+#undef MAJ_AVX2
+#undef S0_AVX2
+#undef S1_AVX2
+#undef s0_AVX2
+#undef s1_AVX2
+
+#undef CH_AVX512
+#undef MAJ_AVX512
+#undef S0_AVX512
+#undef S1_AVX512
+#undef s0_AVX512
+#undef s1_AVX512
