@@ -235,7 +235,7 @@ FORCE_INLINE void point_add_mixed_raw(PointJacobian& p1, const uint64_t p2_x[4],
 
 // Cria chave pública comprimida (33 bytes) a partir da chave privada (32 bytes)
 inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const std::array<uint8_t, 32> &seckey) noexcept {
-    const UInt<4> k = load_be256(seckey);
+    const UInt<4> k(seckey, Endianness::big);
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
@@ -265,13 +265,13 @@ inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const
     UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
 
     out_pub[0] = (y_aff.bits[0] & 1ULL) ? 0x03 : 0x02;
-    store_be256(out_pub.data() + 1, x_aff);
+    x_aff.to_bytes(out_pub.data() + 1, 32, Endianness::big);
     return true;
 }
 
 // Cria chave pública não comprimida (65 bytes: 0x04 || X || Y)
 inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pub, const std::array<uint8_t, 32> &seckey) noexcept {
-    const UInt<4> k = load_be256(seckey);
+    const UInt<4> k(seckey, Endianness::big);
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
@@ -301,8 +301,8 @@ inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pu
     UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
 
     out_pub[0] = 0x04;
-    store_be256(out_pub.data() + 1, x_aff);
-    store_be256(out_pub.data() + 33, y_aff);
+    x_aff.to_bytes(out_pub.data() + 1, 32, Endianness::big);
+    y_aff.to_bytes(out_pub.data() + 33, 32, Endianness::big);
     return true;
 }
 
