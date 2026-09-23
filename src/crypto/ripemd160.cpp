@@ -104,6 +104,11 @@ void RIPEMD160::finalize(uint8_t out[20]) {
 }
 
 void RIPEMD160::hash(const void* data, size_t len, uint8_t out[20]) {
+    if (len == 32) {
+        hash32(*reinterpret_cast<const std::array<uint8_t, 32>*>(data),
+               *reinterpret_cast<std::array<uint8_t, 20>*>(out));
+        return;
+    }
     RIPEMD160 ctx;
     ctx.update(data, len);
     ctx.finalize(out);
@@ -195,8 +200,7 @@ void RIPEMD160::hash32(const std::array<uint8_t, 32> &in, std::array<uint8_t, 20
     std::array<uint32_t, 16> X;
     #pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) {
-        X[i] = (uint32_t(in[i * 4])) | (uint32_t(in[i * 4 + 1]) << 8) |
-               (uint32_t(in[i * 4 + 2]) << 16) | (uint32_t(in[i * 4 + 3]) << 24);
+        std::memcpy(&X[i], in.data() + i * 4, 4);
     }
     X[8] = 0x00000080;
     X[9] = 0; X[10] = 0; X[11] = 0; X[12] = 0; X[13] = 0;
@@ -208,10 +212,7 @@ void RIPEMD160::hash32(const std::array<uint8_t, 32> &in, std::array<uint8_t, 20
 
     #pragma GCC unroll 5
     for (int i = 0; i < 5; ++i) {
-        out[i * 4]     = static_cast<uint8_t>(h[i]);
-        out[i * 4 + 1] = static_cast<uint8_t>(h[i] >> 8);
-        out[i * 4 + 2] = static_cast<uint8_t>(h[i] >> 16);
-        out[i * 4 + 3] = static_cast<uint8_t>(h[i] >> 24);
+        std::memcpy(out.data() + i * 4, &h[i], 4);
     }
 }
 

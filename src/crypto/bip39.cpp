@@ -131,10 +131,9 @@ std::string Bip39Deriver::derive_btc_address_from_seed(const secp256k1_context &
     if (!derive_child_key(ctx, priv_key, chain_code, 0)) return "";
 
     if (!crypto::secp256k1_pubkey_create_fast(pub_serialized, priv_key)) return "";
-    size_t pub_len = 33;
 
-    crypto::SHA256::hash(pub_serialized.data(), pub_len, hash_buf.data());
-    crypto::RIPEMD160::hash(hash_buf.data(), 32, ripemd_buf.data());
+    crypto::SHA256::hash33(pub_serialized, hash_buf);
+    crypto::RIPEMD160::hash32(hash_buf, ripemd_buf);
 
     payload[0] = 0x00;
     std::memcpy(payload.data() + 1, ripemd_buf.data(), 20);
@@ -228,10 +227,9 @@ bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
     if (!derive_child_key(*ctx, priv_key, chain_code, 0))          return false;
 
     if (!crypto::secp256k1_pubkey_create_fast(pub_serialized, priv_key)) return false;
-    size_t pub_len = 33;
 
-    crypto::SHA256::hash(pub_serialized.data(), pub_len, hash_buf.data());
-    crypto::RIPEMD160::hash(hash_buf.data(), 32, ripemd_buf.data());
+    crypto::SHA256::hash33(pub_serialized, hash_buf);
+    crypto::RIPEMD160::hash32(hash_buf, ripemd_buf);
 
     uint32_t ripemd_fast;
     std::memcpy(&ripemd_fast, ripemd_buf.data(), 4);

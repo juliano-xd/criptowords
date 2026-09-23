@@ -129,9 +129,20 @@ private:
         }
         std::memset(ipad.data(), 0x36, SHA512::block_size);
         std::memset(opad.data(), 0x5c, SHA512::block_size);
-        for (size_t i = 0; i < k_use_len; ++i) {
-            ipad[i] ^= k_use[i];
-            opad[i] ^= k_use[i];
+        if (key_len == 32) {
+            const auto* k_words = static_cast<const uint64_t*>(key);
+            auto* ip_words = reinterpret_cast<uint64_t*>(ipad.data());
+            auto* op_words = reinterpret_cast<uint64_t*>(opad.data());
+            #pragma GCC unroll 4
+            for (size_t i = 0; i < 4; ++i) {
+                ip_words[i] ^= k_words[i];
+                op_words[i] ^= k_words[i];
+            }
+        } else {
+            for (size_t i = 0; i < k_use_len; ++i) {
+                ipad[i] ^= k_use[i];
+                opad[i] ^= k_use[i];
+            }
         }
     }
 };
