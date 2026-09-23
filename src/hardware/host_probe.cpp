@@ -165,24 +165,27 @@ CpuInfo HostProbe::probe_cpu() {
         info.caps.amx_tile     = (edx & (1u << 24)) != 0;
         info.caps.amx_int8     = (edx & (1u << 25)) != 0;
 
-        // Leaf 7, Subleaf 1: Intel SHA-512, AMX-FP16, AVX-VNNI, APX
+        // Leaf 7, Subleaf 1 (CPUID.(07H,01H)): Intel SHA-512, SM3/SM4, AMX, APX.
+        // EAX: SHA512[0] SM3[1] SM4[2] RAOINT[3] AVXVNNI[4] AVX512BF16[5]
+        //      CMPCCXADD[7] AMX_COMPLEX[8] AMX_FP16[21] AVXIFMA[23]
+        // EDX: AVXVNNIINT8[4] AVXNECONVERT[5] AVXVNNIINT16[10] PREFETCHI[14] APX_F[21]
         __cpuid_count(7, 1, eax, ebx, ecx, edx);
+        info.caps.intel_sha512 = (eax & (1u << 0)) != 0;
+        info.caps.sm3          = (eax & (1u << 1)) != 0;
+        info.caps.sm4          = (eax & (1u << 2)) != 0;
         info.caps.rao_int      = (eax & (1u << 3)) != 0;
         info.caps.avx_vnni     = (eax & (1u << 4)) != 0;
         info.caps.avx512bf16   = (eax & (1u << 5)) != 0;
-        info.caps.cmpccxadd    = (eax & (1u << 19)) != 0;
-        info.caps.prefetchi    = (eax & (1u << 20)) != 0;
+        info.caps.cmpccxadd    = (eax & (1u << 7)) != 0;
+        info.caps.amx_complex  = (eax & (1u << 8)) != 0;
         info.caps.amx_fp16     = (eax & (1u << 21)) != 0;
         info.caps.avx_ifma     = (eax & (1u << 23)) != 0;
 
-        info.caps.intel_sha512 = (edx & (1u << 0)) != 0;
-        info.caps.sm3          = (edx & (1u << 1)) != 0;
-        info.caps.sm4          = (edx & (1u << 2)) != 0;
         info.caps.avx_vnni_int8  = (edx & (1u << 4)) != 0;
         info.caps.avx_ne_convert = (edx & (1u << 5)) != 0;
-        info.caps.amx_complex    = (edx & (1u << 8)) != 0;
         info.caps.avx_vnni_int16 = (edx & (1u << 10)) != 0;
-        info.caps.apx            = (edx & (1u << 19)) != 0;
+        info.caps.prefetchi      = (edx & (1u << 14)) != 0;
+        info.caps.apx            = (edx & (1u << 21)) != 0;
     }
 
     // Leaf 0x1A: Hybrid Information (P-cores vs E-cores)
@@ -663,6 +666,15 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
             std::string name_upper = dev.device_name;
             for (char& c : name_upper) c = static_cast<char>(std::toupper(c));
 
+            std::string p_name_upper = p_name;
+            for (char& c : p_name_upper) c = static_cast<char>(std::toupper(c));
+
+            bool is_cpu_emulator = (dev_type & CL_DEVICE_TYPE_CPU) != 0 ||
+                                   name_upper.find("POCL") != std::string::npos ||
+                                   name_upper.find("CPU") != std::string::npos ||
+                                   p_name_upper.find("PORTABLE COMPUTING") != std::string::npos ||
+                                   p_name_upper.find("POCL") != std::string::npos;
+
             bool name_is_integrated = (name_upper.find("610M") != std::string::npos ||
                                        name_upper.find("680M") != std::string::npos ||
                                        name_upper.find("780M") != std::string::npos ||
@@ -686,22 +698,32 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
                                      name_upper.find("RADEON RX") != std::string::npos ||
                                      name_upper.find("ARC A") != std::string::npos);
 
-            if (name_is_high_end) {
+            double ipc_multiplier = 1.0;
+            if (is_cpu_emulator) {
+                dev.category = GpuCategory::Integrated;
+                dev.category_str = "CPU OpenCL Emulador (PoCL)";
+                dev.is_discrete = false;
+                ipc_multiplier = 0.01;
+            } else if (name_is_high_end) {
                 dev.category = GpuCategory::DiscreteHighEnd;
                 dev.category_str = "dGPU High-End Enthusiast";
                 dev.is_discrete = true;
+                ipc_multiplier = 25.0;
             } else if (name_is_discrete && !name_is_integrated) {
                 dev.category = GpuCategory::DiscreteMidRange;
                 dev.category_str = "dGPU Dedicada Performance";
                 dev.is_discrete = true;
+                ipc_multiplier = 10.0;
             } else if (name_is_integrated || (dev.compute_units <= 4 && dev.global_mem_bytes < 8ULL * 1024 * 1024 * 1024)) {
                 dev.category = GpuCategory::Integrated;
                 dev.category_str = "iGPU Integrada (SoC/APU)";
                 dev.is_discrete = false;
+                ipc_multiplier = 1.0;
             } else {
                 dev.category = GpuCategory::DiscreteEntry;
                 dev.category_str = "GPU Aceleradora Genérica";
                 dev.is_discrete = true;
+                ipc_multiplier = 4.0;
             }
 
             // Warp / Wavefront Size preferido
@@ -718,7 +740,6 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
             }
 
             // Cálculo do Compute Index (Score)
-            double ipc_multiplier = dev.is_discrete ? 3.0 : 1.0;
             dev.compute_index = static_cast<double>(dev.compute_units) * (dev.clock_freq_mhz / 1000.0) * ipc_multiplier;
 
             int score = static_cast<int>(dev.compute_index * 1000.0);

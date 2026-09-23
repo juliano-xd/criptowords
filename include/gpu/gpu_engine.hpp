@@ -11,6 +11,7 @@
 #endif
 
 #include "gpu_info.hpp"
+#include <array>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -45,7 +46,7 @@ public:
         return active_device_.has_value() ? &active_device_.value() : nullptr;
     }
     
-    static constexpr size_t NUM_SLOTS = 2;
+    static constexpr size_t NUM_SLOTS = 3;
 
     bool pbkdf2_batch(const std::vector<uint8_t>& passwords, 
                       const std::vector<uint32_t>& pass_lens, 
@@ -58,7 +59,7 @@ public:
                                uint32_t num_hashes,
                                GpuExecutionMetrics& metrics);
 
-    // Métodos do pipeline assíncrono Double-Buffering
+    // Métodos do pipeline assíncrono Triple-Buffering
     bool enqueue_batch_async(size_t slot,
                              const std::vector<uint8_t>& passwords,
                              const std::vector<uint32_t>& pass_lens,
@@ -89,18 +90,18 @@ private:
     std::optional<gpu::DiscoveredDevice> active_device_;
 
     cl_context context_ = nullptr;
-    cl_command_queue queue_ = nullptr;
     cl_program pbkdf2_prog_ = nullptr;
-    cl_kernel pbkdf2_kernel_ = nullptr;
+    std::array<cl_command_queue, NUM_SLOTS> queue_ = {nullptr, nullptr, nullptr};
+    std::array<cl_kernel, NUM_SLOTS> pbkdf2_kernel_ = {nullptr, nullptr, nullptr};
 
-    cl_mem d_passwords_[NUM_SLOTS] = {nullptr, nullptr};
-    cl_mem d_pass_lens_[NUM_SLOTS] = {nullptr, nullptr};
-    cl_mem d_out_seeds_[NUM_SLOTS] = {nullptr, nullptr};
+    std::array<cl_mem, NUM_SLOTS> d_passwords_ = {nullptr, nullptr, nullptr};
+    std::array<cl_mem, NUM_SLOTS> d_pass_lens_ = {nullptr, nullptr, nullptr};
+    std::array<cl_mem, NUM_SLOTS> d_out_seeds_ = {nullptr, nullptr, nullptr};
     cl_mem d_salt_block_ = nullptr;
-    cl_event ev_kernel_[NUM_SLOTS] = {nullptr, nullptr};
-    cl_event ev_read_[NUM_SLOTS] = {nullptr, nullptr};
-    bool slot_in_flight_[NUM_SLOTS] = {false, false};
-    uint32_t slot_hashes_[NUM_SLOTS] = {0, 0};
+    std::array<cl_event, NUM_SLOTS> ev_kernel_ = {nullptr, nullptr, nullptr};
+    std::array<cl_event, NUM_SLOTS> ev_read_ = {nullptr, nullptr, nullptr};
+    std::array<bool, NUM_SLOTS> slot_in_flight_ = {false, false, false};
+    std::array<uint32_t, NUM_SLOTS> slot_hashes_ = {0, 0, 0};
 
     bool is_unified_memory_ = false;
     size_t local_work_size_ = 32;

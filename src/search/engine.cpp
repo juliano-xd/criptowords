@@ -69,13 +69,14 @@ namespace cryptowords {
 
         void monitor_progress(const SearchState& state, [[maybe_unused]] size_t num_threads,
                               std::chrono::steady_clock::time_point start,
-                              double total_comb) {
+                              double total_comb, double math_comb) {
             auto last = start;
             uint64_t last_n = 0;
+            const double prune_ratio = (total_comb > 0 && math_comb > total_comb) ? (math_comb / total_comb) : 1.0;
 
             while (!state.found.load(std::memory_order_relaxed) && !state.all_done.load(std::memory_order_relaxed)) {
-                for (int s = 0; s < 20; ++s) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                for (int s = 0; s < 10; ++s) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
                     if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
                 }
                 if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
@@ -84,7 +85,8 @@ namespace cryptowords {
                 const double dt    = std::chrono::duration<double>(now - last).count();
                 const double elap  = std::chrono::duration<double>(now - start).count();
                 const uint64_t cur = state.tested_count.load(std::memory_order_relaxed);
-                const double spd   = dt > 0 ? static_cast<double>(cur - last_n) / dt : 0.0;
+                const double pbkdf2_spd = dt > 0 ? static_cast<double>(cur - last_n) / dt : 0.0;
+                const double eff_spd    = pbkdf2_spd * prune_ratio;
 
                 const double pct = (total_comb > 0)
                     ? std::clamp((static_cast<double>(cur) / total_comb) * 100.0, 0.0, 100.0)
@@ -98,23 +100,40 @@ namespace cryptowords {
                 std::string empty;
                 for (int i = filled; i < BAR_WIDTH; ++i) empty += "░";
 
-                const double eta_sec = (spd > 1.0 && cur < total_comb)
-                    ? (total_comb - cur) / spd
+                const double eta_sec = (pbkdf2_spd > 1.0 && cur < total_comb)
+                    ? (total_comb - cur) / pbkdf2_spd
                     : -1.0;
 
-                std::string spd_str = format_speed(spd);
                 std::string eta_str = format_eta(eta_sec);
                 std::string elap_str = format_eta(elap);
-                std::string cur_str = format_num(static_cast<double>(cur));
-                std::string tot_str = format_num(total_comb);
 
-                std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;32m%-11s\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
-                             bar.c_str(), empty.c_str(),
-                             pct,
-                             spd_str.c_str(),
-                             eta_str.c_str(),
-                             cur_str.c_str(), tot_str.c_str(),
-                             elap_str.c_str());
+                if (prune_ratio > 1.05) {
+                    std::string eff_spd_str = format_speed(eff_spd);
+                    std::string pbk_spd_str = format_speed(pbkdf2_spd);
+                    std::string cur_space_str = format_num(static_cast<double>(cur) * prune_ratio);
+                    std::string tot_space_str = format_num(math_comb);
+
+                    std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;36m%-11s\033[0m \033[90m(PBKDF2: %s)\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
+                                 bar.c_str(), empty.c_str(),
+                                 pct,
+                                 eff_spd_str.c_str(),
+                                 pbk_spd_str.c_str(),
+                                 eta_str.c_str(),
+                                 cur_space_str.c_str(), tot_space_str.c_str(),
+                                 elap_str.c_str());
+                } else {
+                    std::string spd_str = format_speed(pbkdf2_spd);
+                    std::string cur_str = format_num(static_cast<double>(cur));
+                    std::string tot_str = format_num(total_comb);
+
+                    std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;32m%-11s\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
+                                 bar.c_str(), empty.c_str(),
+                                 pct,
+                                 spd_str.c_str(),
+                                 eta_str.c_str(),
+                                 cur_str.c_str(), tot_str.c_str(),
+                                 elap_str.c_str());
+                }
                 std::fflush(stderr);
 
                 last   = now;
@@ -150,6 +169,7 @@ namespace cryptowords {
 
     void BruteForceEngine::run(ExecutionPipeline& pipeline, size_t num_threads) {
         const double total = pipeline.total_combinations();
+        const double math_total = pipeline.math_combinations();
         if (total < num_threads * 128) num_threads = 1;
 
         print_box_top("EXECUÇÃO DO MOTOR SIMD", DEFAULT_INNER_WIDTH);
@@ -169,7 +189,7 @@ namespace cryptowords {
             workers.emplace_back(&BruteForceEngine::worker, std::ref(pipeline), i, num_threads, std::ref(state));
         }
 
-        std::thread progress(monitor_progress, std::cref(state), num_threads, start, total);
+        std::thread progress(monitor_progress, std::cref(state), num_threads, start, total, math_total);
 
         for (auto& t : workers) t.join();
         state.all_done.store(true, std::memory_order_relaxed);
@@ -180,11 +200,21 @@ namespace cryptowords {
         const double total_sec = elapsed.count();
         const uint64_t total_tested = state.tested_count.load();
         const double avg_spd = (total_sec > 0) ? (static_cast<double>(total_tested) / total_sec) : 0.0;
+        const double prune_ratio = (total > 0 && math_total > total) ? (math_total / total) : 1.0;
+        const double eff_avg_spd = avg_spd * prune_ratio;
 
         print_box_top("ESTATÍSTICAS DA BUSCA", DEFAULT_INNER_WIDTH);
         print_box_line(std::format("Tempo decorrido   : \033[1;37m{:.4f} segundos\033[0m ({})", total_sec, format_eta(total_sec)), DEFAULT_INNER_WIDTH);
-        print_box_line(std::format("Velocidade média  : \033[1;32m{}\033[0m", format_speed(avg_spd)), DEFAULT_INNER_WIDTH);
-        print_box_line(std::format("Total testado     : {} chaves", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
+        if (prune_ratio > 1.05) {
+            print_box_line(std::format("Velocidade Efetiva: \033[1;36m{}\033[0m (Varredura do Espaço com Poda)", format_speed(eff_avg_spd)), DEFAULT_INNER_WIDTH);
+            print_box_line(std::format("Taxa PBKDF2 Silício: \033[1;32m{}\033[0m (Cálculo Pesado 2048 HMAC-SHA512)", format_speed(avg_spd)), DEFAULT_INNER_WIDTH);
+            print_box_line(std::format("Espaço Varrido    : {} combinações [Poda Analítica: {:>5.1f}x]",
+                                       format_num(static_cast<double>(total_tested) * prune_ratio), prune_ratio), DEFAULT_INNER_WIDTH);
+            print_box_line(std::format("Chaves PBKDF2 OK  : {} sementes derivadas", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
+        } else {
+            print_box_line(std::format("Velocidade média  : \033[1;32m{}\033[0m", format_speed(avg_spd)), DEFAULT_INNER_WIDTH);
+            print_box_line(std::format("Total testado     : {} chaves", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
+        }
         print_box_line(std::format("Checksums OK      : {} chaves válidas", format_num(static_cast<double>(state.valid_count.load()))), DEFAULT_INNER_WIDTH);
         print_box_separator(DEFAULT_INNER_WIDTH);
         if (state.success) {

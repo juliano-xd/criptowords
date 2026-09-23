@@ -13,16 +13,18 @@
 #include "../include/benchmark/benchmark_runner.hpp"
 #include "../include/cli/ui.hpp"
 
-#include <print>
+#include <cstdint>
+#include <span>
 #include <variant>
 #include <cstring>
 
 using namespace cryptowords::ui;
+using namespace std;
 
 static bool is_fully_known(const AppConfig& cfg) {
     for (const auto& w : cfg.mnemonics) {
-        if (!std::holds_alternative<uint16_t>(w) ||
-            std::get<uint16_t>(w) == AppConfig::UNKNOWN_WORD) {
+        if (!holds_alternative<uint16_t>(w) ||
+            get<uint16_t>(w) == AppConfig::UNKNOWN_WORD) {
             return false;
         }
     }
@@ -30,36 +32,36 @@ static bool is_fully_known(const AppConfig& cfg) {
 }
 
 static bool run_derivation_mode(const AppConfig& cfg) {
-    std::vector<uint16_t> ids;
-    ids.reserve(cfg.mnemonics.size());
-    for (const auto& w : cfg.mnemonics) ids.push_back(std::get<uint16_t>(w));
+    vector<uint16_t> ids; ids.reserve(cfg.mnemonics.size());
+
+    for (const auto& w : cfg.mnemonics) ids.push_back(get<uint16_t>(w));
 
     if (cfg.only_valids && !cryptowords::Bip39Deriver::verify_checksum(ids)) {
-        std::println(stderr, "\n[✗] FALHA: A frase semente fornecida possui um Checksum inválido!");
-        std::println(stderr, "    Se você tem certeza disso, rode novamente adicionando a flag --invalid_too");
+        println(stderr, "\n[✗] FALHA: A frase semente fornecida possui um Checksum inválido!");
+        println(stderr, "    Se você tem certeza disso, rode novamente adicionando a flag --invalid_too");
         return false;
     }
 
-    auto* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+    static const secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     const char* pp = cfg.passphrase.empty() ? nullptr : cfg.passphrase.c_str();
 
-    const std::string addr = (cfg.coin == CoinTarget::BTC)
-        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator)
-        : cryptowords::Bip39Deriver::derive_eth_address(ctx, ids, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator);
-    secp256k1_context_destroy(ctx);
+    std::span<const uint16_t> ids_span(ids);
+    const string addr = (cfg.coin == CoinTarget::BTC)
+        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator)
+        : cryptowords::Bip39Deriver::derive_eth_address(*ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator);
 
-    std::print("\n");
+    print("\n");
     print_box_top("DERIVAÇÃO CONCLUÍDA", DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("Moeda           : {}", (cfg.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)")), DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("Tamanho Frase   : {} palavras (Checksum BIP-39 Válido)", ids.size()), DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("Endereço Gerado : \033[1;32m{}\033[0m", addr), DEFAULT_INNER_WIDTH);
+    print_box_line(format("Moeda           : {}", (cfg.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)")), DEFAULT_INNER_WIDTH);
+    print_box_line(format("Tamanho Frase   : {} palavras (Checksum BIP-39 Válido)", ids.size()), DEFAULT_INNER_WIDTH);
+    print_box_line(format("Endereço Gerado : \033[1;32m{}\033[0m", addr), DEFAULT_INNER_WIDTH);
     if (!cfg.passphrase.empty()) {
-        print_box_line(std::format("Senha (Pass)    : \"{}\"", cfg.passphrase), DEFAULT_INNER_WIDTH);
+        print_box_line(format("Senha (Pass)    : \"{}\"", cfg.passphrase), DEFAULT_INNER_WIDTH);
     }
     print_box_bottom(DEFAULT_INNER_WIDTH);
 
-    std::println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");
-    std::println("    [+] Endereço gerado: {}\n", addr);
+    println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");
+    println("    [+] Endereço gerado: {}\n", addr);
     return true;
 }
 
@@ -67,17 +69,17 @@ int main(int argc, char* argv[]) {
     auto raw = CLIParser::parse(argc, argv);
     if (!raw) {
         if (raw.error() == "HELP") return 0;
-        std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
-        std::println(stderr, "    Motivo: {}", raw.error());
-        std::println(stderr, "\nUse '--help' para ver os exemplos de uso.");
+        println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
+        println(stderr, "    Motivo: {}", raw.error());
+        println(stderr, "\nUse '--help' para ver os exemplos de uso.");
         return 1;
     }
 
     auto config = ConfigValidator::validate(*raw);
     if (!config) {
-        std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
-        std::println(stderr, "    Motivo: {}", config.error());
-        std::println(stderr, "\nUse '--help' para ver os exemplos de uso.");
+        println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
+        println(stderr, "    Motivo: {}", config.error());
+        println(stderr, "\nUse '--help' para ver os exemplos de uso.");
         return 1;
     }
     auto cfg = *config;
@@ -114,10 +116,10 @@ int main(int argc, char* argv[]) {
 
         // Pré-calcula o bloco de salt do PBKDF2 com suporte a passphrase
         uint64_t salt_block64[16] = {};
-        std::string salt = "mnemonic" + cfg.passphrase;
+        string salt = "mnemonic" + cfg.passphrase;
         size_t salt_len = salt.size();
         uint8_t s_buf[128] = {};
-        std::memcpy(s_buf, salt.data(), salt_len);
+        memcpy(s_buf, salt.data(), salt_len);
         s_buf[salt_len]     = 0;
         s_buf[salt_len + 1] = 0;
         s_buf[salt_len + 2] = 0;
@@ -125,15 +127,15 @@ int main(int argc, char* argv[]) {
         s_buf[salt_len + 4] = 0x80;
 
         uint64_t s_blk[16];
-        std::memcpy(s_blk, s_buf, 128);
+        memcpy(s_blk, s_buf, 128);
         for (int w = 0; w < 15; ++w) {
             salt_block64[w] = __builtin_bswap64(s_blk[w]);
         }
         salt_block64[15] = static_cast<uint64_t>(128 + salt_len + 4) * 8;
 
         if (!cryptowords::GPUEngine::get_instance().init(cfg.gpu_platform, cfg.gpu_device, cfg.gpu_batch, salt_block64, false, slot_size)) {
-            std::println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO DA GPU");
-            std::println(stderr, "    Motivo: Não foi possível inicializar o dispositivo ou compilar os kernels OpenCL.");
+            println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO DA GPU");
+            println(stderr, "    Motivo: Não foi possível inicializar o dispositivo ou compilar os kernels OpenCL.");
             return 1;
         }
     }
@@ -146,4 +148,3 @@ int main(int argc, char* argv[]) {
     cryptowords::BruteForceEngine::run(pipeline, cfg.num_threads);
     return 0;
 }
-

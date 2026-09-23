@@ -1,5 +1,9 @@
 #pragma once
 #include "../config.hpp"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#include "../math/UInt.hpp"
+#pragma GCC diagnostic pop
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -19,6 +23,10 @@ struct OptimizedMnemonics {
     double math_combinations  = 0.0;
     double total_combinations = 0.0;
     double valid_combinations = 0.0;
+
+    UInt<4> exact_math_combinations  = UInt<4>(1);
+    UInt<4> exact_total_combinations = UInt<4>(1);
+    UInt<4> exact_valid_combinations = UInt<4>(1);
 
     // Prefixo fixo & OTM-09: Fatiamento em N-Slices
     std::string prefix_str;

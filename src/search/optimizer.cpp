@@ -4,6 +4,7 @@
 #include "../../include/crypto/sha256_shani.hpp"
 #include <algorithm>
 #include <numeric>
+#include <bitset>
 #include <cstring>
 #include <cmath>
 #include <bit>
@@ -19,9 +20,10 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             opt.base_mnemonic[i] = id;
             if (id == AppConfig::UNKNOWN_WORD) {
                 opt.unknown_positions.push_back(i);
-                std::vector<uint16_t> full_wheel(2048);
-                std::ranges::iota(full_wheel.begin(), full_wheel.end(), 0);
-                opt.wheels.push_back(std::move(full_wheel));
+                static std::array<uint16_t, 2048> full_wheel_static;
+                static bool init = [](){ std::ranges::iota(full_wheel_static.begin(), full_wheel_static.end(), 0); return true; }();
+                (void)init;
+                opt.wheels.push_back(std::vector<uint16_t>(full_wheel_static.begin(), full_wheel_static.end()));
             }
         } else if (std::holds_alternative<std::vector<uint16_t>>(cfg.mnemonics[i])) {
             opt.base_mnemonic[i] = AppConfig::UNKNOWN_WORD;
@@ -36,16 +38,16 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // OTIMIZAÇÃO 30: Restrição de Não-Repetição (--distinct)
     // ==========================================
     if (cfg.distinct) {
-        std::vector<bool> is_known(2048, false);
+        std::bitset<2048> is_known;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             if (opt.base_mnemonic[i] != AppConfig::UNKNOWN_WORD) {
-                is_known[opt.base_mnemonic[i]] = true;
+                is_known.set(opt.base_mnemonic[i]);
             }
         }
         size_t pruned = 0;
         for (auto& w : opt.wheels) {
             size_t before = w.size();
-            std::erase_if(w, [&](uint16_t id) { return is_known[id]; });
+            std::erase_if(w, [&](uint16_t id) { return is_known.test(id); });
             pruned += (before - w.size());
         }
         if (pruned > 0) {
@@ -56,8 +58,10 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
 
     // Cálculo do Espaço Matemático Bruto Inicial (antes de qualquer poda ou dedução de checksum)
     opt.math_combinations = 1.0;
+    opt.exact_math_combinations = 1;
     for (const auto& w : opt.wheels) {
         opt.math_combinations *= static_cast<double>(w.size());
+        opt.exact_math_combinations *= static_cast<uint64_t>(w.size());
     }
 
     // ==========================================
@@ -138,22 +142,22 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
 
     // Preparação do Bloco Base SHA-256 (N-Slices no Bloco Criptográfico / Two-Sided Memory Patching)
     {
-        uint64_t acc = 0;
+        UInt<1> acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (opt.base_mnemonic[i] == AppConfig::UNKNOWN_WORD) ? 0 : (opt.base_mnemonic[i] & 0x7FF);
-            acc = (acc << 11) | word_val;
+            acc = (acc << 11) | UInt<1>(word_val);
             bits += 11;
             while (bits >= 8 && b_pos < entropy_bytes) {
                 bits -= 8;
-                opt.base_block64[b_pos++] = (acc >> bits) & 0xFF;
+                opt.base_block64[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
             }
-            acc &= (1ULL << bits) - 1;
+            acc &= UInt<1>((1ULL << bits) - 1);
         }
         opt.base_block64[entropy_bytes] = 0x80;
-        uint64_t bit_len_be = __builtin_bswap64(static_cast<uint64_t>(opt.entropy_bits));
-        std::memcpy(opt.base_block64 + 56, &bit_len_be, 8);
+        UInt<1> bit_len_be = __builtin_bswap64(static_cast<uint64_t>(opt.entropy_bits));
+        std::memcpy(opt.base_block64 + 56, &bit_len_be.bits[0], 8);
 
         opt.unknown_bit_offsets.clear();
         for (size_t u : opt.unknown_positions) {
@@ -171,6 +175,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     if (cfg.only_valids && opt.unknown_positions.size() == 1) {
         size_t var_idx = opt.unknown_positions[0];
         std::vector<uint16_t> filtered_wheel;
+        filtered_wheel.reserve(opt.wheels[0].size() / 16 + 1);
         std::vector<uint16_t> test_mn = opt.base_mnemonic;
         for (uint16_t candidate_id : opt.wheels[0]) {
             test_mn[var_idx] = candidate_id;
@@ -201,24 +206,24 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         size_t num_base_states = 1ULL << entropy_bits_in_last_word;
 
         alignas(64) uint8_t base_block[64] = {};
-        uint64_t acc = 0;
+        UInt<1> acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (i == u0 || i == u1) ? 0 : opt.base_mnemonic[i];
-            acc = (acc << 11) | (word_val & 0x7FF);
+            acc = (acc << 11) | UInt<1>(word_val & 0x7FF);
             bits += 11;
             while (bits >= 8) {
                 bits -= 8;
                 if (b_pos < entropy_bytes) {
-                    base_block[b_pos++] = (acc >> bits) & 0xFF;
+                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
                 }
             }
-            acc &= (1ULL << bits) - 1;
+            acc &= UInt<1>((1ULL << bits) - 1);
         }
         base_block[entropy_bytes] = 0x80;
-        uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
-        std::memcpy(base_block + 56, &bit_len_be, 8);
+        UInt<1> bit_len_be = __builtin_bswap64(opt.entropy_bits);
+        std::memcpy(base_block + 56, &bit_len_be.bits[0], 8);
 
         alignas(64) uint8_t block[64];
         std::memcpy(block, base_block, 64);
@@ -287,24 +292,24 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         const uint8_t expected_cs = opt.base_mnemonic[mnemonic_len - 1] & ((1 << checksum_bits) - 1);
 
         alignas(64) uint8_t base_block[64] = {};
-        uint64_t acc = 0;
+        UInt<1> acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (i == u0 || i == u1) ? 0 : opt.base_mnemonic[i];
-            acc = (acc << 11) | (word_val & 0x7FF);
+            acc = (acc << 11) | UInt<1>(word_val & 0x7FF);
             bits += 11;
             while (bits >= 8) {
                 bits -= 8;
                 if (b_pos < entropy_bytes) {
-                    base_block[b_pos++] = (acc >> bits) & 0xFF;
+                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
                 }
             }
-            acc &= (1ULL << bits) - 1;
+            acc &= UInt<1>((1ULL << bits) - 1);
         }
         base_block[entropy_bytes] = 0x80;
-        uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
-        std::memcpy(base_block + 56, &bit_len_be, 8);
+        UInt<1> bit_len_be = __builtin_bswap64(opt.entropy_bits);
+        std::memcpy(base_block + 56, &bit_len_be.bits[0], 8);
 
         alignas(64) uint8_t block[64];
         std::memcpy(block, base_block, 64);
@@ -430,26 +435,37 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
 
     // Cálculo de Combinações Efetivas
     opt.total_combinations = 1.0;
+    opt.exact_total_combinations = 1;
     if (opt.has_valid_pairs) {
         opt.total_combinations = static_cast<double>(opt.valid_pairs.size());
+        opt.exact_total_combinations = UInt<4>(opt.valid_pairs.size());
     } else if (opt.has_streaming_pruning) {
         if (opt.has_cascade_deduction) {
             opt.total_combinations = 1.0;
+            opt.exact_total_combinations = 1;
             for (const auto& w : opt.wheels) {
                 opt.total_combinations *= static_cast<double>(w.size());
+                opt.exact_total_combinations *= static_cast<uint64_t>(w.size());
             }
         } else {
             opt.total_combinations = std::max(1.0, std::round(opt.math_combinations / static_cast<double>(1ULL << checksum_bits)));
+            opt.exact_total_combinations = opt.exact_math_combinations >> static_cast<uint16_t>(checksum_bits);
+            if (opt.exact_total_combinations.eqz()) opt.exact_total_combinations = 1;
         }
     } else {
+        opt.exact_total_combinations = 1;
         for (const auto& w : opt.wheels) {
             opt.total_combinations *= static_cast<double>(w.size());
+            opt.exact_total_combinations *= static_cast<uint64_t>(w.size());
         }
     }
 
     opt.valid_combinations = opt.total_combinations;
+    opt.exact_valid_combinations = opt.exact_total_combinations;
     if (cfg.only_valids && !opt.direct_valid_wheels && !opt.auto_deduce_last_word) {
         opt.valid_combinations = std::max(1.0, std::round(opt.total_combinations / static_cast<double>(1ULL << checksum_bits)));
+        opt.exact_valid_combinations = opt.exact_total_combinations >> static_cast<uint16_t>(checksum_bits);
+        if (opt.exact_valid_combinations.eqz()) opt.exact_valid_combinations = 1;
     }
 
     // ==========================================

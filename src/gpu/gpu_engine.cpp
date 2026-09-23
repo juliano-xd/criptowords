@@ -5,27 +5,30 @@
 #include <print>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <cctype>
 
 namespace cryptowords {
 
 void GPUEngine::cleanup_locked() {
     for (size_t s = 0; s < NUM_SLOTS; ++s) {
-        if (ev_read_[s])     { clReleaseEvent(ev_read_[s]); ev_read_[s] = nullptr; }
-        if (ev_kernel_[s])   { clReleaseEvent(ev_kernel_[s]); ev_kernel_[s] = nullptr; }
-        if (d_passwords_[s]) { clReleaseMemObject(d_passwords_[s]); d_passwords_[s] = nullptr; }
-        if (d_pass_lens_[s]) { clReleaseMemObject(d_pass_lens_[s]); d_pass_lens_[s] = nullptr; }
-        if (d_out_seeds_[s]) { clReleaseMemObject(d_out_seeds_[s]); d_out_seeds_[s] = nullptr; }
+        if (ev_read_[s])       { clReleaseEvent(ev_read_[s]); ev_read_[s] = nullptr; }
+        if (ev_kernel_[s])     { clReleaseEvent(ev_kernel_[s]); ev_kernel_[s] = nullptr; }
+        if (d_passwords_[s])   { clReleaseMemObject(d_passwords_[s]); d_passwords_[s] = nullptr; }
+        if (d_pass_lens_[s])   { clReleaseMemObject(d_pass_lens_[s]); d_pass_lens_[s] = nullptr; }
+        if (d_out_seeds_[s])   { clReleaseMemObject(d_out_seeds_[s]); d_out_seeds_[s] = nullptr; }
+        if (pbkdf2_kernel_[s]) { clReleaseKernel(pbkdf2_kernel_[s]); pbkdf2_kernel_[s] = nullptr; }
+        if (queue_[s])         { clReleaseCommandQueue(queue_[s]); queue_[s] = nullptr; }
         slot_in_flight_[s] = false;
         slot_hashes_[s] = 0;
     }
     if (d_salt_block_) { clReleaseMemObject(d_salt_block_); d_salt_block_ = nullptr; }
-    if (pbkdf2_kernel_) { clReleaseKernel(pbkdf2_kernel_);  pbkdf2_kernel_ = nullptr; }
     if (pbkdf2_prog_)   { clReleaseProgram(pbkdf2_prog_);   pbkdf2_prog_ = nullptr; }
-    if (queue_)         { clReleaseCommandQueue(queue_);    queue_ = nullptr; }
     if (context_)       { clReleaseContext(context_);       context_ = nullptr; }
     initialized_ = false;
     active_device_ = std::nullopt;
 }
+
 
 void GPUEngine::cleanup() {
     std::lock_guard<std::mutex> lock(mu_);
@@ -139,49 +142,110 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
     }
 
     cl_queue_properties q_props[] = { CL_QUEUE_PROPERTIES, CL_QUEUE_PROFILING_ENABLE, 0 };
-    queue_ = clCreateCommandQueueWithProperties(context_, d_id, q_props, &err);
-    if (err != CL_SUCCESS) {
+    for (size_t s = 0; s < NUM_SLOTS; ++s) {
+        queue_[s] = clCreateCommandQueueWithProperties(context_, d_id, q_props, &err);
+        if (err != CL_SUCCESS) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-        queue_ = clCreateCommandQueue(context_, d_id, CL_QUEUE_PROFILING_ENABLE, &err);
+            queue_[s] = clCreateCommandQueue(context_, d_id, CL_QUEUE_PROFILING_ENABLE, &err);
 #pragma GCC diagnostic pop
-        if (err != CL_SUCCESS) {
-            std::println(stderr, "Erro ao criar fila de comandos OpenCL com profiling: {}", err);
-            cleanup_locked();
-            return false;
+            if (err != CL_SUCCESS) {
+                std::println(stderr, "Erro ao criar fila de comandos OpenCL para slot {}: {}", s, err);
+                cleanup_locked();
+                return false;
+            }
         }
     }
 
-    std::string pbkdf2_src = load_kernel("src/gpu/kernels/pbkdf2_gpu.cl");
-    if (pbkdf2_src.empty()) {
-        std::println(stderr, "Erro: Fonte do kernel OpenCL vazio!");
-        cleanup_locked();
-        return false;
+    auto sanitize_str = [](std::string_view s) {
+        std::string res;
+        for (char c : s) {
+            if (std::isalnum(static_cast<unsigned char>(c))) res += c;
+            else res += '_';
+        }
+        return res;
+    };
+
+    const char* options = "-cl-mad-enable -cl-fast-relaxed-math";
+    const char* home_env = std::getenv("HOME");
+
+    std::filesystem::path cache_dir = std::filesystem::path(home_env ? home_env : "/tmp") / ".cache" / "criptowords";
+    std::error_code ec;
+    std::filesystem::create_directories(cache_dir, ec);
+
+    std::string cache_filename = "cl_" + sanitize_str(dev.device_name) + "_" + sanitize_str(dev.version) + ".bin";
+    std::filesystem::path cache_path = cache_dir / cache_filename;
+
+    bool loaded_from_cache = false;
+    if (std::filesystem::exists(cache_path, ec)) {
+        std::ifstream bin_file(cache_path, std::ios::binary | std::ios::ate);
+        if (bin_file.is_open()) {
+            std::streamsize bin_size = bin_file.tellg();
+            if (bin_size > 0) {
+                bin_file.seekg(0, std::ios::beg);
+                std::vector<unsigned char> binary(bin_size);
+                if (bin_file.read(reinterpret_cast<char*>(binary.data()), bin_size)) {
+                    const unsigned char* bin_ptr = binary.data();
+                    size_t s = static_cast<size_t>(bin_size);
+                    cl_int bin_status = CL_SUCCESS;
+                    pbkdf2_prog_ = clCreateProgramWithBinary(context_, 1, &d_id, &s, &bin_ptr, &bin_status, &err);
+                    if (err == CL_SUCCESS && bin_status == CL_SUCCESS) {
+                        err = clBuildProgram(pbkdf2_prog_, 1, &d_id, options, nullptr, nullptr);
+                        if (err == CL_SUCCESS) {
+                            loaded_from_cache = true;
+                        } else {
+                            clReleaseProgram(pbkdf2_prog_);
+                            pbkdf2_prog_ = nullptr;
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    const char* src_ptr = pbkdf2_src.c_str();
-    pbkdf2_prog_ = clCreateProgramWithSource(context_, 1, &src_ptr, nullptr, &err);
-    if (err != CL_SUCCESS) {
-        std::println(stderr, "Erro ao criar programa OpenCL: {}", err);
-        cleanup_locked();
-        return false;
+    if (!loaded_from_cache) {
+        std::string pbkdf2_src = load_kernel("src/gpu/kernels/pbkdf2_gpu.cl");
+        if (pbkdf2_src.empty()) {
+            std::println(stderr, "Erro: Fonte do kernel OpenCL vazio!");
+            cleanup_locked();
+            return false;
+        }
+
+        const char* src_ptr = pbkdf2_src.c_str();
+        pbkdf2_prog_ = clCreateProgramWithSource(context_, 1, &src_ptr, nullptr, &err);
+        if (err != CL_SUCCESS) {
+            std::println(stderr, "Erro ao criar programa OpenCL: {}", err);
+            cleanup_locked();
+            return false;
+        }
+
+        err = clBuildProgram(pbkdf2_prog_, 1, &d_id, options, nullptr, nullptr);
+        if (err != CL_SUCCESS) {
+            size_t log_size = 0;
+            clGetProgramBuildInfo(pbkdf2_prog_, d_id, CL_PROGRAM_BUILD_LOG, 0, nullptr, &log_size);
+            std::string log(log_size, '\0');
+            clGetProgramBuildInfo(pbkdf2_prog_, d_id, CL_PROGRAM_BUILD_LOG, log_size, log.data(), nullptr);
+            std::println(stderr, "Erro ao compilar kernel OpenCL PBKDF2:\n{}", log);
+            cleanup_locked();
+            return false;
+        }
+
+        size_t bin_size = 0;
+        clGetProgramInfo(pbkdf2_prog_, CL_PROGRAM_BINARY_SIZES, sizeof(size_t), &bin_size, nullptr);
+        if (bin_size > 0) {
+            std::vector<unsigned char> binary(bin_size);
+            unsigned char* bin_ptr = binary.data();
+            clGetProgramInfo(pbkdf2_prog_, CL_PROGRAM_BINARIES, sizeof(unsigned char*), &bin_ptr, nullptr);
+            std::ofstream out_file(cache_path, std::ios::binary | std::ios::trunc);
+            if (out_file.is_open()) {
+                out_file.write(reinterpret_cast<const char*>(binary.data()), bin_size);
+            }
+        }
     }
 
-    const char* options = "-cl-mad-enable";
-    err = clBuildProgram(pbkdf2_prog_, 1, &d_id, options, nullptr, nullptr);
+    pbkdf2_kernel_[0] = clCreateKernel(pbkdf2_prog_, "pbkdf2_batch", &err);
     if (err != CL_SUCCESS) {
-        size_t log_size = 0;
-        clGetProgramBuildInfo(pbkdf2_prog_, d_id, CL_PROGRAM_BUILD_LOG, 0, nullptr, &log_size);
-        std::string log(log_size, '\0');
-        clGetProgramBuildInfo(pbkdf2_prog_, d_id, CL_PROGRAM_BUILD_LOG, log_size, log.data(), nullptr);
-        std::println(stderr, "Erro ao compilar kernel OpenCL PBKDF2:\n{}", log);
-        cleanup_locked();
-        return false;
-    }
-
-    pbkdf2_kernel_ = clCreateKernel(pbkdf2_prog_, "pbkdf2_batch", &err);
-    if (err != CL_SUCCESS) {
-        std::println(stderr, "Erro ao criar kernel pbkdf2_batch: {}", err);
+        std::println(stderr, "Erro ao criar kernel pbkdf2_batch para slot 0: {}", err);
         cleanup_locked();
         return false;
     }
@@ -193,14 +257,23 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
 
     // Ajuste dinâmico de workgroup size para máxima ocupação de wavefronts (Wave32/Wave64)
     size_t pref_mul = 0;
-    clGetKernelWorkGroupInfo(pbkdf2_kernel_, d_id, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE, sizeof(pref_mul), &pref_mul, nullptr);
+    clGetKernelWorkGroupInfo(pbkdf2_kernel_[0], d_id, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE, sizeof(pref_mul), &pref_mul, nullptr);
     if (pref_mul > 0 && pref_mul <= dev.max_work_group) {
         local_work_size_ = pref_mul;
     } else {
         local_work_size_ = (dev.max_work_group >= 64) ? 64 : dev.max_work_group;
     }
 
-    // Alocar os buffers globais com suporte a double-buffering e memória unificada
+    for (size_t s = 1; s < NUM_SLOTS; ++s) {
+        pbkdf2_kernel_[s] = clCreateKernel(pbkdf2_prog_, "pbkdf2_batch", &err);
+        if (err != CL_SUCCESS) {
+            std::println(stderr, "Erro ao criar kernel pbkdf2_batch para slot {}: {}", s, err);
+            cleanup_locked();
+            return false;
+        }
+    }
+
+    // Alocar os buffers globais com suporte a Triple-Buffering e memória unificada
     cl_mem_flags flags_in = CL_MEM_READ_ONLY;
     cl_mem_flags flags_out = CL_MEM_WRITE_ONLY;
     if (is_unified_memory_) {
@@ -239,13 +312,14 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
     }
 
     uint32_t slot_sz_u32 = static_cast<uint32_t>(slot_size_);
-    err  = clSetKernelArg(pbkdf2_kernel_, 4, sizeof(cl_mem), &d_salt_block_);
-    err |= clSetKernelArg(pbkdf2_kernel_, 5, sizeof(uint32_t), &slot_sz_u32);
-
-    if (err != CL_SUCCESS) {
-        std::println(stderr, "Erro ao fixar argumentos estáticos do kernel: {}", err);
-        cleanup_locked();
-        return false;
+    for (size_t s = 0; s < NUM_SLOTS; ++s) {
+        err  = clSetKernelArg(pbkdf2_kernel_[s], 4, sizeof(cl_mem), &d_salt_block_);
+        err |= clSetKernelArg(pbkdf2_kernel_[s], 5, sizeof(uint32_t), &slot_sz_u32);
+        if (err != CL_SUCCESS) {
+            std::println(stderr, "Erro ao fixar argumentos estáticos do kernel para slot {}: {}", s, err);
+            cleanup_locked();
+            return false;
+        }
     }
 
     initialized_ = true;
@@ -274,36 +348,40 @@ bool GPUEngine::enqueue_batch_async(size_t slot,
         slot_in_flight_[slot] = false;
     }
 
+    cl_command_queue q = queue_[slot];
+    cl_kernel k = pbkdf2_kernel_[slot];
+
     cl_int err = CL_SUCCESS;
-    err |= clEnqueueWriteBuffer(queue_, d_passwords_[slot], CL_FALSE, 0, num_hashes * slot_size_, passwords.data(), 0, nullptr, nullptr);
-    err |= clEnqueueWriteBuffer(queue_, d_pass_lens_[slot], CL_FALSE, 0, num_hashes * sizeof(uint32_t), pass_lens.data(), 0, nullptr, nullptr);
+    err |= clEnqueueWriteBuffer(q, d_passwords_[slot], CL_FALSE, 0, num_hashes * slot_size_, passwords.data(), 0, nullptr, nullptr);
+    err |= clEnqueueWriteBuffer(q, d_pass_lens_[slot], CL_FALSE, 0, num_hashes * sizeof(uint32_t), pass_lens.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) return false;
 
     uint32_t slot_sz_u32 = static_cast<uint32_t>(slot_size_);
-    err  = clSetKernelArg(pbkdf2_kernel_, 0, sizeof(cl_mem), &d_passwords_[slot]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 1, sizeof(cl_mem), &d_pass_lens_[slot]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 2, sizeof(uint32_t), &num_hashes);
-    err |= clSetKernelArg(pbkdf2_kernel_, 3, sizeof(cl_mem), &d_out_seeds_[slot]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 4, sizeof(cl_mem), &d_salt_block_);
-    err |= clSetKernelArg(pbkdf2_kernel_, 5, sizeof(uint32_t), &slot_sz_u32);
+    err  = clSetKernelArg(k, 0, sizeof(cl_mem), &d_passwords_[slot]);
+    err |= clSetKernelArg(k, 1, sizeof(cl_mem), &d_pass_lens_[slot]);
+    err |= clSetKernelArg(k, 2, sizeof(uint32_t), &num_hashes);
+    err |= clSetKernelArg(k, 3, sizeof(cl_mem), &d_out_seeds_[slot]);
+    err |= clSetKernelArg(k, 4, sizeof(cl_mem), &d_salt_block_);
+    err |= clSetKernelArg(k, 5, sizeof(uint32_t), &slot_sz_u32);
     if (err != CL_SUCCESS) return false;
 
     size_t local_sz = local_work_size_;
     size_t global_sz = ((num_hashes + local_sz - 1) / local_sz) * local_sz;
 
-    err = clEnqueueNDRangeKernel(queue_, pbkdf2_kernel_, 1, nullptr, &global_sz, &local_sz, 0, nullptr, &ev_kernel_[slot]);
+    err = clEnqueueNDRangeKernel(q, k, 1, nullptr, &global_sz, &local_sz, 0, nullptr, &ev_kernel_[slot]);
     if (err != CL_SUCCESS) return false;
 
     if (out_seeds_ptr) {
-        err = clEnqueueReadBuffer(queue_, d_out_seeds_[slot], CL_FALSE, 0, num_hashes * 64, out_seeds_ptr, 0, nullptr, &ev_read_[slot]);
+        err = clEnqueueReadBuffer(q, d_out_seeds_[slot], CL_FALSE, 0, num_hashes * 64, out_seeds_ptr, 0, nullptr, &ev_read_[slot]);
         if (err != CL_SUCCESS) return false;
     }
 
     slot_in_flight_[slot] = true;
     slot_hashes_[slot] = num_hashes;
-    clFlush(queue_);
+    clFlush(q);
     return true;
 }
+
 
 bool GPUEngine::wait_batch(size_t slot) {
     if (slot >= NUM_SLOTS) return false;
@@ -358,27 +436,28 @@ bool GPUEngine::pbkdf2_batch_profiled(const std::vector<uint8_t>& passwords,
     cl_event ev_kernel = nullptr;
     cl_event ev_read = nullptr;
 
-    err |= clEnqueueWriteBuffer(queue_, d_passwords_[0], CL_FALSE, 0, num_hashes * slot_size_, passwords.data(), 0, nullptr, &ev_write_pw);
-    err |= clEnqueueWriteBuffer(queue_, d_pass_lens_[0], CL_FALSE, 0, num_hashes * sizeof(uint32_t), pass_lens.data(), 0, nullptr, &ev_write_len);
+    err |= clEnqueueWriteBuffer(queue_[0], d_passwords_[0], CL_FALSE, 0, num_hashes * slot_size_, passwords.data(), 0, nullptr, &ev_write_pw);
+    err |= clEnqueueWriteBuffer(queue_[0], d_pass_lens_[0], CL_FALSE, 0, num_hashes * sizeof(uint32_t), pass_lens.data(), 0, nullptr, &ev_write_len);
     if (err != CL_SUCCESS) return false;
 
     uint32_t slot_sz_u32 = static_cast<uint32_t>(slot_size_);
-    err  = clSetKernelArg(pbkdf2_kernel_, 0, sizeof(cl_mem), &d_passwords_[0]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 1, sizeof(cl_mem), &d_pass_lens_[0]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 2, sizeof(uint32_t), &num_hashes);
-    err |= clSetKernelArg(pbkdf2_kernel_, 3, sizeof(cl_mem), &d_out_seeds_[0]);
-    err |= clSetKernelArg(pbkdf2_kernel_, 4, sizeof(cl_mem), &d_salt_block_);
-    err |= clSetKernelArg(pbkdf2_kernel_, 5, sizeof(uint32_t), &slot_sz_u32);
+    err  = clSetKernelArg(pbkdf2_kernel_[0], 0, sizeof(cl_mem), &d_passwords_[0]);
+    err |= clSetKernelArg(pbkdf2_kernel_[0], 1, sizeof(cl_mem), &d_pass_lens_[0]);
+    err |= clSetKernelArg(pbkdf2_kernel_[0], 2, sizeof(uint32_t), &num_hashes);
+    err |= clSetKernelArg(pbkdf2_kernel_[0], 3, sizeof(cl_mem), &d_out_seeds_[0]);
+    err |= clSetKernelArg(pbkdf2_kernel_[0], 4, sizeof(cl_mem), &d_salt_block_);
+    err |= clSetKernelArg(pbkdf2_kernel_[0], 5, sizeof(uint32_t), &slot_sz_u32);
     if (err != CL_SUCCESS) return false;
 
     size_t local_work_size = local_work_size_;
     size_t global_work_size = ((num_hashes + local_work_size - 1) / local_work_size) * local_work_size;
 
-    err = clEnqueueNDRangeKernel(queue_, pbkdf2_kernel_, 1, nullptr, &global_work_size, &local_work_size, 0, nullptr, &ev_kernel);
+    err = clEnqueueNDRangeKernel(queue_[0], pbkdf2_kernel_[0], 1, nullptr, &global_work_size, &local_work_size, 0, nullptr, &ev_kernel);
     if (err != CL_SUCCESS) return false;
 
-    err = clEnqueueReadBuffer(queue_, d_out_seeds_[0], CL_TRUE, 0, num_hashes * 64, out_seeds.data(), 0, nullptr, &ev_read);
+    err = clEnqueueReadBuffer(queue_[0], d_out_seeds_[0], CL_TRUE, 0, num_hashes * 64, out_seeds.data(), 0, nullptr, &ev_read);
     if (err != CL_SUCCESS) return false;
+
 
     cl_ulong pw_start = 0, pw_end = 0, len_start = 0, len_end = 0;
     cl_ulong k_start = 0, k_end = 0, r_start = 0, r_end = 0;

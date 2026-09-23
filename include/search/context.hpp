@@ -26,13 +26,14 @@ struct PipelineThreadContext {
     alignas(64) uint64_t salt_block64[16] = {};
     bool    prefix_initialized = false;
 
-    secp256k1_context* ctx = nullptr;
+    const secp256k1_context* ctx = nullptr;
 
     std::vector<size_t>   state;
     std::vector<uint16_t> current_ids;
     size_t thread_idx = 0;
     size_t step_size = 1;
     size_t pair_idx  = 0;
+    size_t pair_end  = 0;
     bool   is_done   = false;
 
     // OTM-03 / Generalização Afim em F_2^C (K >= 3)
@@ -48,9 +49,7 @@ struct PipelineThreadContext {
     size_t local_tested = 0;
     size_t local_valid  = 0;
 
-    ~PipelineThreadContext() {
-        if (ctx) secp256k1_context_destroy(ctx);
-    }
+    ~PipelineThreadContext() = default;
 };
 
 } // namespace cryptowords

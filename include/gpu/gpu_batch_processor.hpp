@@ -8,6 +8,8 @@
 #include <cstring>
 #include <mutex>
 #include <print>
+#include <thread>
+#include <algorithm>
 
 namespace cryptowords {
 
@@ -30,7 +32,21 @@ public:
                            cfg.separator == "\xE3\x80\x80");
             slot_size_ = (is_cjk || cfg.mnemonics.size() >= 21) ? 512 : (cfg.mnemonics.size() > 12 ? 256 : 128);
         }
+
+        fast_wl_.resize(cfg.wordlist.size());
+        for (size_t i = 0; i < cfg.wordlist.size(); ++i) {
+            fast_wl_[i].data = cfg.wordlist[i].data();
+            fast_wl_[i].len = static_cast<uint32_t>(cfg.wordlist[i].size());
+        }
     }
+
+    struct WordView {
+        const char* data = nullptr;
+        uint32_t len = 0;
+    };
+    std::vector<WordView> fast_wl_;
+
+    static constexpr size_t NUM_SLOTS = 3;
 
     struct GPUSlotData {
         std::vector<uint16_t> mnem_batch; // [batch_capacity_ * 24]
@@ -42,13 +58,13 @@ public:
     };
 
     struct GPUContext {
-        GPUSlotData slots[2];
+        GPUSlotData slots[NUM_SLOTS];
         size_t active_slot = 0;
     };
 
     thread_local static GPUContext gpu_ctx;
 
-    void reap_and_verify_slot(size_t slot, PipelineThreadContext& ctx, const AppConfig& cfg, const OptimizedMnemonics& opt,
+    void reap_and_verify_slot(size_t slot, PipelineThreadContext &ctx, const AppConfig& cfg, const OptimizedMnemonics& opt,
                               std::atomic<bool>& found, std::atomic<uint64_t>& tested_count, std::atomic<uint64_t>& valid_count,
                               std::mutex& result_mutex, bool& success, std::vector<uint16_t>& result_mnemonic) {
         auto& s_data = gpu_ctx.slots[slot];
@@ -68,29 +84,76 @@ public:
         uint16_t* base_mnem_ptr = s_data.mnem_batch.data();
         size_t mlen = opt.base_mnemonic.size();
 
-        for (size_t b = 0; b < s_data.current_count; ++b) {
-            if (found.load(std::memory_order_relaxed)) break;
+        const size_t total_keys = s_data.current_count;
+        const unsigned int hw_threads = std::thread::hardware_concurrency();
+        const size_t num_workers = std::clamp(hw_threads, 1u, 128u);
 
-            bool is_match = false;
-            if (cfg.coin == CoinTarget::BTC) {
-                is_match = Bip39Deriver::check_btc_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash);
-            } else {
-                is_match = Bip39Deriver::check_eth_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash);
-            }
+        if (total_keys < 1024 || num_workers <= 1) {
+            for (size_t b = 0; b < total_keys; ++b) {
+                if (found.load(std::memory_order_relaxed)) break;
 
-            if (is_match) {
-                bool expected = false;
-                if (found.compare_exchange_strong(expected, true)) {
-                    std::lock_guard<std::mutex> lock(result_mutex);
-                    success = true;
-                    result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
+                bool is_match = false;
+                if (cfg.coin == CoinTarget::BTC) {
+                    is_match = Bip39Deriver::check_btc_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash);
+                } else {
+                    std::array<u8, 64> seed64;
+                    std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
+                    is_match = Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
                 }
-                break;
+
+                if (is_match) {
+                    bool expected = false;
+                    if (found.compare_exchange_strong(expected, true)) {
+                        std::lock_guard<std::mutex> lock(result_mutex);
+                        success = true;
+                        result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
+                    }
+                    break;
+                }
             }
+        } else {
+            const size_t chunk = (total_keys + num_workers - 1) / num_workers;
+            std::vector<std::thread> workers;
+            workers.reserve(num_workers);
+
+            for (size_t w = 0; w < num_workers; ++w) {
+                const size_t start_b = w * chunk;
+                const size_t end_b   = std::min(start_b + chunk, total_keys);
+                if (start_b >= end_b) break;
+
+                workers.emplace_back([&, start_b, end_b]() {
+                    for (size_t b = start_b; b < end_b; ++b) {
+                        if (found.load(std::memory_order_relaxed)) return;
+
+                        std::array<u8, 64> seed64;
+                        std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
+                        bool is_match = (cfg.coin == CoinTarget::BTC)
+                            ? Bip39Deriver::check_btc_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash)
+                            : Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
+
+                        if (is_match) {
+                            bool expected = false;
+                            if (found.compare_exchange_strong(expected, true)) {
+                                std::lock_guard<std::mutex> lock(result_mutex);
+                                success = true;
+                                result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
+                            }
+                            return;
+                        }
+                    }
+                });
+            }
+            for (auto& t : workers) t.join();
         }
 
         tested_count.fetch_add(s_data.current_count, std::memory_order_relaxed);
-        valid_count.fetch_add(s_data.current_count, std::memory_order_relaxed);
+        // Só podemos contar como "checksum OK" as chaves que passaram pelo filtro
+        // de enqueue (cfg.only_valids). Com --invalid-too a GPU também processa
+        // chaves de checksum inválido; somar current_count incondicionalmente
+        // inflava o contador de "chaves válidas" (100% do lote virava válido).
+        if (cfg.only_valids) {
+            valid_count.fetch_add(s_data.current_count, std::memory_order_relaxed);
+        }
         s_data.current_count = 0;
     }
 
@@ -135,20 +198,28 @@ public:
         }
 
         size_t b = cur_data.current_count;
-        std::copy(ctx.current_ids.begin(), ctx.current_ids.begin() + mlen, cur_data.mnem_batch.begin() + b * 24);
+        std::memcpy(cur_data.mnem_batch.data() + b * 24, ctx.current_ids.data(), mlen * sizeof(uint16_t));
 
         char* ptr = reinterpret_cast<char*>(cur_data.pw_batch.data()) + b * slot_size_;
         std::memcpy(ptr, opt.prefix_str.data(), opt.prefix_str.size());
         char* start_ptr = ptr;
         ptr += opt.prefix_str.size();
 
+        const bool single_byte_sep = (cfg.separator.size() == 1);
+        const char sep_c = single_byte_sep ? cfg.separator[0] : ' ';
+
         for (size_t i = opt.prefix_words; i < mlen; ++i) {
-            const std::string& w = cfg.wordlist[ctx.current_ids[i]];
-            std::memcpy(ptr, w.data(), w.size());
-            ptr += w.size();
+            uint16_t wid = ctx.current_ids[i];
+            const auto& wv = fast_wl_[wid];
+            std::memcpy(ptr, wv.data, wv.len);
+            ptr += wv.len;
             if (__builtin_expect(i + 1 < mlen, 1)) {
-                std::memcpy(ptr, cfg.separator.data(), cfg.separator.size());
-                ptr += cfg.separator.size();
+                if (single_byte_sep) {
+                    *ptr++ = sep_c;
+                } else {
+                    std::memcpy(ptr, cfg.separator.data(), cfg.separator.size());
+                    ptr += cfg.separator.size();
+                }
             }
         }
         cur_data.pw_lens[b] = static_cast<uint32_t>(ptr - start_ptr);
@@ -160,13 +231,13 @@ public:
             engine.enqueue_batch_async(cur_slot, cur_data.pw_batch, cur_data.pw_lens, static_cast<uint32_t>(cur_data.current_count), cur_data.seed_out.data());
             cur_data.in_flight = true;
 
-            // 2. Alterna para o outro slot
-            size_t other_slot = 1 - cur_slot;
-            gpu_ctx.active_slot = other_slot;
+            // 2. Alterna para o próximo slot (Triple-Buffering)
+            size_t next_slot = (cur_slot + 1) % NUM_SLOTS;
+            gpu_ctx.active_slot = next_slot;
 
-            // 3. Se o outro slot já estava executando na GPU, colhe e verifica seus alvos agora!
-            if (gpu_ctx.slots[other_slot].in_flight) {
-                reap_and_verify_slot(other_slot, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+            // 3. Se o próximo slot já estava executando na GPU, colhe e verifica seus alvos agora para liberá-lo!
+            if (gpu_ctx.slots[next_slot].in_flight) {
+                reap_and_verify_slot(next_slot, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
             }
         }
     }
@@ -187,13 +258,14 @@ public:
             cur_data.in_flight = true;
         }
 
-        // Colhe ambos os slots
-        for (size_t s = 0; s < 2; ++s) {
+        // Colhe todos os slots em voo
+        for (size_t s = 0; s < NUM_SLOTS; ++s) {
             if (gpu_ctx.slots[s].in_flight) {
                 reap_and_verify_slot(s, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
             }
         }
     }
+
 };
 
 inline thread_local GPUBatchProcessor::GPUContext GPUBatchProcessor::gpu_ctx;

@@ -10,7 +10,9 @@
 #include "../crypto/sha256.hpp"
 #include "../crypto/sha256_shani.hpp"
 
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -110,9 +112,11 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
 
         for (size_t b = 0; b < ctx.valid_batch_sz; ++b) {
+            std::array<u8, 64> seed64;
+            std::memcpy(seed64.data(), ctx.seed + b*64, 64);
             const bool is_match = (cfg.coin == CoinTarget::BTC)
                 ? Bip39Deriver::check_btc_target_from_seed(ctx.ctx, ctx.seed + b*64, ctx.decoded_target, opt.target_fast_hash)
-                : Bip39Deriver::check_eth_target_from_seed(ctx.ctx, ctx.seed + b*64, ctx.decoded_target, opt.target_fast_hash);
+                : Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
 
             if (is_match) {
                 bool expected = false;
@@ -126,7 +130,7 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
 
         ctx.local_valid += ctx.valid_batch_sz;
-        if (ctx.local_tested >= 1024) {
+        if (ctx.local_tested >= 64) {
             tested_count += ctx.local_tested;
             valid_count  += ctx.local_valid;
             ctx.local_tested = 0;
@@ -151,8 +155,8 @@ class SimdBatchProcessor : public IBatchProcessor {
             if constexpr (Arch == SimdArch::SSE) {
                 SHA256_SSE_State s1, s2;
                 sha256_init_sse(&s1); sha256_init_sse(&s2);
-                alignas(64) uint32_t blocks1[16][4] = {};
-                alignas(64) uint32_t blocks2[16][4] = {};
+                alignas(64) array<array<uint32_t, 16>, 4> blocks1 = {};
+                alignas(64) array<array<uint32_t, 16>, 4> blocks2 = {};
 
                 for (int b = 0; b < 8; ++b) {
                     uint8_t entropy[128] = {};
@@ -280,8 +284,8 @@ class SimdBatchProcessor : public IBatchProcessor {
                     original_checksums[b] = static_cast<uint8_t>(acc & ((1ULL << checksum_bits) - 1));
                     entropy[entropy_bytes] = 0x80;
 
-                    uint32_t W_local[16] = {};
-                    std::memcpy(W_local, entropy, 64);
+                    std::array<uint32_t, 16> W_local = {};
+                    std::memcpy(W_local.data(), entropy, 64);
                     W_local[15] = __builtin_bswap32(entropy_bits);
                     for (int w = 0; w < 16; ++w) {
                         if (b < 8) blocks1[w][b]   = __builtin_bswap32(W_local[w]);
@@ -350,8 +354,8 @@ class SimdBatchProcessor : public IBatchProcessor {
                     original_checksums[b] = static_cast<uint8_t>(acc & ((1ULL << checksum_bits) - 1));
                     entropy[entropy_bytes] = 0x80;
 
-                    uint32_t W_local[16] = {};
-                    std::memcpy(W_local, entropy, 64);
+                    std::array<uint32_t, 16> W_local = {};
+                    std::memcpy(W_local.data(), entropy, 64);
                     W_local[15] = __builtin_bswap32(entropy_bits);
                     for (int w = 0; w < 16; ++w) {
                         if (b < 16) blocks1[w][b]    = __builtin_bswap32(W_local[w]);
@@ -471,7 +475,7 @@ public:
                              std::atomic<uint64_t>& valid_count, std::mutex& result_mutex,
                              bool& success, std::vector<uint16_t>& result_mnemonic) override {
         ++ctx.local_tested;
-        if (ctx.local_tested >= 1024) {
+        if (ctx.local_tested >= 64) {
             tested_count += ctx.local_tested;
             valid_count  += ctx.local_valid;
             ctx.local_tested = 0;
