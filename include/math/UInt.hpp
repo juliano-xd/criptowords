@@ -202,7 +202,7 @@ public:
                 }
             } else {
                 for (size_t i = 0; i < len && i < N * 8; ++i) {
-                    const size_t byte_pos = N * 8 - 1 - i;
+                    const size_t byte_pos = (len <= N * 8) ? (len - 1 - i) : (N * 8 - 1 - i);
                     const size_t limb_idx = byte_pos >> 3;
                     const size_t bit_idx = byte_pos & 7;
                     bits[limb_idx] |= static_cast<u64>(ptr[i]) << (bit_idx << 3);
@@ -369,7 +369,7 @@ public:
             } else {
                 std::memset(ptr, 0, len);
                 for (size_t i = 0; i < len && i < N * 8; ++i) {
-                    const size_t byte_pos = N * 8 - 1 - i;
+                    const size_t byte_pos = (len <= N * 8) ? (len - 1 - i) : (N * 8 - 1 - i);
                     const size_t limb_idx = byte_pos >> 3;
                     const size_t bit_idx = byte_pos & 7;
                     ptr[i] = static_cast<u8>((bits[limb_idx] >> (bit_idx << 3)) & 0xFF);
