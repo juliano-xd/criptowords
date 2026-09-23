@@ -35,15 +35,17 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         HMAC_SHA512 h_iter;
         h_iter.preset(password, password_len, HASH_LEN);
 
-        auto* t_words = reinterpret_cast<uint64_t*>(T.data());
-        const auto* u_words = reinterpret_cast<const uint64_t*>(U.data());
+        UInt<8> T_u;
+        std::memcpy(T_u.bits.data(), T.data(), 64);
+        T_u.set_mode(Backend::SIMD);
 
         for (int i = 1; i < iterations; ++i) {
             h_iter.complete(U.data(), HASH_LEN, U);
-            for (int j = 0; j < 8; ++j) {
-                t_words[j] ^= u_words[j];
-            }
+            UInt<8> U_u;
+            std::memcpy(U_u.bits.data(), U.data(), 64);
+            T_u ^= U_u;
         }
+        std::memcpy(T.data(), T_u.bits.data(), 64);
     }
 
     std::memcpy(out, T.data(), std::min<size_t>(HASH_LEN, out_len));

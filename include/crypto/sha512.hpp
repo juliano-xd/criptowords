@@ -404,12 +404,38 @@ public:
         byte* out, std::size_t count) const noexcept
     {
         const auto* base = static_cast<const byte*>(suffixes);
-        for (std::size_t i = 0; i < count; ++i)
+        std::size_t i = 0;
+        for (; i + 1 < count; i += 2) {
+            complete(base + i * stride, out + i * digest_size);
+            complete(base + (i + 1) * stride, out + (i + 1) * digest_size);
+        }
+        for (; i < count; ++i)
             complete(base + i * stride, out + i * digest_size);
     }
 
-    static constexpr unsigned simd_lanes() noexcept { return 1; }
-    static constexpr const char* simd_name() noexcept { return "scalar"; }
+    static constexpr unsigned simd_lanes() noexcept {
+#if defined(__AVX512F__)
+        return 8;
+#elif defined(__AVX2__)
+        return 4;
+#elif defined(__SSE4_1__)
+        return 2;
+#else
+        return 1;
+#endif
+    }
+
+    static constexpr const char* simd_name() noexcept {
+#if defined(__AVX512F__)
+        return "avx512";
+#elif defined(__AVX2__)
+        return "avx2";
+#elif defined(__SSE4_1__)
+        return "sse4.1";
+#else
+        return "scalar";
+#endif
+    }
 };
 
 #undef SHA512_FORCE_INLINE

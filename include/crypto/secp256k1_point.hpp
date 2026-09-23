@@ -74,6 +74,7 @@ FORCE_INLINE UInt<4> mul_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
 }
 
 // Quadratura modular dedicada em F_p: reduz de 16 para 10 multiplicações (37.5% de aceleração)
+// Quadratura modular dedicada em F_p: reduz de 16 para 10 multiplicações (37.5% de aceleração)
 FORCE_INLINE UInt<4> sqr_mod_p(const UInt<4>& a) noexcept {
     const uint64_t a0 = a.bits[0], a1 = a.bits[1], a2 = a.bits[2], a3 = a.bits[3];
 
@@ -85,49 +86,49 @@ FORCE_INLINE UInt<4> sqr_mod_p(const UInt<4>& a) noexcept {
     const unsigned __int128 c13 = static_cast<unsigned __int128>(a1) * a3;
     const unsigned __int128 c23 = static_cast<unsigned __int128>(a2) * a3;
 
-    uint64_t t[8] = {};
-    unsigned char carry = 0;
+    uint64_t t1 = static_cast<uint64_t>(c01);
+    uint64_t t2 = static_cast<uint64_t>(c02);
+    uint64_t t3 = static_cast<uint64_t>(c03);
+    uint64_t t4 = static_cast<uint64_t>(c13);
+    uint64_t t5 = static_cast<uint64_t>(c23);
+    uint64_t t6 = static_cast<uint64_t>(c23 >> 64);
 
-    t[1] = static_cast<uint64_t>(c01);
-    carry = _addcarry_u64(0, static_cast<uint64_t>(c01 >> 64), static_cast<uint64_t>(c02), reinterpret_cast<unsigned long long*>(&t[2]));
-    carry = _addcarry_u64(carry, static_cast<uint64_t>(c02 >> 64), static_cast<uint64_t>(c03), reinterpret_cast<unsigned long long*>(&t[3]));
-    carry = _addcarry_u64(carry, static_cast<uint64_t>(c03 >> 64), static_cast<uint64_t>(c13), reinterpret_cast<unsigned long long*>(&t[4]));
-    carry = _addcarry_u64(carry, static_cast<uint64_t>(c13 >> 64), static_cast<uint64_t>(c23), reinterpret_cast<unsigned long long*>(&t[5]));
-    carry = _addcarry_u64(carry, static_cast<uint64_t>(c23 >> 64), 0, reinterpret_cast<unsigned long long*>(&t[6]));
+    unsigned char c = 0;
+    c = _addcarry_u64(0, t2, static_cast<uint64_t>(c01 >> 64), reinterpret_cast<unsigned long long*>(&t2));
+    c = _addcarry_u64(c, t3, static_cast<uint64_t>(c02 >> 64), reinterpret_cast<unsigned long long*>(&t3));
+    c = _addcarry_u64(c, t4, static_cast<uint64_t>(c03 >> 64), reinterpret_cast<unsigned long long*>(&t4));
+    c = _addcarry_u64(c, t5, static_cast<uint64_t>(c13 >> 64), reinterpret_cast<unsigned long long*>(&t5));
+    _addcarry_u64(c, t6, 0, reinterpret_cast<unsigned long long*>(&t6));
 
-    // Adiciona c12 nos limbs 3 e 4
-    carry = _addcarry_u64(0, t[3], static_cast<uint64_t>(c12), reinterpret_cast<unsigned long long*>(&t[3]));
-    carry = _addcarry_u64(carry, t[4], static_cast<uint64_t>(c12 >> 64), reinterpret_cast<unsigned long long*>(&t[4]));
-    carry = _addcarry_u64(carry, t[5], 0, reinterpret_cast<unsigned long long*>(&t[5]));
-    _addcarry_u64(carry, t[6], 0, reinterpret_cast<unsigned long long*>(&t[6]));
+    c = _addcarry_u64(0, t3, static_cast<uint64_t>(c12), reinterpret_cast<unsigned long long*>(&t3));
+    c = _addcarry_u64(c, t4, static_cast<uint64_t>(c12 >> 64), reinterpret_cast<unsigned long long*>(&t4));
+    c = _addcarry_u64(c, t5, 0, reinterpret_cast<unsigned long long*>(&t5));
+    _addcarry_u64(c, t6, 0, reinterpret_cast<unsigned long long*>(&t6));
 
-    // Multiplica produtos cruzados por 2 (shift de 1 bit à esquerda)
-    uint64_t r[8] = {};
-    r[7] = t[6] >> 63;
-    r[6] = (t[6] << 1) | (t[5] >> 63);
-    r[5] = (t[5] << 1) | (t[4] >> 63);
-    r[4] = (t[4] << 1) | (t[3] >> 63);
-    r[3] = (t[3] << 1) | (t[2] >> 63);
-    r[2] = (t[2] << 1) | (t[1] >> 63);
-    r[1] = t[1] << 1;
-    r[0] = 0;
+    uint64_t r7 = t6 >> 63;
+    uint64_t r6 = (t6 << 1) | (t5 >> 63);
+    uint64_t r5 = (t5 << 1) | (t4 >> 63);
+    uint64_t r4 = (t4 << 1) | (t3 >> 63);
+    uint64_t r3 = (t3 << 1) | (t2 >> 63);
+    uint64_t r2 = (t2 << 1) | (t1 >> 63);
+    uint64_t r1 = t1 << 1;
+    uint64_t r0 = 0;
 
-    // 4 quadrados da diagonal
     const unsigned __int128 d0 = static_cast<unsigned __int128>(a0) * a0;
     const unsigned __int128 d1 = static_cast<unsigned __int128>(a1) * a1;
     const unsigned __int128 d2 = static_cast<unsigned __int128>(a2) * a2;
     const unsigned __int128 d3 = static_cast<unsigned __int128>(a3) * a3;
 
-    // Soma diagonais no acumulador
-    r[0] = static_cast<uint64_t>(d0);
-    carry = _addcarry_u64(0, r[1], static_cast<uint64_t>(d0 >> 64), reinterpret_cast<unsigned long long*>(&r[1]));
-    carry = _addcarry_u64(carry, r[2], static_cast<uint64_t>(d1), reinterpret_cast<unsigned long long*>(&r[2]));
-    carry = _addcarry_u64(carry, r[3], static_cast<uint64_t>(d1 >> 64), reinterpret_cast<unsigned long long*>(&r[3]));
-    carry = _addcarry_u64(carry, r[4], static_cast<uint64_t>(d2), reinterpret_cast<unsigned long long*>(&r[4]));
-    carry = _addcarry_u64(carry, r[5], static_cast<uint64_t>(d2 >> 64), reinterpret_cast<unsigned long long*>(&r[5]));
-    carry = _addcarry_u64(carry, r[6], static_cast<uint64_t>(d3), reinterpret_cast<unsigned long long*>(&r[6]));
-    _addcarry_u64(carry, r[7], static_cast<uint64_t>(d3 >> 64), reinterpret_cast<unsigned long long*>(&r[7]));
+    r0 = static_cast<uint64_t>(d0);
+    c = _addcarry_u64(0, r1, static_cast<uint64_t>(d0 >> 64), reinterpret_cast<unsigned long long*>(&r1));
+    c = _addcarry_u64(c, r2, static_cast<uint64_t>(d1), reinterpret_cast<unsigned long long*>(&r2));
+    c = _addcarry_u64(c, r3, static_cast<uint64_t>(d1 >> 64), reinterpret_cast<unsigned long long*>(&r3));
+    c = _addcarry_u64(c, r4, static_cast<uint64_t>(d2), reinterpret_cast<unsigned long long*>(&r4));
+    c = _addcarry_u64(c, r5, static_cast<uint64_t>(d2 >> 64), reinterpret_cast<unsigned long long*>(&r5));
+    c = _addcarry_u64(c, r6, static_cast<uint64_t>(d3), reinterpret_cast<unsigned long long*>(&r6));
+    _addcarry_u64(c, r7, static_cast<uint64_t>(d3 >> 64), reinterpret_cast<unsigned long long*>(&r7));
 
+    const uint64_t r[8] = {r0, r1, r2, r3, r4, r5, r6, r7};
     return reduce_secp256k1_p(r);
 }
 #pragma GCC diagnostic pop
@@ -164,16 +165,16 @@ inline UInt<4> inv_mod_p(const UInt<4>& a) noexcept {
     UInt<4> x223 = mul_mod_p(sqr_n(x220, 3), x3);
     UInt<4> t = sqr_n(x223, 33);
 
-    static constexpr uint32_t LOW32 = 0xFFFFFC2D;
-    UInt<4> low_acc = 1;
-    UInt<4> base = a;
-    for (int b = 0; b < 32; ++b) {
-        if ((LOW32 >> b) & 1U) {
-            low_acc = mul_mod_p(low_acc, base);
-        }
-        if (b < 31) base = sqr_mod_p(base);
-    }
-    return mul_mod_p(t, low_acc);
+    // 0xFFFFFC2D = (2^22 - 1)*2^10 + 45
+    UInt<4> low = sqr_n(x22, 10);
+    UInt<4> a2 = sqr_mod_p(a);
+    UInt<4> a4 = sqr_mod_p(a2);
+    UInt<4> a8 = sqr_mod_p(a4);
+    UInt<4> a32 = sqr_n(a8, 2);
+    UInt<4> a45 = mul_mod_p(mul_mod_p(a32, a8), mul_mod_p(a4, a));
+    UInt<4> low32 = mul_mod_p(low, a45);
+
+    return mul_mod_p(t, low32);
 }
 
 struct PointJacobian {
@@ -183,36 +184,47 @@ struct PointJacobian {
     bool is_infinity = true;
 };
 
+FORCE_INLINE UInt<4> make_uint4(const uint64_t v[4]) noexcept {
+    UInt<4> res;
+    res.bits[0] = v[0];
+    res.bits[1] = v[1];
+    res.bits[2] = v[2];
+    res.bits[3] = v[3];
+    return res;
+}
+
 // Adição mista Jacobiana-Afim
 FORCE_INLINE void point_add_mixed_raw(PointJacobian& p1, const uint64_t p2_x[4], const uint64_t p2_y[4]) noexcept {
-    if (p1.is_infinity) {
-        for (int i = 0; i < 4; ++i) { p1.X.bits[i] = p2_x[i]; p1.Y.bits[i] = p2_y[i]; }
+    if (__builtin_expect(p1.is_infinity, 0)) {
+        p1.X = make_uint4(p2_x);
+        p1.Y = make_uint4(p2_y);
         p1.Z = 1;
         p1.is_infinity = false;
         return;
     }
 
-    UInt<4> p2x, p2y;
-    for (int i = 0; i < 4; ++i) { p2x.bits[i] = p2_x[i]; p2y.bits[i] = p2_y[i]; }
+    const UInt<4> p2x = make_uint4(p2_x);
+    const UInt<4> p2y = make_uint4(p2_y);
 
-    UInt<4> Z1Z1 = mul_mod_p(p1.Z, p1.Z);
+    UInt<4> Z1Z1 = sqr_mod_p(p1.Z);
     UInt<4> U2 = mul_mod_p(p2x, Z1Z1);
-    UInt<4> S2 = mul_mod_p(p2y, mul_mod_p(p1.Z, Z1Z1));
+    UInt<4> Z1_cubed = mul_mod_p(p1.Z, Z1Z1);
+    UInt<4> S2 = mul_mod_p(p2y, Z1_cubed);
 
     UInt<4> H = sub_mod_p(U2, p1.X);
     UInt<4> R = sub_mod_p(S2, p1.Y);
 
-    if (H.eqz()) {
+    if (__builtin_expect(H.eqz(), 0)) {
         if (R.eqz()) return;
         else { p1.is_infinity = true; return; }
     }
 
     UInt<4> Z3 = mul_mod_p(p1.Z, H);
-    UInt<4> H2 = mul_mod_p(H, H);
+    UInt<4> H2 = sqr_mod_p(H);
     UInt<4> H3 = mul_mod_p(H, H2);
     UInt<4> U1_H2 = mul_mod_p(p1.X, H2);
 
-    UInt<4> R2 = mul_mod_p(R, R);
+    UInt<4> R2 = sqr_mod_p(R);
     UInt<4> X3 = sub_mod_p(sub_mod_p(R2, H3), add_mod_p(U1_H2, U1_H2));
     UInt<4> Y3 = sub_mod_p(mul_mod_p(R, sub_mod_p(U1_H2, X3)), mul_mod_p(p1.Y, H3));
 
@@ -228,19 +240,26 @@ inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const
 
     PointJacobian acc;
     for (int w = 0; w < 64; ++w) {
-        int limb = w / 16;
-        int shift = (w % 16) * 4;
+        int limb = w >> 4;
+        int shift = (w & 0x0F) * 4;
         uint32_t val = (k.bits[limb] >> shift) & 0x0F;
         if (val > 0) {
             const auto& pt = G_TABLE_W4[w][val - 1];
-            point_add_mixed_raw(acc, pt.x, pt.y);
+            if (acc.is_infinity) {
+                acc.X = make_uint4(pt.x);
+                acc.Y = make_uint4(pt.y);
+                acc.Z = 1;
+                acc.is_infinity = false;
+            } else {
+                point_add_mixed_raw(acc, pt.x, pt.y);
+            }
         }
     }
 
     if (acc.is_infinity) return false;
 
     UInt<4> z_inv = inv_mod_p(acc.Z);
-    UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
+    UInt<4> z_inv2 = sqr_mod_p(z_inv);
     UInt<4> z_inv3 = mul_mod_p(z_inv, z_inv2);
     UInt<4> x_aff = mul_mod_p(acc.X, z_inv2);
     UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
@@ -262,14 +281,21 @@ inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pu
         uint32_t val = (k.bits[limb] >> shift) & 0x0F;
         if (val > 0) {
             const auto& pt = G_TABLE_W4[w][val - 1];
-            point_add_mixed_raw(acc, pt.x, pt.y);
+            if (acc.is_infinity) {
+                acc.X = make_uint4(pt.x);
+                acc.Y = make_uint4(pt.y);
+                acc.Z = 1;
+                acc.is_infinity = false;
+            } else {
+                point_add_mixed_raw(acc, pt.x, pt.y);
+            }
         }
     }
 
     if (acc.is_infinity) return false;
 
     UInt<4> z_inv = inv_mod_p(acc.Z);
-    UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
+    UInt<4> z_inv2 = sqr_mod_p(z_inv);
     UInt<4> z_inv3 = mul_mod_p(z_inv, z_inv2);
     UInt<4> x_aff = mul_mod_p(acc.X, z_inv2);
     UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
