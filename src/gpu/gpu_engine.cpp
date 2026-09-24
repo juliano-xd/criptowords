@@ -12,6 +12,7 @@ namespace cryptowords {
 
 void GPUEngine::cleanup_locked() {
     for (size_t s = 0; s < NUM_SLOTS; ++s) {
+        if (queue_[s])         { clFinish(queue_[s]); }
         if (ev_read_[s])       { clReleaseEvent(ev_read_[s]); ev_read_[s] = nullptr; }
         if (ev_kernel_[s])     { clReleaseEvent(ev_kernel_[s]); ev_kernel_[s] = nullptr; }
         if (d_passwords_[s])   { clReleaseMemObject(d_passwords_[s]); d_passwords_[s] = nullptr; }
