@@ -222,11 +222,14 @@ void print_device_capabilities(const DiscoveredDevice& d) {
                                  d.global_mem / (1024 * 1024), d.max_alloc / (1024 * 1024));
     print_box_line(l4, DEFAULT_INNER_WIDTH);
 
-    size_t local_sz = (d.max_work_group >= 256) ? 256 : d.max_work_group;
-    size_t batch = d.compute_units * local_sz * 32;
-    if (batch < 8192) batch = 8192;
-    if (batch > 131072) batch = 131072;
-    batch = ((batch + 255) / 256) * 256;
+    size_t local_sz = (d.max_work_group >= 64) ? 64 : d.max_work_group;
+    size_t batch = d.compute_units * local_sz * 16;
+    if (d.compute_units <= 4) {
+        batch = std::clamp(batch, size_t(512), size_t(1024));
+    } else {
+        batch = std::clamp(batch, size_t(8192), size_t(131072));
+    }
+    batch = ((batch + 63) / 64) * 64;
 
     std::string l5 = std::format("Orquestração : Lotes dinâmicos de \033[1;33m{} chaves simultâneas\033[0m por pulso OpenCL",
                                  format_num(static_cast<double>(batch)));

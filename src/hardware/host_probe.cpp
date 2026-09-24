@@ -739,8 +739,19 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
                 dev.preferred_work_group_multiple = 32;
             }
 
+            double driver_priority = 1.0;
+            if (p_name_upper.find("RUSTICL") != std::string::npos || p_name_upper.find("POCL") != std::string::npos) {
+                driver_priority = 0.6; // Menor prioridade para rusticl/emuladores se driver nativo estiver disponível
+            }
+            if (name_upper.find("GFX10") != std::string::npos || name_upper.find("GFX11") != std::string::npos) {
+                // Em RDNA2/RDNA3 (gfx10xx/gfx11xx), 1 WGP reportado equivale a 2 Compute Units físicas
+                if (dev.compute_units == 1) {
+                    dev.compute_units = 2;
+                }
+            }
+
             // Cálculo do Compute Index (Score)
-            dev.compute_index = static_cast<double>(dev.compute_units) * (dev.clock_freq_mhz / 1000.0) * ipc_multiplier;
+            dev.compute_index = static_cast<double>(dev.compute_units) * (dev.clock_freq_mhz / 1000.0) * ipc_multiplier * driver_priority;
 
             int score = static_cast<int>(dev.compute_index * 1000.0);
             if (score > best_score) {

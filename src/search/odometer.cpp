@@ -167,21 +167,35 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
 
 void GenericOdometer::init_state(PipelineThreadContext& ctx, size_t thread_idx,
                                  size_t num_threads, const OptimizedMnemonics& opt) {
+    ctx.thread_idx  = thread_idx;
     ctx.step_size   = num_threads;
     ctx.is_done     = false;
     ctx.current_ids = opt.base_mnemonic;
 
     if (opt.has_valid_pairs) {
         const size_t total = opt.valid_pairs.size();
-        const size_t chunk = (total + num_threads - 1) / num_threads;
-        const size_t start = thread_idx * chunk;
-        const size_t end   = std::min(start + chunk, total);
+        if (is_dynamic_partition_) {
+            size_t chunk = (thread_idx == 0) ? (gpu_batch_ > 0 ? gpu_batch_ : 1024) : 256;
+            size_t start = next_pair_idx_.fetch_add(chunk, std::memory_order_relaxed);
+            size_t end   = std::min(start + chunk, total);
 
-        ctx.pair_idx = start;
-        ctx.pair_end = end;
-        if (start >= end) {
-            ctx.is_done = true;
-            return;
+            ctx.pair_idx = start;
+            ctx.pair_end = end;
+            if (start >= total) {
+                ctx.is_done = true;
+                return;
+            }
+        } else {
+            const size_t chunk = (total + num_threads - 1) / num_threads;
+            const size_t start = thread_idx * chunk;
+            const size_t end   = std::min(start + chunk, total);
+
+            ctx.pair_idx = start;
+            ctx.pair_end = end;
+            if (start >= end) {
+                ctx.is_done = true;
+                return;
+            }
         }
         ctx.current_ids[opt.unknown_positions[0]] = opt.valid_pairs[ctx.pair_idx].first;
         ctx.current_ids[opt.unknown_positions[1]] = opt.valid_pairs[ctx.pair_idx].second;
@@ -238,8 +252,20 @@ bool GenericOdometer::advance(PipelineThreadContext& ctx, const OptimizedMnemoni
     if (opt.has_valid_pairs) {
         ++ctx.pair_idx;
         if (ctx.pair_idx >= ctx.pair_end) {
-            ctx.is_done = true;
-            return false;
+            if (is_dynamic_partition_) {
+                const size_t total = opt.valid_pairs.size();
+                size_t chunk = (ctx.thread_idx == 0) ? (gpu_batch_ > 0 ? gpu_batch_ : 1024) : 256;
+                size_t start = next_pair_idx_.fetch_add(chunk, std::memory_order_relaxed);
+                if (start >= total) {
+                    ctx.is_done = true;
+                    return false;
+                }
+                ctx.pair_idx = start;
+                ctx.pair_end = std::min(start + chunk, total);
+            } else {
+                ctx.is_done = true;
+                return false;
+            }
         }
         ctx.current_ids[opt.unknown_positions[0]] = opt.valid_pairs[ctx.pair_idx].first;
         ctx.current_ids[opt.unknown_positions[1]] = opt.valid_pairs[ctx.pair_idx].second;

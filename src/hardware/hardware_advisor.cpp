@@ -87,6 +87,9 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
         size_t pref = best_gpu->preferred_work_group_multiple;
         if (pref == 0) pref = 32;
         size_t wg = 256;
+        if (best_gpu->category == GpuCategory::Integrated || best_gpu->compute_units <= 4) {
+            wg = 64; // iGPU / Low-CU: 64 threads (2x Wave32) maximiza ocupação e minimiza pressão de VGPR
+        }
         if (wg > best_gpu->max_work_group) wg = best_gpu->max_work_group;
         wg = (wg / pref) * pref;
         if (wg == 0) wg = pref;
@@ -97,21 +100,24 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
             strat.chosen_gpu_batch = cfg.gpu_batch;
         } else {
             // Dimensionamento para streaming double-buffering com sobreposição 100% CPU/GPU
-            size_t batch = best_gpu->compute_units * strat.chosen_workgroup_size * 2;
             if (best_gpu->category == GpuCategory::DiscreteHighEnd) {
-                batch = std::clamp(batch, size_t(32768), size_t(65536));
+                size_t batch = best_gpu->compute_units * strat.chosen_workgroup_size * 2;
+                strat.chosen_gpu_batch = std::clamp(batch, size_t(32768), size_t(65536));
             } else if (best_gpu->category == GpuCategory::DiscreteMidRange) {
-                batch = std::clamp(batch, size_t(16384), size_t(32768));
-            } else { // iGPU ou Entry
-                batch = std::clamp(batch, size_t(8192), size_t(16384));
+                size_t batch = best_gpu->compute_units * strat.chosen_workgroup_size * 2;
+                strat.chosen_gpu_batch = std::clamp(batch, size_t(8192), size_t(32768));
+            } else { // iGPU ou Entry (ex: AMD Radeon 610M/680M/780M, Intel UHD/Iris Xe, Vega, CUs <= 4)
+                // iGPUs compartilham barramento DDR com CPU e monitor do sistema operacional.
+                // Lotes curtos de 512 chaves executam em ~140ms, garantindo zero interferência com o
+                // compositor gráfico do desktop (Wayland/X11) e eliminando qualquer risco de GPU Hang.
+                strat.chosen_gpu_batch = 512;
             }
             if (best_gpu->max_alloc_bytes > 0) {
                 size_t max_k = best_gpu->max_alloc_bytes / 256;
-                if (batch > max_k) batch = max_k;
+                if (strat.chosen_gpu_batch > max_k) strat.chosen_gpu_batch = max_k;
             }
             // Alinhamento com o Workgroup
-            batch = ((batch + strat.chosen_workgroup_size - 1) / strat.chosen_workgroup_size) * strat.chosen_workgroup_size;
-            strat.chosen_gpu_batch = batch;
+            strat.chosen_gpu_batch = ((strat.chosen_gpu_batch + strat.chosen_workgroup_size - 1) / strat.chosen_workgroup_size) * strat.chosen_workgroup_size;
         }
     }
 
@@ -136,9 +142,25 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
         strat.engine_desc = "Híbrido Paralelo (CPU " + std::string(strat.chosen_simd == SimdArch::AVX512 ? "AVX-512" : (strat.chosen_simd == SimdArch::AVX2 ? "AVX2" : "SSE")) + " + GPU OpenCL)";
         strat.rationale = "Modo híbrido ativado: paralelismo heterogêneo entre threads de CPU e lotes assíncronos de GPU.";
     } else if (cfg.use_gpu) {
-        strat.chosen_engine = ExecutionEngineChoice::GpuOpenCL;
-        strat.engine_desc = "GPU OpenCL Dedicada (" + (best_gpu ? best_gpu->device_name : "Dispositivo Auto") + ")";
-        strat.rationale = "Aceleração GPU solicitada: fluxo contínuo de PBKDF2 em lotes de alta ocupação via OpenCL.";
+        // Se o usuário solicitou aceleração GPU (--gpu), mas a GPU é uma iGPU de baixo paralelismo (<= 4 CUs)
+        // e a CPU tem alta capacidade multithread (threads >= 4) e o usuário NÃO forçou thread única (--threads 1):
+        // Executar exclusivamente na iGPU deixaria a CPU em 0% de uso e seria mais lento que o modo CPU.
+        // O caminho ótimo específico para este perfil de hardware é o Caminho Híbrido Cooperativo Adaptativo!
+        if (best_gpu && (best_gpu->category == GpuCategory::Integrated || best_gpu->compute_units <= 4) &&
+            host.cpu.topology.logical_threads >= 4 && cfg.num_threads != 1) {
+            strat.chosen_engine = ExecutionEngineChoice::HybridParallel;
+            strat.recommended_threads = host.cpu.topology.logical_threads;
+            strat.engine_desc = "Híbrido Cooperativo Adaptativo (CPU " +
+                                std::string(strat.chosen_simd == SimdArch::AVX512 ? "AVX-512" : (strat.chosen_simd == SimdArch::AVX2 ? "AVX2" : "SSE")) +
+                                " + iGPU " + best_gpu->device_name + ")";
+            strat.rationale = "Hardware Assimétrico Detectado: A CPU (" + std::to_string(host.cpu.topology.logical_threads) +
+                              " threads) possui maior vazão isolada que a iGPU (" + std::to_string(best_gpu->compute_units) +
+                              " CUs). Ativado automaticamente o Caminho Híbrido Cooperativo para SOMAR a CPU com a iGPU em vez de subutilizar o sistema.";
+        } else {
+            strat.chosen_engine = ExecutionEngineChoice::GpuOpenCL;
+            strat.engine_desc = "GPU OpenCL Dedicada (" + (best_gpu ? best_gpu->device_name : "Dispositivo Auto") + ")";
+            strat.rationale = "Aceleração GPU solicitada: fluxo contínuo de PBKDF2 em lotes de alta ocupação via OpenCL.";
+        }
     } else {
         // Se o usuário não especificou motor, analisamos se a máquina tem dGPU dominante
         if (best_gpu && best_gpu->is_discrete && best_gpu->category == GpuCategory::DiscreteHighEnd) {
@@ -165,6 +187,10 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
 }
 
 void HardwareAdvisor::apply_tuning(AppConfig& cfg, const TuningStrategy& strat) {
+    if (strat.chosen_engine == ExecutionEngineChoice::HybridParallel) {
+        cfg.use_hybrid = true;
+        cfg.use_gpu = true;
+    }
     if (cfg.num_threads == 0) {
         cfg.num_threads = strat.recommended_threads;
     }
