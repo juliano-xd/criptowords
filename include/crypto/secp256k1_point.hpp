@@ -296,13 +296,12 @@ inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
+    const uint8_t* k_bytes = reinterpret_cast<const uint8_t*>(k.bits.data());
     for (int w = 0; w < 32; ++w) {
-        int limb = w >> 3;
-        int shift = (w & 0x07) * 8;
-        uint32_t val = (k.bits[limb] >> shift) & 0xFF;
+        uint32_t val = k_bytes[w];
         if (val > 0) {
             const auto& pt = G_TABLE_W8[w][val - 1];
-            if (acc.is_infinity) {
+            if (__builtin_expect(acc.is_infinity, 0)) {
                 acc.X = make_uint4(pt.x);
                 acc.Y = make_uint4(pt.y);
                 acc.Z = 1;
@@ -332,13 +331,12 @@ inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pu
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
+    const uint8_t* k_bytes = reinterpret_cast<const uint8_t*>(k.bits.data());
     for (int w = 0; w < 32; ++w) {
-        int limb = w >> 3;
-        int shift = (w & 0x07) * 8;
-        uint32_t val = (k.bits[limb] >> shift) & 0xFF;
+        uint32_t val = k_bytes[w];
         if (val > 0) {
             const auto& pt = G_TABLE_W8[w][val - 1];
-            if (acc.is_infinity) {
+            if (__builtin_expect(acc.is_infinity, 0)) {
                 acc.X = make_uint4(pt.x);
                 acc.Y = make_uint4(pt.y);
                 acc.Z = 1;
