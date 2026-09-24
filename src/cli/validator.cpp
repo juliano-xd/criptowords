@@ -266,15 +266,15 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             return std::unexpected(std::format("Aceleração por GPU exige '--rounds 2048' (padrão BIP39), mas {} foi solicitado.", cfg.pbkdf2_rounds));
         }
         if (cfg.use_hybrid) {
-            if (cfg.num_threads == 0) {
-                cfg.num_threads = std::thread::hardware_concurrency();
-            }
+            cfg.num_threads = raw.num_threads;
         } else {
             if (raw.num_threads > 1) {
                 cfg.use_hybrid = true;
                 cfg.num_threads = raw.num_threads;
-            } else {
+            } else if (raw.num_threads == 1) {
                 cfg.num_threads = 1;
+            } else {
+                cfg.num_threads = 0; // 0 = AUTO. HardwareAdvisor decidirá entre GPU pura (dGPU) ou Híbrido Cooperativo (iGPU + CPU)
             }
         }
     } else {

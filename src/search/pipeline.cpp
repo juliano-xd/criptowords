@@ -15,7 +15,7 @@ namespace cryptowords {
 
 ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemonics& opt)
     : cfg_(cfg), opt_(opt) {
-    odometer_ = std::make_unique<GenericOdometer>();
+    odometer_ = std::make_unique<GenericOdometer>(cfg_.use_hybrid || cfg_.use_gpu, cfg_.gpu_batch);
 
     if (cfg_.use_hybrid) {
         processor_ = std::make_unique<GPUBatchProcessor>(cfg_);

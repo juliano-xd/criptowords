@@ -117,7 +117,7 @@ public:
                 bool& success, std::vector<uint16_t>& result_mnemonic, size_t total_keys) {
         if (total_keys == 0) return;
         const size_t num_w = workers_.size();
-        if (total_keys < 1024 || num_w <= 1) {
+        if (total_keys <= 2048 || num_w <= 1) {
             for (size_t b = 0; b < total_keys; ++b) {
                 if (found.load(std::memory_order_relaxed)) break;
                 std::array<u8, 64> seed64;
@@ -169,9 +169,11 @@ class GPUBatchProcessor : public IBatchProcessor {
 public:
     explicit GPUBatchProcessor(const AppConfig& cfg) {
         size_t opt_batch = GPUEngine::get_instance().get_optimal_batch_size();
-        batch_capacity_ = opt_batch;
-        if (batch_capacity_ < 4096) batch_capacity_ = 4096;
-        batch_capacity_ = ((batch_capacity_ + 255) / 256) * 256;
+        batch_capacity_ = (cfg.gpu_batch > 0) ? cfg.gpu_batch : opt_batch;
+        if (batch_capacity_ < 512) batch_capacity_ = 512;
+        size_t wg = GPUEngine::get_instance().get_local_work_size();
+        if (wg == 0) wg = 64;
+        batch_capacity_ = ((batch_capacity_ + wg - 1) / wg) * wg;
 
         slot_size_ = GPUEngine::get_instance().get_slot_size();
         if (slot_size_ == 0) {
