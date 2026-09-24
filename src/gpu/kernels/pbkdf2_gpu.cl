@@ -124,29 +124,20 @@ __kernel void pbkdf2_batch(
     }
     
     if (pwd_len <= 128) {
+        ulong W_opad[16];
         for(int i=0; i<16; i++) {
-            ulong word = 0;
+            ulong word_raw = 0;
             #pragma unroll 8
             for(int j=0; j<8; j++) {
                 uint idx = i*8 + j;
                 uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
-                word = (word << 8) | (b ^ 0x36);
+                word_raw = (word_raw << 8) | b;
             }
-            W[i] = word;
+            W[i]      = word_raw ^ 0x3636363636363636UL;
+            W_opad[i] = word_raw ^ 0x5c5c5c5c5c5c5c5cUL;
         }
         sha512_block_fast(ipad_state, W);
-        
-        for(int i=0; i<16; i++) {
-            ulong word = 0;
-            #pragma unroll 8
-            for(int j=0; j<8; j++) {
-                uint idx = i*8 + j;
-                uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
-                word = (word << 8) | (b ^ 0x5c);
-            }
-            W[i] = word;
-        }
-        sha512_block_fast(opad_state, W);
+        sha512_block_fast(opad_state, W_opad);
     } else {
         ulong H_key[8];
         #pragma unroll 8
@@ -266,16 +257,17 @@ __kernel void pbkdf2_batch(
         for(int i=0; i<8; i++) F[i] ^= U[i];
     }
     
-    uint out_off = gid * 64;
+    __global ulong* out64 = (__global ulong*)(outputs + gid * 64);
     #pragma unroll 8
     for(int i=0; i<8; i++) {
-        outputs[out_off + i*8 + 0] = (F[i] >> 56) & 0xFF;
-        outputs[out_off + i*8 + 1] = (F[i] >> 48) & 0xFF;
-        outputs[out_off + i*8 + 2] = (F[i] >> 40) & 0xFF;
-        outputs[out_off + i*8 + 3] = (F[i] >> 32) & 0xFF;
-        outputs[out_off + i*8 + 4] = (F[i] >> 24) & 0xFF;
-        outputs[out_off + i*8 + 5] = (F[i] >> 16) & 0xFF;
-        outputs[out_off + i*8 + 6] = (F[i] >> 8)  & 0xFF;
-        outputs[out_off + i*8 + 7] = (F[i]      ) & 0xFF;
+        ulong v = F[i];
+        out64[i] = ((v & 0x00000000000000FFUL) << 56) |
+                   ((v & 0x000000000000FF00UL) << 40) |
+                   ((v & 0x0000000000FF0000UL) << 24) |
+                   ((v & 0x00000000FF000000UL) <<  8) |
+                   ((v & 0x000000FF00000000UL) >>  8) |
+                   ((v & 0x0000FF0000000000UL) >> 24) |
+                   ((v & 0x00FF000000000000UL) >> 40) |
+                   ((v & 0xFF00000000000000UL) >> 56);
     }
 }

@@ -77,11 +77,17 @@ class SimdBatchProcessor : public IBatchProcessor {
         const size_t start_slice = (opt.slice0_static_len > 0) ? 1 : 0;
         const size_t num_slices  = opt.slices.size();
 
+        if (__builtin_expect(!ctx.prefix_initialized, 0)) {
+            if (opt.slice0_static_len > 0) {
+                for (size_t i = 0; i < BATCH_SIZE; ++i) {
+                    std::memcpy(ctx.pw + i * PW_SLOT_SIZE, opt.slices[0].text.data(), opt.slice0_static_len);
+                }
+            }
+            ctx.prefix_initialized = true;
+        }
+
         for (size_t b = 0; b < ctx.valid_batch_sz; ++b) {
             char* current_pw = ctx.pw + b * PW_SLOT_SIZE;
-            if (__builtin_expect(!ctx.prefix_initialized, 0) && opt.slice0_static_len > 0) {
-                std::memcpy(current_pw, opt.slices[0].text.data(), opt.slice0_static_len);
-            }
             char* ptr = current_pw + opt.slice0_static_len;
 
             for (size_t s = start_slice; s < num_slices; ++s) {
@@ -91,13 +97,16 @@ class SimdBatchProcessor : public IBatchProcessor {
                     std::memcpy(ptr, w.data(), w.size());
                     ptr += w.size();
                 } else {
-                    std::memcpy(ptr, slice.text.data(), slice.text.size());
-                    ptr += slice.text.size();
+                    if (slice.text.size() == 1) {
+                        *ptr++ = slice.text[0];
+                    } else {
+                        std::memcpy(ptr, slice.text.data(), slice.text.size());
+                        ptr += slice.text.size();
+                    }
                 }
             }
             ctx.pw_len[b] = ptr - current_pw;
         }
-        ctx.prefix_initialized = true;
 
         if (ctx.valid_batch_sz == BATCH_SIZE) {
             process_simd_pbkdf2(ctx, cfg.pbkdf2_rounds);
@@ -149,8 +158,6 @@ class SimdBatchProcessor : public IBatchProcessor {
         const size_t checksum_bits = mnemonic_len * 11 / 33;
 
         if (ctx.c_batch_sz == C_BATCH_SIZE) {
-            uint8_t original_checksums[32] = {};
-
             // ---- Bloco SIMD por arquitetura ----
             if constexpr (Arch == SimdArch::SSE) {
                 SHA256_SSE_State s1, s2;
@@ -159,30 +166,15 @@ class SimdBatchProcessor : public IBatchProcessor {
                 alignas(64) array<array<uint32_t, 16>, 4> blocks2 = {};
 
                 for (int b = 0; b < 8; ++b) {
-                    uint8_t entropy[128] = {};
-                    std::memcpy(entropy, opt.base_entropy, 32);
-                    const size_t entropy_bits  = mnemonic_len * 11 - checksum_bits;
-                    const size_t entropy_bytes = entropy_bits / 8;
-
-                    uint64_t acc = opt.base_acc;
-                    size_t bits  = opt.base_bits;
-                    size_t b_pos = opt.base_b_pos;
-
-                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
-                        acc = (acc << 11) | (ctx.checksum_batch[b * 24 + i] & 0x7FF);
-                        bits += 11;
-                        while (bits >= 8 && b_pos < entropy_bytes) {
-                            bits -= 8;
-                            entropy[b_pos++] = (acc >> bits) & 0xFF;
-                        }
-                        acc &= (1ULL << bits) - 1;
+                    alignas(64) uint8_t block64[64];
+                    std::memcpy(block64, opt.base_block64, 64);
+                    for (size_t k = 0; k < opt.unknown_positions.size(); ++k) {
+                        detail::set_11bits(block64, opt.unknown_bit_offsets[k],
+                                           ctx.checksum_batch[b * 24 + opt.unknown_positions[k]]);
                     }
-                    original_checksums[b] = static_cast<uint8_t>(acc & ((1ULL << checksum_bits) - 1));
-                    entropy[entropy_bytes] = 0x80;
+                    block64[opt.entropy_bytes] = 0x80;
 
-                    uint32_t W_local[16] = {};
-                    std::memcpy(W_local, entropy, 64);
-                    W_local[15] = __builtin_bswap32(entropy_bits);
+                    const uint32_t* W_local = reinterpret_cast<const uint32_t*>(block64);
                     for (int w = 0; w < 16; ++w) {
                         if (b < 4) blocks1[w][b]   = __builtin_bswap32(W_local[w]);
                         else       blocks2[w][b-4] = __builtin_bswap32(W_local[w]);
@@ -208,8 +200,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                                               result_mutex, success, result_mnemonic, false);
                         }
                     } else {
-                        const uint8_t expected = original_checksums[b];
-                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                        if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
                             for (size_t i = 0; i < mnemonic_len; ++i)
                                 ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
                             ++ctx.valid_batch_sz;
@@ -263,30 +254,15 @@ class SimdBatchProcessor : public IBatchProcessor {
                 alignas(64) uint32_t blocks2[16][8] = {};
 
                 for (int b = 0; b < 16; ++b) {
-                    uint8_t entropy[128] = {};
-                    std::memcpy(entropy, opt.base_entropy, 32);
-                    const size_t entropy_bits  = mnemonic_len * 11 - checksum_bits;
-                    const size_t entropy_bytes = entropy_bits / 8;
-
-                    uint64_t acc = opt.base_acc;
-                    size_t bits  = opt.base_bits;
-                    size_t b_pos = opt.base_b_pos;
-
-                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
-                        acc = (acc << 11) | (ctx.checksum_batch[b * 24 + i] & 0x7FF);
-                        bits += 11;
-                        while (bits >= 8 && b_pos < entropy_bytes) {
-                            bits -= 8;
-                            entropy[b_pos++] = (acc >> bits) & 0xFF;
-                        }
-                        acc &= (1ULL << bits) - 1;
+                    alignas(64) uint8_t block64[64];
+                    std::memcpy(block64, opt.base_block64, 64);
+                    for (size_t k = 0; k < opt.unknown_positions.size(); ++k) {
+                        detail::set_11bits(block64, opt.unknown_bit_offsets[k],
+                                           ctx.checksum_batch[b * 24 + opt.unknown_positions[k]]);
                     }
-                    original_checksums[b] = static_cast<uint8_t>(acc & ((1ULL << checksum_bits) - 1));
-                    entropy[entropy_bytes] = 0x80;
+                    block64[opt.entropy_bytes] = 0x80;
 
-                    std::array<uint32_t, 16> W_local = {};
-                    std::memcpy(W_local.data(), entropy, 64);
-                    W_local[15] = __builtin_bswap32(entropy_bits);
+                    const uint32_t* W_local = reinterpret_cast<const uint32_t*>(block64);
                     for (int w = 0; w < 16; ++w) {
                         if (b < 8) blocks1[w][b]   = __builtin_bswap32(W_local[w]);
                         else       blocks2[w][b-8] = __builtin_bswap32(W_local[w]);
@@ -299,7 +275,6 @@ class SimdBatchProcessor : public IBatchProcessor {
                     const uint8_t hash_first_byte = (b < 8)
                         ? static_cast<uint8_t>(s1.state[0][b]   >> 24)
                         : static_cast<uint8_t>(s2.state[0][b-8] >> 24);
-                    // (mesma lógica do ramo SSE, com AutoDeduce)
                     if constexpr (AutoDeduce) {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
@@ -313,8 +288,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                                               result_mutex, success, result_mnemonic, false);
                         }
                     } else {
-                        const uint8_t expected = original_checksums[b];
-                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                        if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
                             for (size_t i = 0; i < mnemonic_len; ++i)
                                 ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
                             ++ctx.valid_batch_sz;
@@ -327,36 +301,57 @@ class SimdBatchProcessor : public IBatchProcessor {
 #endif
 
             } else if constexpr (Arch == SimdArch::AVX512) {
+#if defined(__SHA__)
+                for (size_t b = 0; b < 32; ++b) {
+                    alignas(64) uint8_t block64[64];
+                    std::memcpy(block64, opt.base_block64, 64);
+                    for (size_t k = 0; k < opt.unknown_positions.size(); ++k) {
+                        detail::set_11bits(block64, opt.unknown_bit_offsets[k],
+                                           ctx.checksum_batch[b * 24 + opt.unknown_positions[k]]);
+                    }
+                    block64[opt.entropy_bytes] = 0x80;
+
+                    const uint8_t hash_first_byte = detail::sha256_bip39_first_byte_shani(block64);
+
+                    if constexpr (AutoDeduce) {
+                        const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
+                                           | (hash_first_byte >> (8 - checksum_bits));
+                        if (opt.allowed_last_words[syn]) {
+                            for (size_t i = 0; i < mnemonic_len; ++i)
+                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
+                            ++ctx.valid_batch_sz;
+                            if (ctx.valid_batch_sz == BATCH_SIZE)
+                                process_batch(ctx, cfg, opt, found, tested_count, valid_count,
+                                              result_mutex, success, result_mnemonic, false);
+                        }
+                    } else {
+                        if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
+                            for (size_t i = 0; i < mnemonic_len; ++i)
+                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            ++ctx.valid_batch_sz;
+                            if (ctx.valid_batch_sz == BATCH_SIZE)
+                                process_batch(ctx, cfg, opt, found, tested_count, valid_count,
+                                              result_mutex, success, result_mnemonic, false);
+                        }
+                    }
+                }
+#else
                 SHA256_AVX512_State s1, s2;
                 sha256_init_avx512(&s1); sha256_init_avx512(&s2);
                 alignas(64) uint32_t blocks1[16][16] = {};
                 alignas(64) uint32_t blocks2[16][16] = {};
 
                 for (int b = 0; b < 32; ++b) {
-                    uint8_t entropy[128] = {};
-                    std::memcpy(entropy, opt.base_entropy, 32);
-                    const size_t entropy_bits  = mnemonic_len * 11 - checksum_bits;
-                    const size_t entropy_bytes = entropy_bits / 8;
-
-                    uint64_t acc = opt.base_acc;
-                    size_t bits  = opt.base_bits;
-                    size_t b_pos = opt.base_b_pos;
-
-                    for (size_t i = opt.prefix_words; i < mnemonic_len; ++i) {
-                        acc = (acc << 11) | (ctx.checksum_batch[b * 24 + i] & 0x7FF);
-                        bits += 11;
-                        while (bits >= 8 && b_pos < entropy_bytes) {
-                            bits -= 8;
-                            entropy[b_pos++] = (acc >> bits) & 0xFF;
-                        }
-                        acc &= (1ULL << bits) - 1;
+                    alignas(64) uint8_t block64[64];
+                    std::memcpy(block64, opt.base_block64, 64);
+                    for (size_t k = 0; k < opt.unknown_positions.size(); ++k) {
+                        detail::set_11bits(block64, opt.unknown_bit_offsets[k],
+                                           ctx.checksum_batch[b * 24 + opt.unknown_positions[k]]);
                     }
-                    original_checksums[b] = static_cast<uint8_t>(acc & ((1ULL << checksum_bits) - 1));
-                    entropy[entropy_bytes] = 0x80;
+                    block64[opt.entropy_bytes] = 0x80;
 
-                    std::array<uint32_t, 16> W_local = {};
-                    std::memcpy(W_local.data(), entropy, 64);
-                    W_local[15] = __builtin_bswap32(entropy_bits);
+                    const uint32_t* W_local = reinterpret_cast<const uint32_t*>(block64);
                     for (int w = 0; w < 16; ++w) {
                         if (b < 16) blocks1[w][b]    = __builtin_bswap32(W_local[w]);
                         else        blocks2[w][b-16] = __builtin_bswap32(W_local[w]);
@@ -382,8 +377,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                                               result_mutex, success, result_mnemonic, false);
                         }
                     } else {
-                        const uint8_t expected = original_checksums[b];
-                        if (expected == (hash_first_byte >> (8 - checksum_bits))) {
+                        if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
                             for (size_t i = 0; i < mnemonic_len; ++i)
                                 ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
                             ++ctx.valid_batch_sz;
@@ -393,6 +387,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     }
                 }
+#endif
             }
             ctx.c_batch_sz = 0;
 
@@ -438,10 +433,10 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1] | x;
                         if (!opt.allowed_last_words[syn]) continue;
 
-                        std::vector<uint16_t> cand(ctx.checksum_batch + b * 24,
-                                                   ctx.checksum_batch + b * 24 + mnemonic_len);
+                        uint16_t cand[24];
+                        for (size_t i = 0; i < mnemonic_len; ++i) cand[i] = ctx.checksum_batch[b * 24 + i];
                         cand[mnemonic_len - 1] = syn;
-                        if (cryptowords::Bip39Deriver::verify_checksum(cand)) {
+                        if (cryptowords::Bip39Deriver::verify_checksum(std::span<const uint16_t>(cand, mnemonic_len))) {
                             for (size_t i = 0; i < mnemonic_len; ++i)
                                 ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = cand[i];
                             ++ctx.valid_batch_sz;
@@ -452,9 +447,9 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     }
                 } else {
-                    std::vector<uint16_t> cand(ctx.checksum_batch + b * 24,
-                                               ctx.checksum_batch + b * 24 + mnemonic_len);
-                    if (cryptowords::Bip39Deriver::verify_checksum(cand)) {
+                    uint16_t cand[24];
+                    for (size_t i = 0; i < mnemonic_len; ++i) cand[i] = ctx.checksum_batch[b * 24 + i];
+                    if (cryptowords::Bip39Deriver::verify_checksum(std::span<const uint16_t>(cand, mnemonic_len))) {
                         for (size_t i = 0; i < mnemonic_len; ++i)
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = cand[i];
                         ++ctx.valid_batch_sz;

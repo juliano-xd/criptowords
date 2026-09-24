@@ -379,7 +379,21 @@ public:
 
         if (suffix_len != 0) {
             const std::size_t first = buffer_size_;
-            if ((first & 7) == 0 && (suffix_len & 7) == 0) {
+            if (first == 0) {
+                const auto* p = static_cast<const byte*>(suffix);
+                const std::size_t word_count = suffix_len >> 3;
+                #pragma GCC unroll 8
+                for (std::size_t i = 0; i < word_count; ++i) {
+                    w[i] = load_be64(p + (i << 3));
+                }
+                const std::size_t rem = suffix_len & 7;
+                if (rem != 0) {
+                    alignas(8) byte tail[8];
+                    store_be64(tail, template_w_[word_count]);
+                    std::memcpy(tail, p + (word_count << 3), rem);
+                    w[word_count] = load_be64(tail);
+                }
+            } else if ((first & 7) == 0 && (suffix_len & 7) == 0) {
                 const std::size_t w0 = first >> 3;
                 const std::size_t word_count = suffix_len >> 3;
                 const auto* p = static_cast<const byte*>(suffix);

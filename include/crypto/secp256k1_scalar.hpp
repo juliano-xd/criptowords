@@ -36,12 +36,11 @@ FORCE_INLINE bool secp256k1_tweak_add_fast(uint8_t* seckey, const uint8_t* tweak
     }
 
     const uint8_t carry = k.add_carry(tw);
-    if (carry) {
-        k += DELTA;
-    } else {
-        if (k >= N_VAL) {
-            k -= N_VAL;
-        }
+    if (carry || k >= N_VAL) {
+        unsigned char c = _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));
+        c = _addcarry_u64(c, k.bits[1], 0x4551231950B75FC4ULL, reinterpret_cast<unsigned long long*>(&k.bits[1]));
+        c = _addcarry_u64(c, k.bits[2], 1ULL, reinterpret_cast<unsigned long long*>(&k.bits[2]));
+        _addcarry_u64(c, k.bits[3], 0ULL, reinterpret_cast<unsigned long long*>(&k.bits[3]));
     }
 
     if (k.eqz()) [[unlikely]] return false;
@@ -59,12 +58,11 @@ FORCE_INLINE bool secp256k1_tweak_add_fast(std::array<uint8_t, 32> &seckey, cons
     }
 
     const uint8_t carry = k.add_carry(tw);
-    if (carry) {
-        k += DELTA;
-    } else {
-        if (k >= N_VAL) {
-            k -= N_VAL;
-        }
+    if (carry || k >= N_VAL) {
+        unsigned char c = _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));
+        c = _addcarry_u64(c, k.bits[1], 0x4551231950B75FC4ULL, reinterpret_cast<unsigned long long*>(&k.bits[1]));
+        c = _addcarry_u64(c, k.bits[2], 1ULL, reinterpret_cast<unsigned long long*>(&k.bits[2]));
+        _addcarry_u64(c, k.bits[3], 0ULL, reinterpret_cast<unsigned long long*>(&k.bits[3]));
     }
 
     if (k.eqz()) [[unlikely]] return false;
