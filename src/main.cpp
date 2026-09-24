@@ -146,5 +146,8 @@ int main(int argc, char* argv[]) {
 
     cryptowords::ExecutionPipeline pipeline(cfg, plan);
     cryptowords::BruteForceEngine::run(pipeline, cfg.num_threads);
+    if (cfg.use_gpu) {
+        cryptowords::GPUEngine::get_instance().cleanup();
+    }
     return 0;
 }
