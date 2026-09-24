@@ -7,7 +7,7 @@
 #pragma GCC diagnostic pop
 
 #include "secp256k1_scalar.hpp"
-#include "g_table_w4.hpp"
+#include "g_table_w8.hpp"
 #include <cstdint>
 #include <cstring>
 #include <immintrin.h>
@@ -296,12 +296,12 @@ inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
-    for (int w = 0; w < 64; ++w) {
-        int limb = w >> 4;
-        int shift = (w & 0x0F) * 4;
-        uint32_t val = (k.bits[limb] >> shift) & 0x0F;
+    for (int w = 0; w < 32; ++w) {
+        int limb = w >> 3;
+        int shift = (w & 0x07) * 8;
+        uint32_t val = (k.bits[limb] >> shift) & 0xFF;
         if (val > 0) {
-            const auto& pt = G_TABLE_W4[w][val - 1];
+            const auto& pt = G_TABLE_W8[w][val - 1];
             if (acc.is_infinity) {
                 acc.X = make_uint4(pt.x);
                 acc.Y = make_uint4(pt.y);
@@ -332,12 +332,12 @@ inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pu
     if (__builtin_expect(k.eqz(), 0)) return false;
 
     PointJacobian acc;
-    for (uint8_t w = 0; w < 64; ++w) {
-        uint8_t limb = w >> 4;
-        uint8_t shift = (w & 0x0F) * 4;
-        uint32_t val = (k.bits[limb] >> shift) & 0x0F;
+    for (int w = 0; w < 32; ++w) {
+        int limb = w >> 3;
+        int shift = (w & 0x07) * 8;
+        uint32_t val = (k.bits[limb] >> shift) & 0xFF;
         if (val > 0) {
-            const auto& pt = G_TABLE_W4[w][val - 1];
+            const auto& pt = G_TABLE_W8[w][val - 1];
             if (acc.is_infinity) {
                 acc.X = make_uint4(pt.x);
                 acc.Y = make_uint4(pt.y);

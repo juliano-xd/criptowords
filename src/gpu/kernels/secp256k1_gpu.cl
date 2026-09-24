@@ -1140,14 +1140,23 @@ inline void point_add_mixed(uint* X1, uint* Y1, uint* Z1, __constant const uint*
     }
     
     uint T1[8], T2[8], T3[8], T4[8], H[8], R[8];
-    mul_mod(T1, Z1, Z1); 
-    mul_mod(T2, lx2, T1);
-    mul_mod(T3, T1, Z1);
-    mul_mod(T4, ly2, T3);
-    sub_mod(H, T2, X1);
-    sub_mod(R, T4, Y1);
+    bool z1_is_one = (Z1[0] == 1);
+    for (int i=1; i<8; i++) if (Z1[i] != 0) z1_is_one = false;
+
+    if (z1_is_one) {
+        sub_mod(H, lx2, X1);
+        sub_mod(R, ly2, Y1);
+        for(int i=0; i<8; i++) Z1[i] = H[i];
+    } else {
+        mul_mod(T1, Z1, Z1); 
+        mul_mod(T2, lx2, T1);
+        mul_mod(T3, T1, Z1);
+        mul_mod(T4, ly2, T3);
+        sub_mod(H, T2, X1);
+        sub_mod(R, T4, Y1);
+        mul_mod(Z1, H, Z1);
+    }
     
-    mul_mod(Z1, H, Z1);
     mul_mod(T1, H, H);
     mul_mod(T2, T1, H);
     mul_mod(T3, X1, T1);

@@ -252,8 +252,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
                 println("│ {:>6} │ {:>10.3f} │ {:>11.3f} │ {:>11.3f} │ {:>11.2f} │ {:>10.3f} │ {:>11.2f} │\n",
                            batch, h2d_ms, metrics.bandwidth_h2d_gb_s, kern_ms, kern_khs, d2h_ms, eff_khs);
 
-                // Trava de watchdog TDR (evita hang detection em GPUs desktop).
-                if ((is_rusticl && kern_ms > 500.0) || (!is_rusticl && kern_ms > 1500.0)) {
+                // Trava de watchdog TDR (evita hang detection em GPUs desktop/integradas).
+                if (kern_ms > 600.0 || (dev.compute_units <= 4 && kern_ms > 400.0) || (is_rusticl && kern_ms > 500.0)) {
                     println("├────────┴────────────┴─────────────┴─────────────┴─────────────┴────────────┴─────────────┤");
                     println("│  ➔ Ponto de Saturação: Lotes > {:>5} atingem o limite de latência do driver desktop.     │", batch);
                     break;

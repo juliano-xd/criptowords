@@ -9,9 +9,158 @@
 #include <mutex>
 #include <print>
 #include <thread>
-#include <algorithm>
+#include <condition_variable>
 
 namespace cryptowords {
+
+class GpuVerificationPool {
+    struct Job {
+        const uint8_t* base_seed_ptr = nullptr;
+        const uint16_t* base_mnem_ptr = nullptr;
+        size_t mlen = 0;
+        const secp256k1_context* ctx = nullptr;
+        const uint8_t* decoded_target = nullptr;
+        uint32_t target_fast_hash = 0;
+        CoinTarget coin = CoinTarget::BTC;
+        std::atomic<bool>* found = nullptr;
+        std::mutex* result_mutex = nullptr;
+        bool* success = nullptr;
+        std::vector<uint16_t>* result_mnemonic = nullptr;
+        size_t total_keys = 0;
+        size_t chunk = 0;
+    };
+
+    std::vector<std::thread> workers_;
+    std::mutex mu_;
+    std::condition_variable cv_work_;
+    std::condition_variable cv_done_;
+    Job current_job_;
+    size_t active_workers_ = 0;
+    uint64_t job_id_ = 0;
+    bool stop_ = false;
+
+public:
+    static GpuVerificationPool& get_instance() {
+        static GpuVerificationPool pool;
+        return pool;
+    }
+
+    GpuVerificationPool() {
+        const unsigned int hw = std::thread::hardware_concurrency();
+        size_t n = std::clamp(hw, 1u, 128u);
+        workers_.reserve(n);
+        for (size_t w = 0; w < n; ++w) {
+            workers_.emplace_back([this, w]() {
+                uint64_t last_id = 0;
+                while (true) {
+                    Job job;
+                    {
+                        std::unique_lock<std::mutex> lock(mu_);
+                        cv_work_.wait(lock, [this, last_id]() {
+                            return stop_ || job_id_ > last_id;
+                        });
+                        if (stop_) return;
+                        last_id = job_id_;
+                        job = current_job_;
+                    }
+
+                    const size_t start_b = w * job.chunk;
+                    const size_t end_b   = std::min(start_b + job.chunk, job.total_keys);
+
+                    if (start_b < end_b) {
+                        for (size_t b = start_b; b < end_b; ++b) {
+                            if (job.found->load(std::memory_order_relaxed)) break;
+
+                            std::array<u8, 64> seed64;
+                            std::memcpy(seed64.data(), job.base_seed_ptr + b * 64, 64);
+                            bool is_match = (job.coin == CoinTarget::BTC)
+                                ? Bip39Deriver::check_btc_target_from_seed(job.ctx, job.base_seed_ptr + b * 64, job.decoded_target, job.target_fast_hash)
+                                : Bip39Deriver::check_eth_target_from_seed(*job.ctx, seed64, job.decoded_target, job.target_fast_hash);
+
+                            if (is_match) {
+                                bool expected = false;
+                                if (job.found->compare_exchange_strong(expected, true)) {
+                                    std::lock_guard<std::mutex> lock(*job.result_mutex);
+                                    *job.success = true;
+                                    job.result_mnemonic->assign(job.base_mnem_ptr + b * 24, job.base_mnem_ptr + b * 24 + job.mlen);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(mu_);
+                        if (--active_workers_ == 0) {
+                            cv_done_.notify_one();
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    ~GpuVerificationPool() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = true;
+        }
+        cv_work_.notify_all();
+        for (auto& t : workers_) {
+            if (t.joinable()) t.join();
+        }
+    }
+
+    void verify(const uint8_t* base_seed_ptr, const uint16_t* base_mnem_ptr, size_t mlen,
+                const secp256k1_context* ctx, const uint8_t* decoded_target, uint32_t target_fast_hash,
+                CoinTarget coin, std::atomic<bool>& found, std::mutex& result_mutex,
+                bool& success, std::vector<uint16_t>& result_mnemonic, size_t total_keys) {
+        if (total_keys == 0) return;
+        const size_t num_w = workers_.size();
+        if (total_keys < 1024 || num_w <= 1) {
+            for (size_t b = 0; b < total_keys; ++b) {
+                if (found.load(std::memory_order_relaxed)) break;
+                std::array<u8, 64> seed64;
+                std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
+                bool is_match = (coin == CoinTarget::BTC)
+                    ? Bip39Deriver::check_btc_target_from_seed(ctx, base_seed_ptr + b * 64, decoded_target, target_fast_hash)
+                    : Bip39Deriver::check_eth_target_from_seed(*ctx, seed64, decoded_target, target_fast_hash);
+                if (is_match) {
+                    bool expected = false;
+                    if (found.compare_exchange_strong(expected, true)) {
+                        std::lock_guard<std::mutex> lock(result_mutex);
+                        success = true;
+                        result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
+                    }
+                    break;
+                }
+            }
+            return;
+        }
+
+        std::unique_lock<std::mutex> lock(mu_);
+        current_job_.base_seed_ptr = base_seed_ptr;
+        current_job_.base_mnem_ptr = base_mnem_ptr;
+        current_job_.mlen = mlen;
+        current_job_.ctx = ctx;
+        current_job_.decoded_target = decoded_target;
+        current_job_.target_fast_hash = target_fast_hash;
+        current_job_.coin = coin;
+        current_job_.found = &found;
+        current_job_.result_mutex = &result_mutex;
+        current_job_.success = &success;
+        current_job_.result_mnemonic = &result_mnemonic;
+        current_job_.total_keys = total_keys;
+        current_job_.chunk = (total_keys + num_w - 1) / num_w;
+        active_workers_ = num_w;
+        job_id_++;
+        cv_work_.notify_all();
+
+        cv_done_.wait(lock, [this]() {
+            return active_workers_ == 0;
+        });
+    }
+};
 
 class GPUBatchProcessor : public IBatchProcessor {
     size_t batch_capacity_ = 4096;
@@ -85,66 +234,12 @@ public:
         size_t mlen = opt.base_mnemonic.size();
 
         const size_t total_keys = s_data.current_count;
-        const unsigned int hw_threads = std::thread::hardware_concurrency();
-        const size_t num_workers = std::clamp(hw_threads, 1u, 128u);
 
-        if (total_keys < 1024 || num_workers <= 1) {
-            for (size_t b = 0; b < total_keys; ++b) {
-                if (found.load(std::memory_order_relaxed)) break;
-
-                bool is_match = false;
-                if (cfg.coin == CoinTarget::BTC) {
-                    is_match = Bip39Deriver::check_btc_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash);
-                } else {
-                    std::array<u8, 64> seed64;
-                    std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
-                    is_match = Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
-                }
-
-                if (is_match) {
-                    bool expected = false;
-                    if (found.compare_exchange_strong(expected, true)) {
-                        std::lock_guard<std::mutex> lock(result_mutex);
-                        success = true;
-                        result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
-                    }
-                    break;
-                }
-            }
-        } else {
-            const size_t chunk = (total_keys + num_workers - 1) / num_workers;
-            std::vector<std::thread> workers;
-            workers.reserve(num_workers);
-
-            for (size_t w = 0; w < num_workers; ++w) {
-                const size_t start_b = w * chunk;
-                const size_t end_b   = std::min(start_b + chunk, total_keys);
-                if (start_b >= end_b) break;
-
-                workers.emplace_back([&, start_b, end_b]() {
-                    for (size_t b = start_b; b < end_b; ++b) {
-                        if (found.load(std::memory_order_relaxed)) return;
-
-                        std::array<u8, 64> seed64;
-                        std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
-                        bool is_match = (cfg.coin == CoinTarget::BTC)
-                            ? Bip39Deriver::check_btc_target_from_seed(ctx.ctx, base_seed_ptr + b * 64, ctx.decoded_target, opt.target_fast_hash)
-                            : Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
-
-                        if (is_match) {
-                            bool expected = false;
-                            if (found.compare_exchange_strong(expected, true)) {
-                                std::lock_guard<std::mutex> lock(result_mutex);
-                                success = true;
-                                result_mnemonic.assign(base_mnem_ptr + b * 24, base_mnem_ptr + b * 24 + mlen);
-                            }
-                            return;
-                        }
-                    }
-                });
-            }
-            for (auto& t : workers) t.join();
-        }
+        GpuVerificationPool::get_instance().verify(
+            base_seed_ptr, base_mnem_ptr, mlen, ctx.ctx,
+            ctx.decoded_target, opt.target_fast_hash,
+            cfg.coin, found, result_mutex, success,
+            result_mnemonic, total_keys);
 
         tested_count.fetch_add(s_data.current_count, std::memory_order_relaxed);
         // Só podemos contar como "checksum OK" as chaves que passaram pelo filtro
@@ -195,15 +290,22 @@ public:
             cur_data.pw_batch.resize(batch_capacity_ * slot_size_);
             cur_data.pw_lens.resize(batch_capacity_);
             cur_data.seed_out.resize(batch_capacity_ * 64);
+            if (opt.prefix_words > 0 && !opt.prefix_str.empty()) {
+                for (size_t k = 0; k < batch_capacity_; ++k) {
+                    std::memcpy(cur_data.pw_batch.data() + k * slot_size_,
+                                opt.prefix_str.data(), opt.prefix_str.size());
+                }
+            }
         }
 
         size_t b = cur_data.current_count;
         std::memcpy(cur_data.mnem_batch.data() + b * 24, ctx.current_ids.data(), mlen * sizeof(uint16_t));
 
-        char* ptr = reinterpret_cast<char*>(cur_data.pw_batch.data()) + b * slot_size_;
-        std::memcpy(ptr, opt.prefix_str.data(), opt.prefix_str.size());
-        char* start_ptr = ptr;
-        ptr += opt.prefix_str.size();
+        char* start_ptr = reinterpret_cast<char*>(cur_data.pw_batch.data()) + b * slot_size_;
+        char* ptr = start_ptr;
+        if (opt.prefix_words > 0 && !opt.prefix_str.empty()) {
+            ptr += opt.prefix_str.size();
+        }
 
         const bool single_byte_sep = (cfg.separator.size() == 1);
         const char sep_c = single_byte_sep ? cfg.separator[0] : ' ';
