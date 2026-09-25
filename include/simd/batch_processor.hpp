@@ -137,11 +137,13 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
 
         ctx.local_valid += ctx.valid_batch_sz;
-        if (ctx.local_tested >= 2048) {
-            tested_count += ctx.local_tested;
-            valid_count  += ctx.local_valid;
+        if (ctx.local_tested > 0) {
+            tested_count.fetch_add(ctx.local_tested, std::memory_order_relaxed);
             ctx.local_tested = 0;
-            ctx.local_valid  = 0;
+        }
+        if (ctx.local_valid > 0) {
+            valid_count.fetch_add(ctx.local_valid, std::memory_order_relaxed);
+            ctx.local_valid = 0;
         }
         ctx.valid_batch_sz = 0;
     }
@@ -456,11 +458,13 @@ public:
                              std::atomic<uint64_t>& valid_count, std::mutex& result_mutex,
                              bool& success, std::vector<uint16_t>& result_mnemonic) override {
         ++ctx.local_tested;
-        if (ctx.local_tested >= 2048) {
-            tested_count += ctx.local_tested;
-            valid_count  += ctx.local_valid;
+        if (ctx.local_tested >= 128) {
+            tested_count.fetch_add(ctx.local_tested, std::memory_order_relaxed);
             ctx.local_tested = 0;
-            ctx.local_valid  = 0;
+            if (ctx.local_valid > 0) {
+                valid_count.fetch_add(ctx.local_valid, std::memory_order_relaxed);
+                ctx.local_valid = 0;
+            }
         }
 
         const size_t mnemonic_len = opt.base_mnemonic.size();
@@ -494,11 +498,13 @@ public:
             }
             process_batch(ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic, true);
         }
-        if (ctx.local_tested > 0 || ctx.local_valid > 0) {
-            tested_count += ctx.local_tested;
-            valid_count  += ctx.local_valid;
+        if (ctx.local_tested > 0) {
+            tested_count.fetch_add(ctx.local_tested, std::memory_order_relaxed);
             ctx.local_tested = 0;
-            ctx.local_valid  = 0;
+        }
+        if (ctx.local_valid > 0) {
+            valid_count.fetch_add(ctx.local_valid, std::memory_order_relaxed);
+            ctx.local_valid = 0;
         }
     }
 };
