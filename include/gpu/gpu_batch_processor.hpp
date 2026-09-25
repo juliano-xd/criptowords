@@ -20,7 +20,7 @@ class GpuVerificationPool {
         size_t mlen = 0;
         const secp256k1_context* ctx = nullptr;
         const uint8_t* decoded_target = nullptr;
-        uint32_t target_fast_hash = 0;
+        uint64_t target_fast_hash = 0;
         CoinTarget coin = CoinTarget::BTC;
         std::atomic<bool>* found = nullptr;
         std::mutex* result_mutex = nullptr;
@@ -112,7 +112,7 @@ public:
     }
 
     void verify(const uint8_t* base_seed_ptr, const uint16_t* base_mnem_ptr, size_t mlen,
-                const secp256k1_context* ctx, const uint8_t* decoded_target, uint32_t target_fast_hash,
+                const secp256k1_context* ctx, const uint8_t* decoded_target, uint64_t target_fast_hash,
                 CoinTarget coin, std::atomic<bool>& found, std::mutex& result_mutex,
                 bool& success, std::vector<uint16_t>& result_mnemonic, size_t total_keys) {
         if (total_keys == 0) return;
@@ -226,8 +226,9 @@ public:
         s_data.in_flight = false;
 
         if (__builtin_expect(!ok, 0)) {
-            std::println(stderr, "Erro fatal na GPU! Abortando batch...");
+            std::println(stderr, "Erro fatal na GPU! Interrompendo busca...");
             s_data.current_count = 0;
+            found.store(true, std::memory_order_relaxed);
             return;
         }
 
@@ -239,7 +240,7 @@ public:
 
         GpuVerificationPool::get_instance().verify(
             base_seed_ptr, base_mnem_ptr, mlen, ctx.ctx,
-            ctx.decoded_target, opt.target_fast_hash,
+            ctx.decoded_target, opt.target_fast_hash64,
             cfg.coin, found, result_mutex, success,
             result_mnemonic, total_keys);
 

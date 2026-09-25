@@ -24,6 +24,7 @@ struct RawOptions {
     size_t                   pbkdf2_rounds = 2048;
     CoinTarget               coin          = CoinTarget::BTC;
     bool                     use_gpu       = false;
+    bool                     use_cpu       = false;
     bool                     list_gpus     = false;
     int                      gpu_platform  = -1;
     int                      gpu_device    = -1;
@@ -54,7 +55,6 @@ struct AppConfig {
     size_t   unknows       = 0;
     size_t   max_distance  = 2;
 
-
     CoinTarget                  coin       = CoinTarget::BTC;
     std::vector<SearchStrategy> strategies = {SearchStrategy::Default};
     SearchStrategy              strategy   = SearchStrategy::Default;
@@ -66,6 +66,7 @@ struct AppConfig {
 
     bool only_valids   = true;
     bool use_gpu       = false;
+    bool use_cpu       = false;
     bool use_hybrid    = false;
     bool list_gpus     = false;
     int  gpu_platform  = -1;
@@ -77,4 +78,3 @@ struct AppConfig {
     bool probe_hardware = false;
     bool pin_cores      = true;
 };
-

@@ -76,12 +76,32 @@ namespace cryptowords {
                                                 const u8* seed,
                                                 const u8* target_ripemd,
                                                 uint32_t target_fast) noexcept;
+            static bool check_btc_target_from_seed(const secp256k1_context* ctx,
+                                                const u8* seed,
+                                                const u8* target_ripemd,
+                                                uint64_t target_fast64) noexcept;
 
             // Faz a derivação completa e compara diretamente com um alvo Hex 20-bytes (ETH) na memória
             static bool check_eth_target_from_seed(const secp256k1_context &ctx,
-                                                const array<u8, 64> &seed,
+                                                const u8* seed,
+                                                const u8* target_eth,
+                                                uint64_t target_fast64) noexcept;
+            static bool check_eth_target_from_seed(const secp256k1_context &ctx,
+                                                const u8* seed,
                                                 const u8* target_eth,
                                                 uint32_t target_fast) noexcept;
+            static bool check_eth_target_from_seed(const secp256k1_context &ctx,
+                                                const array<u8, 64> &seed,
+                                                const u8* target_eth,
+                                                uint32_t target_fast) noexcept {
+                return check_eth_target_from_seed(ctx, seed.data(), target_eth, target_fast);
+            }
+            static bool check_eth_target_from_seed(const secp256k1_context &ctx,
+                                                const array<u8, 64> &seed,
+                                                const u8* target_eth,
+                                                uint64_t target_fast64) noexcept {
+                return check_eth_target_from_seed(ctx, seed.data(), target_eth, target_fast64);
+            }
 
             // Validador de integridade do Mnemônico (Checksum BIP39)
             static bool verify_checksum(span<const uint16_t> mnemonic_ids) noexcept;

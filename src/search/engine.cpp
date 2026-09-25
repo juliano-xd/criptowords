@@ -23,14 +23,25 @@ namespace cryptowords {
         static std::vector<int> get_physical_cpu_ids() {
             std::vector<int> primary;
             std::vector<int> secondary;
-            std::unordered_set<int> seen_core_ids;
+            cpu_set_t allowed;
+            CPU_ZERO(&allowed);
+            bool has_affinity = (sched_getaffinity(0, sizeof(cpu_set_t), &allowed) == 0);
+
+            std::unordered_set<uint64_t> seen_physical_cores;
             for (int cpu = 0; ; ++cpu) {
                 std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/core_id";
                 std::ifstream f(path);
                 if (!f) break;
+                if (has_affinity && !CPU_ISSET(cpu, &allowed)) continue;
+
                 int core_id = -1;
+                int pkg_id = 0;
                 if (f >> core_id) {
-                    if (seen_core_ids.insert(core_id).second) {
+                    std::string pkg_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/physical_package_id";
+                    std::ifstream f_pkg(pkg_path);
+                    if (f_pkg >> pkg_id) {}
+                    uint64_t core_key = (static_cast<uint64_t>(pkg_id) << 32) | static_cast<uint32_t>(core_id);
+                    if (seen_physical_cores.insert(core_key).second) {
                         primary.push_back(cpu);
                     } else {
                         secondary.push_back(cpu);
@@ -40,27 +51,9 @@ namespace cryptowords {
             for (int s : secondary) primary.push_back(s);
             if (primary.empty()) {
                 const unsigned int total = std::thread::hardware_concurrency();
-                for (unsigned int i = 0; i < total; ++i) primary.push_back(static_cast<int>(i));
-            } else {
-                // Priorizar núcleos de maior silício (Golden Cores / P-Cores) primeiro
-                std::vector<std::pair<uint32_t, int>> rated;
-                for (int cpu : primary) {
-                    uint32_t score = 0;
-                    std::string cppc_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/acpi_cppc/highest_perf";
-                    std::ifstream f_c(cppc_path);
-                    if (f_c >> score) {}
-                    else {
-                        std::string f_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/cpuinfo_max_freq";
-                        std::ifstream f_m(f_path);
-                        f_m >> score;
-                    }
-                    rated.push_back({score, cpu});
-                }
-                std::stable_sort(rated.begin(), rated.end(), [](const auto& a, const auto& b) {
-                    return a.first > b.first;
-                });
-                for (size_t i = 0; i < primary.size(); ++i) {
-                    primary[i] = rated[i].second;
+                for (unsigned int i = 0; i < total; ++i) {
+                    if (!has_affinity || CPU_ISSET(static_cast<int>(i), &allowed))
+                        primary.push_back(static_cast<int>(i));
                 }
             }
             return primary;
@@ -170,7 +163,11 @@ namespace cryptowords {
     void BruteForceEngine::run(ExecutionPipeline& pipeline, size_t num_threads) {
         const double total = pipeline.total_combinations();
         const double math_total = pipeline.math_combinations();
-        if (total < num_threads * 128) num_threads = 1;
+        if (pipeline.config().use_gpu && !pipeline.config().use_hybrid) {
+            num_threads = 1;
+        } else if (total < num_threads * 128) {
+            num_threads = 1;
+        }
 
         print_box_top("EXECUÇÃO DO MOTOR SIMD", DEFAULT_INNER_WIDTH);
         print_box_line(std::format("Motor SIMD   : \033[1;36m{}\033[0m", pipeline.architecture_name()), DEFAULT_INNER_WIDTH);

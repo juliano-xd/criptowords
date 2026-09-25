@@ -274,8 +274,7 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     // =========================================================================
     println("╭─── [5/6] BENCHMARK: DERIVAÇÃO BIP-32 & ARITMÉTICA ESCALAR SECP256K1 ───────────────╮");
     {
-        // Contexto único para toda a seção (SECP256K1_CONTEXT_SIGN é hoje alias de NONE).
-        auto* secp_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+        auto* secp_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
 
         // --- 5.1 Adição escalar: libsecp256k1 vs UInt<4> nativo ---
         constexpr size_t SCALAR_ITERS = 1'000'000;

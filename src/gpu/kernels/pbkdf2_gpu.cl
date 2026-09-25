@@ -43,7 +43,10 @@ inline void sha512_block_fast(ulong* H, ulong* W) {
 
     #pragma unroll 16
     for (int j = 0; j < 16; ++j) {
-        T1 = h + EP1_64(e) + CH64(e, f, g) + K[j] + W[j];
+        ulong kw = K[j] + W[j];
+        ulong h_kw = h + kw;
+        ulong e_terms = EP1_64(e) + CH64(e, f, g);
+        T1 = h_kw + e_terms;
         T2 = EP0_64(a) + MAJ64(a, b, c);
         h = g; g = f; f = e; e = d + T1;
         d = c; c = b; b = a; a = T1 + T2;
@@ -53,7 +56,10 @@ inline void sha512_block_fast(ulong* H, ulong* W) {
         #pragma unroll 16
         for (int j = 0; j < 16; ++j) {
             W[j] += SIG1_64(W[(j+14)&15]) + W[(j+9)&15] + SIG0_64(W[(j+1)&15]);
-            T1 = h + EP1_64(e) + CH64(e, f, g) + K[chunk*16 + j] + W[j];
+            ulong kw = K[chunk*16 + j] + W[j];
+            ulong h_kw = h + kw;
+            ulong e_terms = EP1_64(e) + CH64(e, f, g);
+            T1 = h_kw + e_terms;
             T2 = EP0_64(a) + MAJ64(a, b, c);
             h = g; g = f; f = e; e = d + T1;
             d = c; c = b; b = a; a = T1 + T2;
@@ -69,8 +75,9 @@ inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
     #pragma unroll 8
     for (int i = 0; i < 8; ++i) W[i] = in8[i];
     W[8] = 0x8000000000000000UL;
-    W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0;
-    W[15] = 1536;
+    #pragma unroll 6
+    for (int i = 9; i < 15; ++i) W[i] = 0;
+    W[15] = 1536UL;
 
     ulong a = H[0], b = H[1], c = H[2], d = H[3];
     ulong e = H[4], f = H[5], g = H[6], h = H[7];
@@ -78,7 +85,10 @@ inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
 
     #pragma unroll 16
     for (int j = 0; j < 16; ++j) {
-        T1 = h + EP1_64(e) + CH64(e, f, g) + K[j] + W[j];
+        ulong kw = K[j] + W[j];
+        ulong h_kw = h + kw;
+        ulong e_terms = EP1_64(e) + CH64(e, f, g);
+        T1 = h_kw + e_terms;
         T2 = EP0_64(a) + MAJ64(a, b, c);
         h = g; g = f; f = e; e = d + T1;
         d = c; c = b; b = a; a = T1 + T2;
@@ -88,7 +98,10 @@ inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
         #pragma unroll 16
         for (int j = 0; j < 16; ++j) {
             W[j] += SIG1_64(W[(j+14)&15]) + W[(j+9)&15] + SIG0_64(W[(j+1)&15]);
-            T1 = h + EP1_64(e) + CH64(e, f, g) + K[chunk*16 + j] + W[j];
+            ulong kw = K[chunk*16 + j] + W[j];
+            ulong h_kw = h + kw;
+            ulong e_terms = EP1_64(e) + CH64(e, f, g);
+            T1 = h_kw + e_terms;
             T2 = EP0_64(a) + MAJ64(a, b, c);
             h = g; g = f; f = e; e = d + T1;
             d = c; c = b; b = a; a = T1 + T2;
@@ -124,7 +137,6 @@ __kernel void pbkdf2_batch(
     }
     
     if (pwd_len <= 128) {
-        ulong W_opad[16];
         for(int i=0; i<16; i++) {
             ulong word_raw = 0;
             #pragma unroll 8
@@ -133,11 +145,21 @@ __kernel void pbkdf2_batch(
                 uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
                 word_raw = (word_raw << 8) | b;
             }
-            W[i]      = word_raw ^ 0x3636363636363636UL;
-            W_opad[i] = word_raw ^ 0x5c5c5c5c5c5c5c5cUL;
+            W[i] = word_raw ^ 0x3636363636363636UL;
         }
         sha512_block_fast(ipad_state, W);
-        sha512_block_fast(opad_state, W_opad);
+
+        for(int i=0; i<16; i++) {
+            ulong word_raw = 0;
+            #pragma unroll 8
+            for(int j=0; j<8; j++) {
+                uint idx = i*8 + j;
+                uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
+                word_raw = (word_raw << 8) | b;
+            }
+            W[i] = word_raw ^ 0x5c5c5c5c5c5c5c5cUL;
+        }
+        sha512_block_fast(opad_state, W);
     } else {
         ulong H_key[8];
         #pragma unroll 8

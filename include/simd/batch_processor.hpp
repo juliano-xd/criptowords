@@ -121,11 +121,9 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
 
         for (size_t b = 0; b < ctx.valid_batch_sz; ++b) {
-            std::array<u8, 64> seed64;
-            std::memcpy(seed64.data(), ctx.seed + b*64, 64);
             const bool is_match = (cfg.coin == CoinTarget::BTC)
-                ? Bip39Deriver::check_btc_target_from_seed(ctx.ctx, ctx.seed + b*64, ctx.decoded_target, opt.target_fast_hash)
-                : Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, seed64, ctx.decoded_target, opt.target_fast_hash);
+                ? Bip39Deriver::check_btc_target_from_seed(ctx.ctx, ctx.seed + b*64, ctx.decoded_target, opt.target_fast_hash64)
+                : Bip39Deriver::check_eth_target_from_seed(*ctx.ctx, ctx.seed + b*64, ctx.decoded_target, opt.target_fast_hash64);
 
             if (is_match) {
                 bool expected = false;
@@ -139,7 +137,7 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
 
         ctx.local_valid += ctx.valid_batch_sz;
-        if (ctx.local_tested >= 64) {
+        if (ctx.local_tested >= 2048) {
             tested_count += ctx.local_tested;
             valid_count  += ctx.local_valid;
             ctx.local_tested = 0;
@@ -191,8 +189,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
                         if (opt.allowed_last_words[syn]) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -201,8 +198,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     } else {
                         if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
                                 process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -228,8 +224,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
                         if (opt.allowed_last_words[syn]) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -238,8 +233,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     } else {
                         if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
                                 process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -279,8 +273,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
                         if (opt.allowed_last_words[syn]) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -289,8 +282,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     } else {
                         if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
                                 process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -317,8 +309,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
                         if (opt.allowed_last_words[syn]) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -327,8 +318,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     } else {
                         if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
                                 process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -368,8 +358,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                            | (hash_first_byte >> (8 - checksum_bits));
                         if (opt.allowed_last_words[syn]) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -378,8 +367,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                         }
                     } else {
                         if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                            for (size_t i = 0; i < mnemonic_len; ++i)
-                                ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                            std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                             ++ctx.valid_batch_sz;
                             if (ctx.valid_batch_sz == BATCH_SIZE)
                                 process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -408,8 +396,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                     const uint16_t syn = ctx.checksum_batch[b * 24 + mnemonic_len - 1]
                                        | (hash_first_byte >> (8 - checksum_bits));
                     if (opt.allowed_last_words[syn]) {
-                        for (size_t i = 0; i < mnemonic_len; ++i)
-                            ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                        std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                         ctx.valid_batch[ctx.valid_batch_sz * 24 + mnemonic_len - 1] = syn;
                         ++ctx.valid_batch_sz;
                         if (ctx.valid_batch_sz == BATCH_SIZE)
@@ -418,8 +405,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                     }
                 } else {
                     if (opt.expected_checksum == (hash_first_byte >> (8 - checksum_bits))) {
-                        for (size_t i = 0; i < mnemonic_len; ++i)
-                            ctx.valid_batch[ctx.valid_batch_sz * 24 + i] = ctx.checksum_batch[b * 24 + i];
+                        std::memcpy(ctx.valid_batch + ctx.valid_batch_sz * 24, ctx.checksum_batch + b * 24, mnemonic_len * sizeof(uint16_t));
                         ++ctx.valid_batch_sz;
                         if (ctx.valid_batch_sz == BATCH_SIZE)
                             process_batch(ctx, cfg, opt, found, tested_count, valid_count,
@@ -470,7 +456,7 @@ public:
                              std::atomic<uint64_t>& valid_count, std::mutex& result_mutex,
                              bool& success, std::vector<uint16_t>& result_mnemonic) override {
         ++ctx.local_tested;
-        if (ctx.local_tested >= 64) {
+        if (ctx.local_tested >= 2048) {
             tested_count += ctx.local_tested;
             valid_count  += ctx.local_valid;
             ctx.local_tested = 0;

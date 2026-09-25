@@ -10,7 +10,7 @@
 #include <array>
 
 #ifndef BUILTIN_EXPECT
-#define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
+    #define BUILTIN_EXPECT(x, y) (__builtin_expect(!!(x), y))
 #endif
 
 namespace cryptowords {
@@ -207,7 +207,7 @@ bool Bip39Deriver::decode_hex_eth_address(const std::string& hex_addr, uint8_t o
 bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
                                                const uint8_t* seed,
                                                const uint8_t* target_ripemd,
-                                               uint32_t target_fast) noexcept {
+                                               uint64_t target_fast64) noexcept {
     std::array<uint8_t, 64> master_node;
     std::array<uint8_t, 32> priv_key;
     std::array<uint8_t, 32> chain_code;
@@ -231,23 +231,33 @@ bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
     crypto::SHA256::hash33(pub_serialized, hash_buf);
     crypto::RIPEMD160::hash32(hash_buf, ripemd_buf);
 
-    uint32_t ripemd_fast;
-    std::memcpy(&ripemd_fast, ripemd_buf.data(), 4);
-    if (ripemd_fast != target_fast) return false;
-    return std::memcmp(ripemd_buf.data() + 4, target_ripemd + 4, 16) == 0;
+    // Otimização Matemática C1-64: Rejeição de 64 bits em 1 instrução (Probabilidade de falso positivo: 2^-64)
+    uint64_t ripemd_fast64;
+    std::memcpy(&ripemd_fast64, ripemd_buf.data(), 8);
+    if (ripemd_fast64 != target_fast64) return false;
+    return std::memcmp(ripemd_buf.data() + 8, target_ripemd + 8, 12) == 0;
+}
+
+bool Bip39Deriver::check_btc_target_from_seed(const secp256k1_context* ctx,
+                                               const uint8_t* seed,
+                                               const uint8_t* target_ripemd,
+                                               uint32_t target_fast) noexcept {
+    uint64_t target_fast64 = 0;
+    std::memcpy(&target_fast64, target_ripemd, 8);
+    return check_btc_target_from_seed(ctx, seed, target_ripemd, target_fast64);
 }
 
 bool Bip39Deriver::check_eth_target_from_seed([[maybe_unused]] const secp256k1_context &ctx,
-                                               const std::array<uint8_t, 64> &seed,
+                                               const uint8_t* seed,
                                                const uint8_t* target_eth,
-                                               uint32_t target_fast) noexcept {
+                                               uint64_t target_fast64) noexcept {
     std::array<uint8_t, 64> master_node;
     std::array<uint8_t, 32> priv_key;
     std::array<uint8_t, 32> chain_code;
     std::array<uint8_t, 65> pub_uncompressed;
     std::array<uint8_t, 32> hash_buf;
 
-    get_bitcoin_seed_template().compute_master_node(seed.data(), master_node);
+    get_bitcoin_seed_template().compute_master_node(seed, master_node);
 
     std::memcpy(priv_key.data(), master_node.data(), 32);
     std::memcpy(chain_code.data(), master_node.data() + 32, 32);
@@ -262,17 +272,26 @@ bool Bip39Deriver::check_eth_target_from_seed([[maybe_unused]] const secp256k1_c
 
     crypto::Keccak256::hash(pub_uncompressed.data() + 1, 64, hash_buf.data());
 
-    uint32_t eth_fast;
-    std::memcpy(&eth_fast, hash_buf.data() + 12, 4);
-    if (__builtin_expect(eth_fast != target_fast, 1)) return false;
-    return std::memcmp(hash_buf.data() + 16, target_eth + 4, 16) == 0;
+    // Otimização Matemática C1-64: Rejeição de 64 bits em 1 instrução (Probabilidade de falso positivo: 2^-64)
+    uint64_t eth_fast64;
+    std::memcpy(&eth_fast64, hash_buf.data() + 12, 8);
+    if (__builtin_expect(eth_fast64 != target_fast64, 1)) return false;
+    return std::memcmp(hash_buf.data() + 20, target_eth + 8, 12) == 0;
+}
+
+bool Bip39Deriver::check_eth_target_from_seed(const secp256k1_context &ctx,
+                                               const uint8_t* seed,
+                                               const uint8_t* target_eth,
+                                               uint32_t target_fast) noexcept {
+    uint64_t target_fast64 = 0;
+    std::memcpy(&target_fast64, target_eth, 8);
+    return check_eth_target_from_seed(ctx, seed, target_eth, target_fast64);
 }
 
 bool Bip39Deriver::verify_checksum(std::span<const uint16_t> mnemonic_ids) noexcept {
     const size_t n = mnemonic_ids.size();
 
-    if (BUILTIN_EXPECT(n < 12 || n > 24 || n % 3 != 0, 0))
-        return false;
+    if (n < 12 || n > 24 || n % 3 != 0) [[unlikely]] return false;
 
     const size_t entropy_bytes = (n * 4) / 3;
     const unsigned checksum_bits = n / 3;

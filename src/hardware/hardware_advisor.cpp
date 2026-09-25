@@ -158,15 +158,18 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
                               " CUs). Ativado automaticamente o Caminho Híbrido Cooperativo para SOMAR a CPU com a iGPU em vez de subutilizar o sistema.";
         } else {
             strat.chosen_engine = ExecutionEngineChoice::GpuOpenCL;
+            strat.recommended_threads = 1;
             strat.engine_desc = "GPU OpenCL Dedicada (" + (best_gpu ? best_gpu->device_name : "Dispositivo Auto") + ")";
             strat.rationale = "Aceleração GPU solicitada: fluxo contínuo de PBKDF2 em lotes de alta ocupação via OpenCL.";
         }
     } else {
         // Se o usuário não especificou motor, analisamos se a máquina tem dGPU dominante
-        if (best_gpu && best_gpu->is_discrete && best_gpu->category == GpuCategory::DiscreteHighEnd) {
+        // e se o espaço combinatório justifica o overhead de inicialização da GPU (K >= 2 incógnitas)
+        if (!cfg.use_cpu && cfg.num_threads <= 1 && cfg.unknows >= 2 && best_gpu && best_gpu->is_discrete && best_gpu->category == GpuCategory::DiscreteHighEnd) {
             strat.chosen_engine = ExecutionEngineChoice::GpuOpenCL;
+            strat.recommended_threads = 1;
             strat.engine_desc = "GPU OpenCL de Alta Performance (" + best_gpu->device_name + ")";
-            strat.rationale = "dGPU de alta vazão detectada (" + std::to_string(best_gpu->compute_units) + " CUs/SMs). Recomendado aceleração GPU.";
+            strat.rationale = "dGPU de alta vazão detectada (" + std::to_string(best_gpu->compute_units) + " CUs/SMs) com espaço combinatório suficiente (" + std::to_string(cfg.unknows) + " incógnitas). Recomendado aceleração GPU.";
         } else {
             strat.chosen_engine = ExecutionEngineChoice::CpuSIMD;
             std::string simd_name = (strat.chosen_simd == SimdArch::AVX512 ? "AVX-512" : (strat.chosen_simd == SimdArch::AVX2 ? "AVX2" : "SSE4.1"));
@@ -190,6 +193,12 @@ void HardwareAdvisor::apply_tuning(AppConfig& cfg, const TuningStrategy& strat) 
     if (strat.chosen_engine == ExecutionEngineChoice::HybridParallel) {
         cfg.use_hybrid = true;
         cfg.use_gpu = true;
+    } else if (strat.chosen_engine == ExecutionEngineChoice::GpuOpenCL) {
+        cfg.use_gpu = true;
+        cfg.use_hybrid = false;
+        if (cfg.num_threads == 0) {
+            cfg.num_threads = 1;
+        }
     }
     if (cfg.num_threads == 0) {
         cfg.num_threads = strat.recommended_threads;

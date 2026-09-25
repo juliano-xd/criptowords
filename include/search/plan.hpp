@@ -91,5 +91,6 @@ struct OptimizedMnemonics {
     // Alvo
     uint8_t  target_bytes[20] = {};
     uint32_t target_fast_hash = 0;
+    uint64_t target_fast_hash64 = 0;
     bool     has_target       = false;
 };
