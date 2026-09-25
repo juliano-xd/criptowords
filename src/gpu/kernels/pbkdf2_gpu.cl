@@ -74,39 +74,94 @@ inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
     ulong W[16];
     #pragma unroll 8
     for (int i = 0; i < 8; ++i) W[i] = in8[i];
-    W[8] = 0x8000000000000000UL;
-    #pragma unroll 6
-    for (int i = 9; i < 15; ++i) W[i] = 0;
-    W[15] = 1536UL;
 
     ulong a = H[0], b = H[1], c = H[2], d = H[3];
     ulong e = H[4], f = H[5], g = H[6], h = H[7];
     ulong T1, T2;
 
-    #pragma unroll 16
-    for (int j = 0; j < 16; ++j) {
-        ulong kw = K[j] + W[j];
-        ulong h_kw = h + kw;
-        ulong e_terms = EP1_64(e) + CH64(e, f, g);
-        T1 = h_kw + e_terms;
-        T2 = EP0_64(a) + MAJ64(a, b, c);
-        h = g; g = f; f = e; e = d + T1;
-        d = c; c = b; b = a; a = T1 + T2;
+    #define STEP_GPU_ROUND(kw_val) do { \
+        ulong h_kw = h + (kw_val); \
+        ulong e_terms = EP1_64(e) + CH64(e, f, g); \
+        T1 = h_kw + e_terms; \
+        T2 = EP0_64(a) + MAJ64(a, b, c); \
+        h = g; g = f; f = e; e = d + T1; \
+        d = c; c = b; b = a; a = T1 + T2; \
+    } while(0)
+
+    #pragma unroll 8
+    for (int j = 0; j < 8; ++j) {
+        STEP_GPU_ROUND(K[j] + W[j]);
     }
 
-    for (int chunk = 1; chunk < 5; ++chunk) {
+    STEP_GPU_ROUND(0x5807aa98a3030242UL); // K[8] + 0x8000000000000000UL
+    #pragma unroll 6
+    for (int j = 9; j < 15; ++j) {
+        STEP_GPU_ROUND(K[j]);
+    }
+    STEP_GPU_ROUND(0xc19bf174cf692c94UL); // K[15] + 1536UL
+
+    // Chunk 1 (rounds 16..31) com constantes fundidas de padding (elimina zeroing de W[9..14])
+    W[0] += SIG0_64(W[1]);
+    STEP_GPU_ROUND(K[16] + W[0]);
+
+    W[1] += SIG0_64(W[2]) + 0x00c0000000003018UL; // SIG1_64(1536)
+    STEP_GPU_ROUND(K[17] + W[1]);
+
+    W[2] += SIG0_64(W[3]) + SIG1_64(W[0]);
+    STEP_GPU_ROUND(K[18] + W[2]);
+
+    W[3] += SIG0_64(W[4]) + SIG1_64(W[1]);
+    STEP_GPU_ROUND(K[19] + W[3]);
+
+    W[4] += SIG0_64(W[5]) + SIG1_64(W[2]);
+    STEP_GPU_ROUND(K[20] + W[4]);
+
+    W[5] += SIG0_64(W[6]) + SIG1_64(W[3]);
+    STEP_GPU_ROUND(K[21] + W[5]);
+
+    W[6] += SIG0_64(W[7]) + 1536UL + SIG1_64(W[4]);
+    STEP_GPU_ROUND(K[22] + W[6]);
+
+    W[7] += 0x4180000000000000UL + W[0] + SIG1_64(W[5]); // SIG0_64(0x80...)
+    STEP_GPU_ROUND(K[23] + W[7]);
+
+    W[8]  = 0x8000000000000000UL + W[1] + SIG1_64(W[6]);
+    STEP_GPU_ROUND(K[24] + W[8]);
+
+    W[9]  = W[2] + SIG1_64(W[7]);
+    STEP_GPU_ROUND(K[25] + W[9]);
+
+    W[10] = W[3] + SIG1_64(W[8]);
+    STEP_GPU_ROUND(K[26] + W[10]);
+
+    W[11] = W[4] + SIG1_64(W[9]);
+    STEP_GPU_ROUND(K[27] + W[11]);
+
+    W[12] = W[5] + SIG1_64(W[10]);
+    STEP_GPU_ROUND(K[28] + W[12]);
+
+    W[13] = W[6] + SIG1_64(W[11]);
+    STEP_GPU_ROUND(K[29] + W[13]);
+
+    W[14] = 0x000000000000030aUL + W[7] + SIG1_64(W[12]); // SIG0_64(1536)
+    STEP_GPU_ROUND(K[30] + W[14]);
+
+    W[15] = 1536UL + SIG0_64(W[0]) + W[8] + SIG1_64(W[13]);
+    STEP_GPU_ROUND(K[31] + W[15]);
+
+    // Chunks 2..4 (rounds 32..79) com adição associativa em árvore
+    for (int chunk = 2; chunk < 5; ++chunk) {
         #pragma unroll 16
         for (int j = 0; j < 16; ++j) {
-            W[j] += SIG1_64(W[(j+14)&15]) + W[(j+9)&15] + SIG0_64(W[(j+1)&15]);
+            ulong sum_dir = W[j] + W[(j+9)&15];
+            ulong sig_sum = SIG1_64(W[(j+14)&15]) + SIG0_64(W[(j+1)&15]);
+            W[j] = sum_dir + sig_sum;
             ulong kw = K[chunk*16 + j] + W[j];
-            ulong h_kw = h + kw;
-            ulong e_terms = EP1_64(e) + CH64(e, f, g);
-            T1 = h_kw + e_terms;
-            T2 = EP0_64(a) + MAJ64(a, b, c);
-            h = g; g = f; f = e; e = d + T1;
-            d = c; c = b; b = a; a = T1 + T2;
+            STEP_GPU_ROUND(kw);
         }
     }
+
+    #undef STEP_GPU_ROUND
 
     H[0] += a; H[1] += b; H[2] += c; H[3] += d;
     H[4] += e; H[5] += f; H[6] += g; H[7] += h;

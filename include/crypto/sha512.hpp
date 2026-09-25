@@ -307,7 +307,9 @@ public:
                 d = c; c = b; b = a;
                 a = T1 + T2;
                 if (r < 4) {
-                    W[i] += small0(W[(i+1)&15]) + W[(i+9)&15] + small1(W[(i+14)&15]);
+                    word sum_direct = W[i] + W[(i+9)&15];
+                    word sig_terms  = small0(W[(i+1)&15]) + small1(W[(i+14)&15]);
+                    W[i] = sum_direct + sig_terms;
                 }
             }
         }

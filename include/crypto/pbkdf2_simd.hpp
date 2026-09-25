@@ -359,9 +359,9 @@ static inline void sha512_block64_sse(const __m128i iv[8], __m128i W[16], __m128
             d = c; c = b; b = a;
             a = _mm_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm_add_epi64(W[i], _mm_add_epi64(
-                       _mm_add_epi64(s0_SSE(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_SSE(W[(i+14)&15])));
+                __m128i sum_direct = _mm_add_epi64(W[i], W[(i+9)&15]);
+                __m128i sig_terms  = _mm_add_epi64(s0_SSE(W[(i+1)&15]), s1_SSE(W[(i+14)&15]));
+                W[i] = _mm_add_epi64(sum_direct, sig_terms);
             }
         }
     }
@@ -442,9 +442,9 @@ static inline void sha512_padded_block64_sse(const __m128i iv[8], __m128i W[16],
             d = c; c = b; b = a;
             a = _mm_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm_add_epi64(W[i], _mm_add_epi64(
-                       _mm_add_epi64(s0_SSE(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_SSE(W[(i+14)&15])));
+                __m128i sum_direct = _mm_add_epi64(W[i], W[(i+9)&15]);
+                __m128i sig_terms  = _mm_add_epi64(s0_SSE(W[(i+1)&15]), s1_SSE(W[(i+14)&15]));
+                W[i] = _mm_add_epi64(sum_direct, sig_terms);
             }
         }
     }
@@ -614,9 +614,9 @@ static inline void sha512_block64_avx2(const __m256i iv[8], __m256i W[16], __m25
             d = c; c = b; b = a;
             a = _mm256_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm256_add_epi64(W[i], _mm256_add_epi64(
-                       _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_AVX2(W[(i+14)&15])));
+                __m256i sum_direct = _mm256_add_epi64(W[i], W[(i+9)&15]);
+                __m256i sig_terms  = _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), s1_AVX2(W[(i+14)&15]));
+                W[i] = _mm256_add_epi64(sum_direct, sig_terms);
             }
         }
     }
@@ -697,9 +697,9 @@ static inline void sha512_padded_block64_avx2(const __m256i iv[8], __m256i W[16]
             d = c; c = b; b = a;
             a = _mm256_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm256_add_epi64(W[i], _mm256_add_epi64(
-                       _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_AVX2(W[(i+14)&15])));
+                __m256i sum_direct = _mm256_add_epi64(W[i], W[(i+9)&15]);
+                __m256i sig_terms  = _mm256_add_epi64(s0_AVX2(W[(i+1)&15]), s1_AVX2(W[(i+14)&15]));
+                W[i] = _mm256_add_epi64(sum_direct, sig_terms);
             }
         }
     }
@@ -876,9 +876,9 @@ static inline void sha512_block64_avx512(const __m512i iv[8], __m512i W[16], __m
             d = c; c = b; b = a;
             a = _mm512_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm512_add_epi64(W[i], _mm512_add_epi64(
-                       _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_AVX512(W[(i+14)&15])));
+                __m512i sum_direct = _mm512_add_epi64(W[i], W[(i+9)&15]);
+                __m512i sig_terms  = _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), s1_AVX512(W[(i+14)&15]));
+                W[i] = _mm512_add_epi64(sum_direct, sig_terms);
             }
         }
     }
@@ -959,9 +959,9 @@ static inline void sha512_padded_block64_avx512(const __m512i iv[8], __m512i W[1
             d = c; c = b; b = a;
             a = _mm512_add_epi64(T1, T2);
             if (r < 4) {
-                W[i] = _mm512_add_epi64(W[i], _mm512_add_epi64(
-                       _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), W[(i+9)&15]),
-                       s1_AVX512(W[(i+14)&15])));
+                __m512i sum_direct = _mm512_add_epi64(W[i], W[(i+9)&15]);
+                __m512i sig_terms  = _mm512_add_epi64(s0_AVX512(W[(i+1)&15]), s1_AVX512(W[(i+14)&15]));
+                W[i] = _mm512_add_epi64(sum_direct, sig_terms);
             }
         }
     }

@@ -174,7 +174,20 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
     std::error_code ec;
     std::filesystem::create_directories(cache_dir, ec);
 
-    std::string cache_filename = "cl_" + sanitize_str(dev.device_name) + "_" + sanitize_str(dev.version) + ".bin";
+    std::string pbkdf2_src = load_kernel("src/gpu/kernels/pbkdf2_gpu.cl");
+    if (pbkdf2_src.empty()) {
+        std::println(stderr, "Erro: Fonte do kernel OpenCL vazio!");
+        cleanup_locked();
+        return false;
+    }
+
+    uint64_t src_hash = 14695981039346656037ULL;
+    for (char c : pbkdf2_src) {
+        src_hash ^= static_cast<uint8_t>(c);
+        src_hash *= 1099511628211ULL;
+    }
+
+    std::string cache_filename = std::format("cl_{}_{}_{:016x}.bin", sanitize_str(dev.device_name), sanitize_str(dev.version), src_hash);
     std::filesystem::path cache_path = cache_dir / cache_filename;
 
     bool loaded_from_cache = false;
@@ -205,13 +218,6 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
     }
 
     if (!loaded_from_cache) {
-        std::string pbkdf2_src = load_kernel("src/gpu/kernels/pbkdf2_gpu.cl");
-        if (pbkdf2_src.empty()) {
-            std::println(stderr, "Erro: Fonte do kernel OpenCL vazio!");
-            cleanup_locked();
-            return false;
-        }
-
         const char* src_ptr = pbkdf2_src.c_str();
         pbkdf2_prog_ = clCreateProgramWithSource(context_, 1, &src_ptr, nullptr, &err);
         if (err != CL_SUCCESS) {
