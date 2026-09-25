@@ -186,21 +186,26 @@ public:
     SHA512 outer_base_;
     SHA512 inner_base_;
 
+    const uint64_t* inner_state() const noexcept { return inner_base_.h_.data(); }
+    const uint64_t* outer_state() const noexcept { return outer_base_.h_.data(); }
+
 private:
     bool   is_preset_    = false;
     size_t expected_len_ = 0;
 
     // Constrói os dois pads (ipad/opad) já XORados com a chave normalizada.
-    constexpr static void build_pads(const void* key,const size_t key_len,
+    constexpr static void build_pads(const void* key, const size_t key_len,
         std::array<uint8_t, SHA512::block_size> &ipad,
         std::array<uint8_t, SHA512::block_size> &opad) noexcept {
 
+        constexpr uint64_t IPAD64 = 0x3636363636363636ULL;
+        constexpr uint64_t OPAD64 = 0x5c5c5c5c5c5c5c5cULL;
+
+        auto* ip_words = reinterpret_cast<uint64_t*>(ipad.data());
+        auto* op_words = reinterpret_cast<uint64_t*>(opad.data());
+
         if (key_len == 32) {
-            constexpr uint64_t IPAD64 = 0x3636363636363636ULL;
-            constexpr uint64_t OPAD64 = 0x5c5c5c5c5c5c5c5cULL;
             const auto* k_words = static_cast<const uint64_t*>(key);
-            auto* ip_words = reinterpret_cast<uint64_t*>(ipad.data());
-            auto* op_words = reinterpret_cast<uint64_t*>(opad.data());
             #pragma GCC unroll 4
             for (size_t i = 0; i < 4; ++i) {
                 ip_words[i] = k_words[i] ^ IPAD64;
@@ -214,20 +219,32 @@ private:
             return;
         }
 
-        std::array<uint8_t, SHA512::block_size> k_use{};
-        size_t  k_use_len = 0;
+        if (key_len == 64) {
+            const auto* k_words = static_cast<const uint64_t*>(key);
+            #pragma GCC unroll 8
+            for (size_t i = 0; i < 8; ++i) {
+                ip_words[i] = k_words[i] ^ IPAD64;
+                op_words[i] = k_words[i] ^ OPAD64;
+            }
+            #pragma GCC unroll 8
+            for (size_t i = 8; i < 16; ++i) {
+                ip_words[i] = IPAD64;
+                op_words[i] = OPAD64;
+            }
+            return;
+        }
+
+        alignas(16) std::array<uint8_t, SHA512::block_size> k_use{};
         if (key_len > SHA512::block_size) {
             SHA512::hash(key, key_len, k_use.data());
-            k_use_len = SHA512::digest_size;
         } else if (key_len > 0) {
             std::memcpy(k_use.data(), key, key_len);
-            k_use_len = key_len;
         }
-        std::memset(ipad.data(), 0x36, SHA512::block_size);
-        std::memset(opad.data(), 0x5c, SHA512::block_size);
-        for (size_t i = 0; i < k_use_len; ++i) {
-            ipad[i] ^= k_use[i];
-            opad[i] ^= k_use[i];
+        const auto* k_words = reinterpret_cast<const uint64_t*>(k_use.data());
+        #pragma GCC unroll 16
+        for (size_t i = 0; i < 16; ++i) {
+            ip_words[i] = k_words[i] ^ IPAD64;
+            op_words[i] = k_words[i] ^ OPAD64;
         }
     }
 };

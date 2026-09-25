@@ -68,21 +68,44 @@ inline void prepare_pads(const void* const* passes, const size_t* lens,
     constexpr uint64_t OPAD_MASK = 0x5c5c5c5c5c5c5c5cULL;
 
     for (size_t l = 0; l < LANES; ++l) {
-        alignas(16) uint8_t K[128] = {};
         const size_t len = lens[l];
         if (__builtin_expect(len > 128, 0)) {
+            alignas(16) uint8_t K[128] = {};
             crypto::SHA512::hash(passes[l], len, K);
-        } else if (len > 0) {
-            std::memcpy(K, passes[l], len);
-        }
-
-        for (int w = 0; w < 16; ++w) {
-            uint64_t v;
-            std::memcpy(&v, K + w * 8, 8);
-            if constexpr (std::endian::native == std::endian::little)
-                v = __builtin_bswap64(v);
-            W_ipad[w][l] = v ^ IPAD_MASK;
-            W_opad[w][l] = v ^ OPAD_MASK;
+            for (int w = 0; w < 16; ++w) {
+                uint64_t v;
+                std::memcpy(&v, K + w * 8, 8);
+                if constexpr (std::endian::native == std::endian::little)
+                    v = __builtin_bswap64(v);
+                W_ipad[w][l] = v ^ IPAD_MASK;
+                W_opad[w][l] = v ^ OPAD_MASK;
+            }
+        } else {
+            const auto* p = static_cast<const uint8_t*>(passes[l]);
+            const size_t full_words = len / 8;
+            for (size_t w = 0; w < full_words; ++w) {
+                uint64_t v;
+                std::memcpy(&v, p + w * 8, 8);
+                if constexpr (std::endian::native == std::endian::little)
+                    v = __builtin_bswap64(v);
+                W_ipad[w][l] = v ^ IPAD_MASK;
+                W_opad[w][l] = v ^ OPAD_MASK;
+            }
+            size_t w = full_words;
+            const size_t rem = len % 8;
+            if (rem > 0) {
+                uint64_t v = 0;
+                std::memcpy(&v, p + w * 8, rem);
+                if constexpr (std::endian::native == std::endian::little)
+                    v = __builtin_bswap64(v);
+                W_ipad[w][l] = v ^ IPAD_MASK;
+                W_opad[w][l] = v ^ OPAD_MASK;
+                ++w;
+            }
+            for (; w < 16; ++w) {
+                W_ipad[w][l] = IPAD_MASK;
+                W_opad[w][l] = OPAD_MASK;
+            }
         }
     }
 }
@@ -96,7 +119,9 @@ inline void prepare_salt_W(const uint8_t* salt, size_t salt_len,
     if (salt_len) std::memcpy(buf, salt, salt_len);
     buf[salt_len + 3] = 1;      // contador BE = 1
     buf[salt_len + 4] = 0x80;   // padding SHA-512
-    for (int i = 0; i < 15; ++i) W[i] = load_be64(buf + i * 8);
+    const size_t words_needed = (salt_len + 5 + 7) / 8;
+    for (size_t i = 0; i < words_needed; ++i) W[i] = load_be64(buf + i * 8);
+    for (size_t i = words_needed; i < 15; ++i) W[i] = 0;
     W[15] = static_cast<uint64_t>(128 + salt_len + 4) * 8;
 }
 
