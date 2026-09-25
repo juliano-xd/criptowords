@@ -39,6 +39,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // ==========================================
     // OTIMIZAÇÃO 30: Restrição de Não-Repetição (--distinct)
     // ==========================================
+    opt.is_distinct = cfg.distinct;
     if (cfg.distinct) {
         std::bitset<2048> is_known;
         for (size_t i = 0; i < mnemonic_len; ++i) {
@@ -262,12 +263,6 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // OTIMIZAÇÃO 33: Dedução Cascata de Checksum Streaming (K >= 3 com última incógnita w_{N-1} = ?)
     // ==========================================
     else if (cfg.only_valids && opt.unknown_positions.size() >= 3 && opt.unknown_positions.back() == mnemonic_len - 1) {
-        opt.has_cascade_deduction = true;
-        opt.has_streaming_pruning = true;
-        opt.has_k3_pruning        = (opt.unknown_positions.size() == 3);
-        opt.direct_valid_wheels   = true;
-        opt.auto_deduce_last_word = true;
-
         size_t last_wheel_idx = opt.wheels.size() - 1;
         for (uint16_t id : opt.wheels[last_wheel_idx]) {
             opt.allowed_last_words[id] = true;
@@ -276,12 +271,100 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         size_t entropy_bits_in_last_word = 11 - checksum_bits;
         size_t num_base_states = 1ULL << entropy_bits_in_last_word;
 
-        std::vector<uint16_t> new_last_wheel;
-        new_last_wheel.reserve(num_base_states);
-        for (size_t e = 0; e < num_base_states; ++e) {
-            new_last_wheel.push_back(static_cast<uint16_t>(e << checksum_bits));
+        if (opt.unknown_positions.size() == 3) {
+            uint64_t raw_comb = static_cast<uint64_t>(opt.wheels[0].size()) * opt.wheels[1].size() * num_base_states;
+            if (raw_comb <= 524288) {
+                // OTM-34: Tabela Analítica de Triplas Válidas em F_2^C (Dedução Cascata)
+                const size_t u0 = opt.unknown_positions[0];
+                const size_t u1 = opt.unknown_positions[1];
+                const size_t u2 = opt.unknown_positions[2];
+                const size_t u0_bit = u0 * 11;
+                const size_t u1_bit = u1 * 11;
+                const size_t u2_bit = u2 * 11;
+                const size_t cs_shift = 8 - checksum_bits;
+
+                alignas(64) uint8_t base_block[64] = {};
+                uint64_t acc = 0;
+                size_t bits = 0;
+                size_t b_pos = 0;
+                for (size_t i = 0; i < mnemonic_len; ++i) {
+                    uint16_t word_val = (i == u0 || i == u1 || i == u2) ? 0 : opt.base_mnemonic[i];
+                    acc = (acc << 11) | uint64_t(word_val & 0x7FF);
+                    bits += 11;
+                    while (bits >= 8) {
+                        bits -= 8;
+                        if (b_pos < entropy_bytes) {
+                            base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & uint64_t(0xFF)));
+                        }
+                    }
+                    acc &= uint64_t((1ULL << bits) - 1);
+                }
+                base_block[entropy_bytes] = 0x80;
+                uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
+                std::memcpy(base_block + 56, &bit_len_be, 8);
+
+                alignas(64) uint8_t block[64];
+                std::memcpy(block, base_block, 64);
+
+                opt.valid_triplets.reserve(std::min<size_t>(raw_comb, 65536));
+
+                for (uint16_t w0 : opt.wheels[0]) {
+                    cryptowords::detail::set_11bits(block, u0_bit, w0);
+                    for (uint16_t w1 : opt.wheels[1]) {
+                        if (cfg.distinct && w0 == w1) continue;
+                        cryptowords::detail::set_11bits(block, u1_bit, w1);
+                        for (size_t e = 0; e < num_base_states; ++e) {
+                            uint16_t e_base = static_cast<uint16_t>(e << checksum_bits);
+                            cryptowords::detail::set_11bits(block, u2_bit, e_base);
+                            block[entropy_bytes] = 0x80;
+#if defined(__SHA__)
+                            uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(block);
+#else
+                            uint8_t hash[32];
+                            crypto::SHA256::hash(block, entropy_bytes, hash);
+                            uint8_t h = hash[0];
+#endif
+                            uint16_t syn = e_base | (h >> cs_shift);
+                            if (opt.allowed_last_words[syn]) {
+                                if (!cfg.distinct || (syn != w0 && syn != w1)) {
+                                    opt.valid_triplets.push_back({w0, w1, syn});
+                                }
+                            }
+                        }
+                    }
+                }
+
+                opt.has_valid_triplets    = true;
+                opt.direct_valid_wheels   = true;
+                opt.auto_deduce_last_word = false;
+            } else {
+                opt.has_cascade_deduction = true;
+                opt.has_streaming_pruning = true;
+                opt.has_k3_pruning        = true;
+                opt.direct_valid_wheels   = true;
+                opt.auto_deduce_last_word = true;
+
+                std::vector<uint16_t> new_last_wheel;
+                new_last_wheel.reserve(num_base_states);
+                for (size_t e = 0; e < num_base_states; ++e) {
+                    new_last_wheel.push_back(static_cast<uint16_t>(e << checksum_bits));
+                }
+                opt.wheels[last_wheel_idx] = std::move(new_last_wheel);
+            }
+        } else {
+            opt.has_cascade_deduction = true;
+            opt.has_streaming_pruning = true;
+            opt.has_k3_pruning        = false;
+            opt.direct_valid_wheels   = true;
+            opt.auto_deduce_last_word = true;
+
+            std::vector<uint16_t> new_last_wheel;
+            new_last_wheel.reserve(num_base_states);
+            for (size_t e = 0; e < num_base_states; ++e) {
+                new_last_wheel.push_back(static_cast<uint16_t>(e << checksum_bits));
+            }
+            opt.wheels[last_wheel_idx] = std::move(new_last_wheel);
         }
-        opt.wheels[last_wheel_idx] = std::move(new_last_wheel);
     }
     // ==========================================
     // OTIMIZAÇÃO OTM-02: Pruning Analítico de Pares em F_2^C (2 incógnitas com última fixa)
@@ -344,9 +427,77 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // OTIMIZAÇÃO OTM-03: Poda Streaming em F_2^C (K >= 3 incógnitas com última fixa)
     // ==========================================
     else if (cfg.only_valids && opt.unknown_positions.size() >= 3) {
-        opt.has_streaming_pruning = true;
-        opt.has_k3_pruning        = (opt.unknown_positions.size() == 3);
-        opt.direct_valid_wheels   = true;
+        if (opt.unknown_positions.size() == 3) {
+            uint64_t raw_comb = static_cast<uint64_t>(opt.wheels[0].size()) * opt.wheels[1].size() * opt.wheels[2].size();
+            if (raw_comb <= 524288) {
+                // OTM-34: Tabela Analítica de Triplas Válidas em F_2^C (Checksum Fixo)
+                const size_t u0 = opt.unknown_positions[0];
+                const size_t u1 = opt.unknown_positions[1];
+                const size_t u2 = opt.unknown_positions[2];
+                const size_t u0_bit = u0 * 11;
+                const size_t u1_bit = u1 * 11;
+                const size_t u2_bit = u2 * 11;
+                const uint8_t expected_cs = opt.base_mnemonic[mnemonic_len - 1] & ((1 << checksum_bits) - 1);
+
+                alignas(64) uint8_t base_block[64] = {};
+                uint64_t acc = 0;
+                size_t bits = 0;
+                size_t b_pos = 0;
+                for (size_t i = 0; i < mnemonic_len; ++i) {
+                    uint16_t word_val = (i == u0 || i == u1 || i == u2) ? 0 : opt.base_mnemonic[i];
+                    acc = (acc << 11) | uint64_t(word_val & 0x7FF);
+                    bits += 11;
+                    while (bits >= 8) {
+                        bits -= 8;
+                        if (b_pos < entropy_bytes) {
+                            base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & uint64_t(0xFF)));
+                        }
+                    }
+                    acc &= uint64_t((1ULL << bits) - 1);
+                }
+                base_block[entropy_bytes] = 0x80;
+                uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
+                std::memcpy(base_block + 56, &bit_len_be, 8);
+
+                alignas(64) uint8_t block[64];
+                std::memcpy(block, base_block, 64);
+
+                opt.valid_triplets.reserve(std::min<size_t>(raw_comb, 65536));
+
+                for (uint16_t w0 : opt.wheels[0]) {
+                    cryptowords::detail::set_11bits(block, u0_bit, w0);
+                    for (uint16_t w1 : opt.wheels[1]) {
+                        if (cfg.distinct && w0 == w1) continue;
+                        cryptowords::detail::set_11bits(block, u1_bit, w1);
+                        for (uint16_t w2 : opt.wheels[2]) {
+                            if (cfg.distinct && (w2 == w0 || w2 == w1)) continue;
+                            cryptowords::detail::set_11bits(block, u2_bit, w2);
+#if defined(__SHA__)
+                            uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(block);
+#else
+                            uint8_t hash[32];
+                            crypto::SHA256::hash(block, entropy_bytes, hash);
+                            uint8_t h = hash[0];
+#endif
+                            if ((h >> (8 - checksum_bits)) == expected_cs) {
+                                opt.valid_triplets.push_back({w0, w1, w2});
+                            }
+                        }
+                    }
+                }
+
+                opt.has_valid_triplets  = true;
+                opt.direct_valid_wheels = true;
+            } else {
+                opt.has_streaming_pruning = true;
+                opt.has_k3_pruning        = true;
+                opt.direct_valid_wheels   = true;
+            }
+        } else {
+            opt.has_streaming_pruning = true;
+            opt.has_k3_pruning        = false;
+            opt.direct_valid_wheels   = true;
+        }
     }
 
     // ==========================================
@@ -423,6 +574,20 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             });
         }
 
+        if (opt.has_valid_triplets) {
+            const size_t u0 = opt.unknown_positions[0];
+            const size_t u1 = opt.unknown_positions[1];
+            const size_t u2 = opt.unknown_positions[2];
+            std::stable_sort(opt.valid_triplets.begin(), opt.valid_triplets.end(), [&](const auto& a, const auto& b) {
+                double sa = score_word_fn(u0, a.w0) + score_word_fn(u1, a.w1) + score_word_fn(u2, a.w2);
+                double sb = score_word_fn(u0, b.w0) + score_word_fn(u1, b.w1) + score_word_fn(u2, b.w2);
+                if (sa != sb) return sa < sb;
+                if (a.w0 != b.w0) return a.w0 < b.w0;
+                if (a.w1 != b.w1) return a.w1 < b.w1;
+                return a.w2 < b.w2;
+            });
+        }
+
         if (opt.has_valid_pairs) {
             const size_t u0 = opt.unknown_positions[0];
             const size_t u1 = opt.unknown_positions[1];
@@ -438,7 +603,10 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // Cálculo de Combinações Efetivas
     opt.total_combinations = 1.0;
     opt.exact_total_combinations = 1;
-    if (opt.has_valid_pairs) {
+    if (opt.has_valid_triplets) {
+        opt.total_combinations = static_cast<double>(opt.valid_triplets.size());
+        opt.exact_total_combinations = UInt<4>(opt.valid_triplets.size());
+    } else if (opt.has_valid_pairs) {
         opt.total_combinations = static_cast<double>(opt.valid_pairs.size());
         opt.exact_total_combinations = UInt<4>(opt.valid_pairs.size());
     } else if (opt.has_streaming_pruning) {
