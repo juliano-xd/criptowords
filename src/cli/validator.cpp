@@ -67,6 +67,7 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     cfg.num_threads = raw.num_threads;
     cfg.pbkdf2_rounds = raw.pbkdf2_rounds;
     cfg.use_gpu = raw.use_gpu;
+    cfg.use_cpu = raw.use_cpu;
     cfg.use_hybrid = raw.use_hybrid;
     if (cfg.use_hybrid) cfg.use_gpu = true;
     cfg.only_valids = !raw.invalid_too;

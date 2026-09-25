@@ -877,7 +877,7 @@ def main():
     runner.run_case(
         "Dedução Cascata Streaming com --distinct (K=3)",
         "Distinct Streaming Cascade",
-        ["--distinct",
+        ["--distinct", "--cpu",
          "--mnemonics", "arena huge owner legend diet smart spread truth file ? ? ?",
          "--coin", "btc", "--target", "1BZg39dxtDkvf7UQvWpzBHRTixBUvURmyS"],
         timeout_sec=2,

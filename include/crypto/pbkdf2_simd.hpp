@@ -57,37 +57,33 @@ inline constexpr uint64_t IV[8] = {
     return v;
 }
 
-// Lê a chave (normalizando p/ 128 bytes) e já aplica XOR com o pad.
-// Saída: W[i] = big-endian word da chave XORed com `pad` repetido.
-inline void prepare_key_W(const void* pass, size_t len, uint8_t pad,
-                          uint64_t W[16]) noexcept
-{
-    alignas(16) uint8_t K[128] = {};
-    if (len > 128)            crypto::SHA512::hash(pass, len, K);
-    else if (len > 0)         std::memcpy(K, pass, len);
-
-    const uint64_t pad_word = 0x0101010101010101ULL * pad;
-    for (int i = 0; i < 16; ++i) {
-        uint64_t v; std::memcpy(&v, K + i * 8, 8);
-        // Aritmética XOR feita no valor big-endian diretamente.
-        if constexpr (std::endian::native == std::endian::little)
-            v = __builtin_bswap64(v);
-        W[i] = v ^ pad_word;
-    }
-}
-
-// Preenche W_ipad/W_opad para LANES chaves de uma vez.
+// Preenche W_ipad/W_opad para LANES chaves de uma vez em passada única.
+// Elimina redundância de hash SHA-512 (quando len > 128) e cópia intermediária em tmp[16].
 template <size_t LANES>
 inline void prepare_pads(const void* const* passes, const size_t* lens,
                          uint64_t W_ipad[16][LANES],
                          uint64_t W_opad[16][LANES]) noexcept
 {
+    constexpr uint64_t IPAD_MASK = 0x3636363636363636ULL;
+    constexpr uint64_t OPAD_MASK = 0x5c5c5c5c5c5c5c5cULL;
+
     for (size_t l = 0; l < LANES; ++l) {
-        uint64_t tmp[16];
-        prepare_key_W(passes[l], lens[l], 0x36, tmp);
-        for (int w = 0; w < 16; ++w) W_ipad[w][l] = tmp[w];
-        prepare_key_W(passes[l], lens[l], 0x5c, tmp);
-        for (int w = 0; w < 16; ++w) W_opad[w][l] = tmp[w];
+        alignas(16) uint8_t K[128] = {};
+        const size_t len = lens[l];
+        if (__builtin_expect(len > 128, 0)) {
+            crypto::SHA512::hash(passes[l], len, K);
+        } else if (len > 0) {
+            std::memcpy(K, passes[l], len);
+        }
+
+        for (int w = 0; w < 16; ++w) {
+            uint64_t v;
+            std::memcpy(&v, K + w * 8, 8);
+            if constexpr (std::endian::native == std::endian::little)
+                v = __builtin_bswap64(v);
+            W_ipad[w][l] = v ^ IPAD_MASK;
+            W_opad[w][l] = v ^ OPAD_MASK;
+        }
     }
 }
 
@@ -426,28 +422,19 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     // --- 1. Preparação dos pads por lane ---
     const void*  passes[4] = { p1, p2, p3, p4 };
     const size_t lens  [4] = { l1, l2, l3, l4 };
-    uint64_t ipad_all[16][4], opad_all[16][4];
+    alignas(16) uint64_t ipad_all[16][4], opad_all[16][4];
     prepare_pads<4>(passes, lens, ipad_all, opad_all);
 
-    alignas(16) uint64_t ipad_lo[16][2], ipad_hi[16][2];
-    alignas(16) uint64_t opad_lo[16][2], opad_hi[16][2];
-    for (int w = 0; w < 16; ++w) {
-        ipad_lo[w][0]=ipad_all[w][0]; ipad_lo[w][1]=ipad_all[w][1];
-        ipad_hi[w][0]=ipad_all[w][2]; ipad_hi[w][1]=ipad_all[w][3];
-        opad_lo[w][0]=opad_all[w][0]; opad_lo[w][1]=opad_all[w][1];
-        opad_hi[w][0]=opad_all[w][2]; opad_hi[w][1]=opad_all[w][3];
-    }
-
-    // --- 2. Estados pós ipad/opad ---
+    // --- 2. Estados pós ipad/opad (carregamento vetorial direto alinhado sem cópia) ---
     __m128i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
     __m128i W[16];
-    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)ipad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm_load_si128((const __m128i*)&ipad_all[i][0]);
     sha512_block64_sse(get_iv_sse(), W, ipad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)ipad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm_load_si128((const __m128i*)&ipad_all[i][2]);
     sha512_block64_sse(get_iv_sse(), W, ipad_iv_hi);
-    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)opad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm_load_si128((const __m128i*)&opad_all[i][0]);
     sha512_block64_sse(get_iv_sse(), W, opad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm_loadu_si128((const __m128i*)opad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm_load_si128((const __m128i*)&opad_all[i][2]);
     sha512_block64_sse(get_iv_sse(), W, opad_iv_hi);
 
     // --- 3. Bloco do salt (U_1) ---
@@ -483,19 +470,19 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     pbkdf2_2lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
     pbkdf2_2lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // --- 6. Serialização ---
-    alignas(16) uint64_t lo[8][2], hi[8][2];
-    for (int i=0;i<8;++i) {
-        _mm_storeu_si128((__m128i*)lo[i], T_lo[i]);
-        _mm_storeu_si128((__m128i*)hi[i], T_hi[i]);
-    }
-    uint64_t combined[8][4];
-    for (int i=0;i<8;++i) {
-        combined[i][0]=lo[i][0]; combined[i][1]=lo[i][1];
-        combined[i][2]=hi[i][0]; combined[i][3]=hi[i][1];
-    }
+    // --- 6. Serialização Direta (Zero-copy sem matriz combinada) ---
     uint8_t* outs[4] = { out1, out2, out3, out4 };
-    store_digests_be<4>(combined, outs);
+    for (int i = 0; i < 8; ++i) {
+        alignas(16) uint64_t lo[2], hi[2];
+        _mm_store_si128((__m128i*)lo, T_lo[i]);
+        _mm_store_si128((__m128i*)hi, T_hi[i]);
+        for (int l = 0; l < 2; ++l) {
+            uint64_t b0 = bswap64(lo[l]);
+            uint64_t b1 = bswap64(hi[l]);
+            std::memcpy(outs[l]     + i * 8, &b0, 8);
+            std::memcpy(outs[2 + l] + i * 8, &b1, 8);
+        }
+    }
 }
 
 // ============================================================================
@@ -685,30 +672,19 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     // --- 1. Preparação dos pads por lane ---
     const void*  passes[8] = { p1, p2, p3, p4, p5, p6, p7, p8 };
     const size_t lens  [8] = { l1, l2, l3, l4, l5, l6, l7, l8 };
-    uint64_t ipad_all[16][8], opad_all[16][8];
+    alignas(32) uint64_t ipad_all[16][8], opad_all[16][8];
     prepare_pads<8>(passes, lens, ipad_all, opad_all);
 
-    alignas(32) uint64_t ipad_lo[16][4], ipad_hi[16][4];
-    alignas(32) uint64_t opad_lo[16][4], opad_hi[16][4];
-    for (int w = 0; w < 16; ++w) {
-        for (int l = 0; l < 4; ++l) {
-            ipad_lo[w][l] = ipad_all[w][l];
-            ipad_hi[w][l] = ipad_all[w][4 + l];
-            opad_lo[w][l] = opad_all[w][l];
-            opad_hi[w][l] = opad_all[w][4 + l];
-        }
-    }
-
-    // --- 2. Estados pós ipad/opad ---
+    // --- 2. Estados pós ipad/opad (carregamento vetorial direto alinhado sem cópia) ---
     __m256i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
     __m256i W[16];
-    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)ipad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm256_load_si256((const __m256i*)&ipad_all[i][0]);
     sha512_block64_avx2(get_iv_avx2(), W, ipad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)ipad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm256_load_si256((const __m256i*)&ipad_all[i][4]);
     sha512_block64_avx2(get_iv_avx2(), W, ipad_iv_hi);
-    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)opad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm256_load_si256((const __m256i*)&opad_all[i][0]);
     sha512_block64_avx2(get_iv_avx2(), W, opad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm256_loadu_si256((const __m256i*)opad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm256_load_si256((const __m256i*)&opad_all[i][4]);
     sha512_block64_avx2(get_iv_avx2(), W, opad_iv_hi);
 
     // --- 3. Bloco do salt (U_1) ---
@@ -744,18 +720,19 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     pbkdf2_4lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
     pbkdf2_4lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // --- 6. Serialização ---
-    alignas(32) uint64_t lo[8][4], hi[8][4];
-    for (int i=0;i<8;++i) {
-        _mm256_storeu_si256((__m256i*)lo[i], T_lo[i]);
-        _mm256_storeu_si256((__m256i*)hi[i], T_hi[i]);
-    }
-    uint64_t combined[8][8];
-    for (int i=0;i<8;++i) {
-        for (int l=0;l<4;++l) { combined[i][l]=lo[i][l]; combined[i][4+l]=hi[i][l]; }
-    }
+    // --- 6. Serialização Direta (Zero-copy sem matriz combinada) ---
     uint8_t* outs[8] = { out1, out2, out3, out4, out5, out6, out7, out8 };
-    store_digests_be<8>(combined, outs);
+    for (int i = 0; i < 8; ++i) {
+        alignas(32) uint64_t lo[4], hi[4];
+        _mm256_store_si256((__m256i*)lo, T_lo[i]);
+        _mm256_store_si256((__m256i*)hi, T_hi[i]);
+        for (int l = 0; l < 4; ++l) {
+            uint64_t b0 = bswap64(lo[l]);
+            uint64_t b1 = bswap64(hi[l]);
+            std::memcpy(outs[l]     + i * 8, &b0, 8);
+            std::memcpy(outs[4 + l] + i * 8, &b1, 8);
+        }
+    }
 }
 
 // ============================================================================
@@ -945,30 +922,19 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     // --- 1. Preparação dos pads por lane ---
     const void*  passes[16] = { p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16 };
     const size_t lens  [16] = { l1,l2,l3,l4,l5,l6,l7,l8,l9,l10,l11,l12,l13,l14,l15,l16 };
-    uint64_t ipad_all[16][16], opad_all[16][16];
+    alignas(64) uint64_t ipad_all[16][16], opad_all[16][16];
     prepare_pads<16>(passes, lens, ipad_all, opad_all);
 
-    alignas(64) uint64_t ipad_lo[16][8], ipad_hi[16][8];
-    alignas(64) uint64_t opad_lo[16][8], opad_hi[16][8];
-    for (int w = 0; w < 16; ++w) {
-        for (int l = 0; l < 8; ++l) {
-            ipad_lo[w][l] = ipad_all[w][l];
-            ipad_hi[w][l] = ipad_all[w][8 + l];
-            opad_lo[w][l] = opad_all[w][l];
-            opad_hi[w][l] = opad_all[w][8 + l];
-        }
-    }
-
-    // --- 2. Estados pós ipad/opad ---
+    // --- 2. Estados pós ipad/opad (carregamento vetorial direto alinhado sem cópia) ---
     __m512i ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8];
     __m512i W[16];
-    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)ipad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm512_load_si512((const __m512i*)&ipad_all[i][0]);
     sha512_block64_avx512(get_iv_avx512(), W, ipad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)ipad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm512_load_si512((const __m512i*)&ipad_all[i][8]);
     sha512_block64_avx512(get_iv_avx512(), W, ipad_iv_hi);
-    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)opad_lo[i]);
+    for (int i=0;i<16;++i) W[i] = _mm512_load_si512((const __m512i*)&opad_all[i][0]);
     sha512_block64_avx512(get_iv_avx512(), W, opad_iv_lo);
-    for (int i=0;i<16;++i) W[i] = _mm512_loadu_si512((const __m512i*)opad_hi[i]);
+    for (int i=0;i<16;++i) W[i] = _mm512_load_si512((const __m512i*)&opad_all[i][8]);
     sha512_block64_avx512(get_iv_avx512(), W, opad_iv_hi);
 
     // --- 3. Bloco do salt (U_1) ---
@@ -1004,21 +970,22 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     pbkdf2_8lane_fused_stream(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
     pbkdf2_8lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
-    // --- 6. Serialização ---
-    alignas(64) uint64_t lo[8][8], hi[8][8];
-    for (int i=0;i<8;++i) {
-        _mm512_storeu_si512((__m512i*)lo[i], T_lo[i]);
-        _mm512_storeu_si512((__m512i*)hi[i], T_hi[i]);
-    }
-    uint64_t combined[8][16];
-    for (int i=0;i<8;++i) {
-        for (int l=0;l<8;++l) { combined[i][l]=lo[i][l]; combined[i][8+l]=hi[i][l]; }
-    }
+    // --- 6. Serialização Direta (Zero-copy sem matriz combinada) ---
     uint8_t* outs[16] = {
         out1, out2, out3, out4, out5, out6, out7, out8,
         out9, out10, out11, out12, out13, out14, out15, out16
     };
-    store_digests_be<16>(combined, outs);
+    for (int i = 0; i < 8; ++i) {
+        alignas(64) uint64_t lo[8], hi[8];
+        _mm512_store_si512((__m512i*)lo, T_lo[i]);
+        _mm512_store_si512((__m512i*)hi, T_hi[i]);
+        for (int l = 0; l < 8; ++l) {
+            uint64_t b0 = bswap64(lo[l]);
+            uint64_t b1 = bswap64(hi[l]);
+            std::memcpy(outs[l]     + i * 8, &b0, 8);
+            std::memcpy(outs[8 + l] + i * 8, &b1, 8);
+        }
+    }
 }
 
 // ============================================================================

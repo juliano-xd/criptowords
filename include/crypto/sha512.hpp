@@ -8,7 +8,10 @@
 
 namespace crypto {
 
+class HMAC_SHA512;
+
 class SHA512 {
+    friend class HMAC_SHA512;
 public:
     using byte = std::uint8_t;
     using word = std::uint64_t;
@@ -133,7 +136,10 @@ private:
         word& e, word& f, word& g, word& h,
         word k, word w) noexcept
     {
-        const word t1 = h + big1(e) + ch(e, f, g) + k + w;
+        const word kw = k + w;
+        const word h_kw = h + kw;
+        const word e_terms = big1(e) + ch(e, f, g);
+        const word t1 = h_kw + e_terms;
         const word t2 = big0(a) + maj(a, b, c);
 
         h = g;
@@ -152,6 +158,39 @@ private:
         SHA512_UNROLL16
         for (unsigned i = 0; i < 16; ++i)
             w[i] = load_be64(block + (i << 3));
+
+        word a = state[0], b = state[1], c = state[2], d = state[3];
+        word e = state[4], f = state[5], g = state[6], h = state[7];
+
+        SHA512_UNROLL16
+        for (unsigned i = 0; i < 16; ++i)
+            round(a, b, c, d, e, f, g, h, K_[i], w[i]);
+
+        SHA512_UNROLL16
+        for (unsigned t = 16; t < 80; ++t) {
+            const unsigned i = t & 15;
+            w[i] += small0(w[(i + 1) & 15]) +
+                    w[(i + 9) & 15] +
+                    small1(w[(i + 14) & 15]);
+            round(a, b, c, d, e, f, g, h, K_[t], w[i]);
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
+    }
+
+    static void compress_words(std::array<word, 8>& state, const word w_in[16]) noexcept {
+        alignas(64) word w[16];
+
+        SHA512_UNROLL16
+        for (unsigned i = 0; i < 16; ++i)
+            w[i] = w_in[i];
 
         word a = state[0], b = state[1], c = state[2], d = state[3];
         word e = state[4], f = state[5], g = state[6], h = state[7];

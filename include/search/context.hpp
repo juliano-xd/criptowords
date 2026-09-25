@@ -6,8 +6,8 @@
 
 namespace cryptowords {
 
-// Tamanho máximo de slot de senha por via SIMD (comporta 24 palavras em qualquer idioma)
-static constexpr size_t PW_SLOT_SIZE = 1024;
+// Tamanho máximo de slot de senha por via SIMD (comporta 24 palavras em qualquer idioma UTF-8)
+static constexpr size_t PW_SLOT_SIZE = 512;
 
 // Todo o estado mutável de uma thread. Um contexto = um núcleo.
 struct PipelineThreadContext {
@@ -21,7 +21,7 @@ struct PipelineThreadContext {
     size_t c_batch_sz     = 0;
 
     uint8_t decoded_target[20] = {};
-    uint8_t salt_buf[1024]     = {};
+    uint8_t salt_buf[256]      = {};
     size_t  salt_len           = 0;
     alignas(64) uint64_t salt_block64[16] = {};
     bool    prefix_initialized = false;
@@ -37,8 +37,10 @@ struct PipelineThreadContext {
     bool   is_done   = false;
 
     // OTM-03 / Generalização Afim em F_2^C (K >= 3)
+    // No BIP-39, o checksum consome de 4 a 8 bits. Para um prefixo fixo, no máximo 128 palavras
+    // (2048 / 2^4) satisfazem o checksum. 256 elementos garantem 100% de margem com 512 bytes em vez de 4KB.
     std::vector<size_t> outer_state;
-    uint16_t k_last_w_list[2048] = {};
+    uint16_t k_last_w_list[256] = {};
     size_t   k_last_w_count = 0;
     size_t   k_last_w_idx   = 0;
     alignas(64) uint8_t k_block64[64] = {};

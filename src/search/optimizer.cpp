@@ -21,8 +21,6 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             if (id == AppConfig::UNKNOWN_WORD) {
                 opt.unknown_positions.push_back(i);
                 static std::array<uint16_t, 2048> full_wheel_static;
-                static bool init = [](){ std::ranges::iota(full_wheel_static.begin(), full_wheel_static.end(), 0); return true; }();
-                (void)init;
                 opt.wheels.push_back(std::vector<uint16_t>(full_wheel_static.begin(), full_wheel_static.end()));
             }
         } else if (std::holds_alternative<std::vector<uint16_t>>(cfg.mnemonics[i])) {
@@ -142,22 +140,22 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
 
     // Preparação do Bloco Base SHA-256 (N-Slices no Bloco Criptográfico / Two-Sided Memory Patching)
     {
-        UInt<1> acc = 0;
+        uint64_t acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (opt.base_mnemonic[i] == AppConfig::UNKNOWN_WORD) ? 0 : (opt.base_mnemonic[i] & 0x7FF);
-            acc = (acc << 11) | UInt<1>(word_val);
+            acc = (acc << 11) | uint64_t(word_val);
             bits += 11;
             while (bits >= 8 && b_pos < entropy_bytes) {
                 bits -= 8;
-                opt.base_block64[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
+                opt.base_block64[b_pos++] = static_cast<uint8_t>(((acc >> bits) & uint64_t(0xFF)));
             }
-            acc &= UInt<1>((1ULL << bits) - 1);
+            acc &= uint64_t((1ULL << bits) - 1);
         }
         opt.base_block64[entropy_bytes] = 0x80;
-        UInt<1> bit_len_be = __builtin_bswap64(static_cast<uint64_t>(opt.entropy_bits));
-        std::memcpy(opt.base_block64 + 56, &bit_len_be.bits[0], 8);
+        uint64_t bit_len_be = __builtin_bswap64(static_cast<uint64_t>(opt.entropy_bits));
+        std::memcpy(opt.base_block64 + 56, &bit_len_be, 8);
 
         opt.unknown_bit_offsets.clear();
         for (size_t u : opt.unknown_positions) {
@@ -206,24 +204,24 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         size_t num_base_states = 1ULL << entropy_bits_in_last_word;
 
         alignas(64) uint8_t base_block[64] = {};
-        UInt<1> acc = 0;
+        uint64_t acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (i == u0 || i == u1) ? 0 : opt.base_mnemonic[i];
-            acc = (acc << 11) | UInt<1>(word_val & 0x7FF);
+            acc = (acc << 11) | uint64_t(word_val & 0x7FF);
             bits += 11;
             while (bits >= 8) {
                 bits -= 8;
                 if (b_pos < entropy_bytes) {
-                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
+                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & uint64_t(0xFF)));
                 }
             }
-            acc &= UInt<1>((1ULL << bits) - 1);
+            acc &= uint64_t((1ULL << bits) - 1);
         }
         base_block[entropy_bytes] = 0x80;
-        UInt<1> bit_len_be = __builtin_bswap64(opt.entropy_bits);
-        std::memcpy(base_block + 56, &bit_len_be.bits[0], 8);
+        uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
+        std::memcpy(base_block + 56, &bit_len_be, 8);
 
         alignas(64) uint8_t block[64];
         std::memcpy(block, base_block, 64);
@@ -292,24 +290,24 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         const uint8_t expected_cs = opt.base_mnemonic[mnemonic_len - 1] & ((1 << checksum_bits) - 1);
 
         alignas(64) uint8_t base_block[64] = {};
-        UInt<1> acc = 0;
+        uint64_t acc = 0;
         size_t bits = 0;
         size_t b_pos = 0;
         for (size_t i = 0; i < mnemonic_len; ++i) {
             uint16_t word_val = (i == u0 || i == u1) ? 0 : opt.base_mnemonic[i];
-            acc = (acc << 11) | UInt<1>(word_val & 0x7FF);
+            acc = (acc << 11) | uint64_t(word_val & 0x7FF);
             bits += 11;
             while (bits >= 8) {
                 bits -= 8;
                 if (b_pos < entropy_bytes) {
-                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & UInt<1>(0xFF)).bits[0]);
+                    base_block[b_pos++] = static_cast<uint8_t>(((acc >> bits) & uint64_t(0xFF)));
                 }
             }
-            acc &= UInt<1>((1ULL << bits) - 1);
+            acc &= uint64_t((1ULL << bits) - 1);
         }
         base_block[entropy_bytes] = 0x80;
-        UInt<1> bit_len_be = __builtin_bswap64(opt.entropy_bits);
-        std::memcpy(base_block + 56, &bit_len_be.bits[0], 8);
+        uint64_t bit_len_be = __builtin_bswap64(opt.entropy_bits);
+        std::memcpy(base_block + 56, &bit_len_be, 8);
 
         alignas(64) uint8_t block[64];
         std::memcpy(block, base_block, 64);
@@ -479,6 +477,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             cryptowords::Bip39Deriver::decode_hex_eth_address(cfg.target, opt.target_bytes);
         }
         std::memcpy(&opt.target_fast_hash, opt.target_bytes, 4);
+        std::memcpy(&opt.target_fast_hash64, opt.target_bytes, 8);
     }
 
     return opt;

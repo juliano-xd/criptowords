@@ -60,6 +60,9 @@ std::expected<RawOptions, std::string> CLIParser::parse(int argc, char* argv[]) 
     app.add_flag("--gpu", raw.use_gpu,
                  "Enable GPU acceleration via OpenCL");
 
+    app.add_flag("--cpu", raw.use_cpu,
+                 "Force pure CPU SIMD execution (disables GPU auto-tuning)");
+
     app.add_flag("--hybrid", raw.use_hybrid,
                  "Enable hybrid CPU (AVX2) + GPU co-processing");
 

@@ -8,14 +8,16 @@
 namespace cryptowords {
 
 // Estado compartilhado entre todas as threads. Vive no motor, não em cada worker.
-struct SearchState {
-    std::atomic<bool>     found{false};
-    std::atomic<bool>     all_done{false};
-    std::atomic<uint64_t> tested_count{0};
-    std::atomic<uint64_t> valid_count{0};
-    std::mutex            result_mutex;
-    bool                  success = false;
-    std::vector<uint16_t> result_mnemonic;
+// Cada atomic frequentemente modificado ou lido isolado em cacheline própria (64 bytes)
+// para eliminar completamente False Sharing (MESI / MOESI cacheline bouncing).
+struct alignas(64) SearchState {
+    alignas(64) std::atomic<bool>     found{false};
+    alignas(64) std::atomic<bool>     all_done{false};
+    alignas(64) std::atomic<uint64_t> tested_count{0};
+    std::atomic<uint64_t>             valid_count{0};
+    alignas(64) std::mutex            result_mutex;
+    bool                              success = false;
+    std::vector<uint16_t>             result_mnemonic;
 };
 
 class BruteForceEngine {

@@ -90,37 +90,44 @@ std::vector<DiscoveredDevice> enumerate_devices() {
             dev.local_mem = get_num_param<cl_ulong>(dev_id, CL_DEVICE_LOCAL_MEM_SIZE);
             dev.clock_freq = get_num_param<cl_uint>(dev_id, CL_DEVICE_MAX_CLOCK_FREQUENCY);
 
-            if (dev.device_type & CL_DEVICE_TYPE_GPU) {
+            std::string d_upper = dev.device_name;
+            for (char& c : d_upper) c = static_cast<char>(std::toupper(c));
+
+            std::string p_upper = p_name;
+            for (char& c : p_upper) c = static_cast<char>(std::toupper(c));
+
+            bool is_cpu_emulator = (dev.device_type & CL_DEVICE_TYPE_CPU) != 0 ||
+                                   d_upper.find("POCL") != std::string::npos ||
+                                   d_upper.find("CPU") != std::string::npos ||
+                                   p_upper.find("PORTABLE COMPUTING") != std::string::npos ||
+                                   p_upper.find("POCL") != std::string::npos;
+
+            if (dev.device_type & CL_DEVICE_TYPE_GPU && !is_cpu_emulator) {
                 dev.type_str = "GPU (Dedicada/Integrada)";
-                dev.score = 10000;
+                dev.score = 100000;
+                dev.score += static_cast<int>(dev.compute_units) * 150;
+                dev.score += static_cast<int>(dev.global_mem / (1024 * 1024 * 512)) * 50;
+                dev.score += static_cast<int>(dev.clock_freq / 20);
+
+                if (d_upper.find("RTX") != std::string::npos ||
+                    d_upper.find("GTX") != std::string::npos ||
+                    d_upper.find("TESLA") != std::string::npos ||
+                    d_upper.find("A100") != std::string::npos ||
+                    d_upper.find("H100") != std::string::npos ||
+                    d_upper.find("RADEON") != std::string::npos ||
+                    d_upper.find("RX") != std::string::npos ||
+                    d_upper.find("ARC") != std::string::npos) {
+                    dev.score += 50000;
+                }
             } else if (dev.device_type & CL_DEVICE_TYPE_ACCELERATOR) {
                 dev.type_str = "Acelerador";
                 dev.score = 5000;
-            } else if (dev.device_type & CL_DEVICE_TYPE_CPU) {
-                dev.type_str = "CPU OpenCL";
-                dev.score = 500;
+            } else if (is_cpu_emulator) {
+                dev.type_str = "CPU OpenCL (Emulador)";
+                dev.score = 10;
             } else {
                 dev.type_str = "Outro Dispositivo";
                 dev.score = 100;
-            }
-
-            // Bonificações heurísticas
-            dev.score += static_cast<int>(dev.compute_units) * 150;
-            dev.score += static_cast<int>(dev.global_mem / (1024 * 1024 * 512)) * 50; // +50 por 512MB
-            dev.score += static_cast<int>(dev.clock_freq / 20);
-
-            // Se for GPU discreta conhecida (NVIDIA, AMD Radeon, etc.)
-            std::string d_upper = dev.device_name;
-            for (char& c : d_upper) c = static_cast<char>(std::toupper(c));
-            if (d_upper.find("RTX") != std::string::npos ||
-                d_upper.find("GTX") != std::string::npos ||
-                d_upper.find("TESLA") != std::string::npos ||
-                d_upper.find("A100") != std::string::npos ||
-                d_upper.find("H100") != std::string::npos ||
-                d_upper.find("RADEON") != std::string::npos ||
-                d_upper.find("RX") != std::string::npos ||
-                d_upper.find("ARC") != std::string::npos) {
-                dev.score += 2000;
             }
 
             if (dev.score > best_score) {
