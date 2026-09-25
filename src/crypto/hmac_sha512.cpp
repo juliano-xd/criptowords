@@ -40,8 +40,8 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
     const uint64_t* in_iv = h1.inner_state();
     const uint64_t* out_iv = h1.outer_state();
 
-    uint64_t T_words[8];
-    uint64_t U_words[8];
+    alignas(64) uint64_t T_words[8];
+    alignas(64) uint64_t U_words[8];
     #pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) {
         uint64_t v = pbkdf2_simd_detail::load_be64(U.data() + i * 8);
@@ -49,7 +49,12 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         U_words[i] = v;
     }
 
-    uint64_t W[16];
+#if defined(__AVX2__)
+    __m256i t0 = _mm256_load_si256(reinterpret_cast<const __m256i*>(T_words));
+    __m256i t1 = _mm256_load_si256(reinterpret_cast<const __m256i*>(T_words + 4));
+#endif
+
+    alignas(64) uint64_t W[16];
     for (int it = 1; it < iterations; ++it) {
         #pragma GCC unroll 8
         for (int i = 0; i < 8; ++i) W[i] = U_words[i];
@@ -60,17 +65,20 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         SHA512::compress_padded_block64(out_iv, W, U_words);
 
 #if defined(__AVX2__)
-        __m256i t0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(T_words));
-        __m256i t1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(T_words + 4));
-        __m256i u0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(U_words));
-        __m256i u1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(U_words + 4));
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(T_words), _mm256_xor_si256(t0, u0));
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(T_words + 4), _mm256_xor_si256(t1, u1));
+        __m256i u0 = _mm256_load_si256(reinterpret_cast<const __m256i*>(U_words));
+        __m256i u1 = _mm256_load_si256(reinterpret_cast<const __m256i*>(U_words + 4));
+        t0 = _mm256_xor_si256(t0, u0);
+        t1 = _mm256_xor_si256(t1, u1);
 #else
         #pragma GCC unroll 8
         for (int i = 0; i < 8; ++i) T_words[i] ^= U_words[i];
 #endif
     }
+
+#if defined(__AVX2__)
+    _mm256_store_si256(reinterpret_cast<__m256i*>(T_words), t0);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(T_words + 4), t1);
+#endif
 
     alignas(64) uint8_t T_out[HASH_LEN];
     for (int i = 0; i < 8; ++i) {

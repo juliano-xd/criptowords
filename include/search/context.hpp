@@ -57,6 +57,9 @@ struct PipelineThreadContext {
 
     // OTM-23: Fast-Forwarding PBKDF2 Round 1
     alignas(64) uint64_t kw_salt[80] = {};
+    alignas(64) uint64_t kw_salt_sse[80 * 2] = {};
+    alignas(64) uint64_t kw_salt_avx2[80 * 4] = {};
+    alignas(64) uint64_t kw_salt_avx512[80 * 8] = {};
 
     size_t local_tested = 0;
     size_t local_valid  = 0;

@@ -15,7 +15,7 @@ public:
     // =========================================================
     // STREAMING API
     // =========================================================
-    constexpr void init(const uint8_t* key, const size_t key_len) noexcept {
+    void init(const uint8_t* key, const size_t key_len) noexcept {
         std::array<uint8_t, SHA512::block_size> ipad;
         std::array<uint8_t, SHA512::block_size> opad;
         build_pads(key, key_len, ipad, opad);
@@ -31,7 +31,7 @@ public:
         expected_len_ = 0;
     }
 
-    constexpr void update(const uint8_t* data,const size_t len) noexcept {
+    void update(const uint8_t* data,const size_t len) noexcept {
         inner_.update(data, len);
     }
 
@@ -58,7 +58,7 @@ public:
     // =========================================================
     // TEMPLATE / PRESET API
     // =========================================================
-    constexpr void preset(const void* key,const size_t key_len, const size_t expected_data_len = 0) noexcept {
+    void preset(const void* key,const size_t key_len, const size_t expected_data_len = 0) noexcept {
         std::array<uint8_t, SHA512::block_size> ipad;
         std::array<uint8_t, SHA512::block_size> opad;
         build_pads(key, key_len, ipad, opad);
@@ -271,7 +271,7 @@ private:
     size_t expected_len_ = 0;
 
     // Constrói os dois pads (ipad/opad) já XORados com a chave normalizada.
-    constexpr static void build_pads(const void* key, const size_t key_len,
+    static void build_pads(const void* key, const size_t key_len,
         std::array<uint8_t, SHA512::block_size> &ipad,
         std::array<uint8_t, SHA512::block_size> &opad) noexcept {
 

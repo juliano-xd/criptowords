@@ -32,7 +32,8 @@ class SimdBatchProcessor : public IBatchProcessor {
                 ctx.salt_buf, ctx.salt_len, rounds,
                 ctx.seed + 0*64, ctx.seed + 1*64, ctx.seed + 2*64, ctx.seed + 3*64,
                 ctx.salt_block64,
-                ctx.kw_salt
+                ctx.kw_salt,
+                ctx.kw_salt_sse
             );
         } else if constexpr (Arch == SimdArch::AVX2) {
             pbkdf2_hmac_sha512_8way_avx2(
@@ -44,7 +45,8 @@ class SimdBatchProcessor : public IBatchProcessor {
                 ctx.seed + 0*64, ctx.seed + 1*64, ctx.seed + 2*64, ctx.seed + 3*64,
                 ctx.seed + 4*64, ctx.seed + 5*64, ctx.seed + 6*64, ctx.seed + 7*64,
                 ctx.salt_block64,
-                ctx.kw_salt
+                ctx.kw_salt,
+                ctx.kw_salt_avx2
             );
         } else if constexpr (Arch == SimdArch::AVX512) {
             pbkdf2_hmac_sha512_16way_avx512(
@@ -62,7 +64,8 @@ class SimdBatchProcessor : public IBatchProcessor {
                 ctx.seed +  8*64, ctx.seed +  9*64, ctx.seed + 10*64, ctx.seed + 11*64,
                 ctx.seed + 12*64, ctx.seed + 13*64, ctx.seed + 14*64, ctx.seed + 15*64,
                 ctx.salt_block64,
-                ctx.kw_salt
+                ctx.kw_salt,
+                ctx.kw_salt_avx512
             );
         }
     }

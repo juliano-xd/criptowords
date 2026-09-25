@@ -152,111 +152,173 @@ inline void store_digests_be(const uint64_t digest[8][LANES],
         }
 }
 
+// POD alignment wrappers for compile-time constants (zero runtime guard variables)
+struct DoubleWord {
+    alignas(16) uint64_t v[2];
+    constexpr DoubleWord(uint64_t x) : v{x, x} {}
+    inline const __m128i& vec() const noexcept { return *reinterpret_cast<const __m128i*>(v); }
+    inline operator __m128i() const noexcept { return *reinterpret_cast<const __m128i*>(v); }
+};
+
+struct QuadWord {
+    alignas(32) uint64_t v[4];
+    constexpr QuadWord(uint64_t x) : v{x, x, x, x} {}
+    inline const __m256i& vec() const noexcept { return *reinterpret_cast<const __m256i*>(v); }
+    inline operator __m256i() const noexcept { return *reinterpret_cast<const __m256i*>(v); }
+};
+
+struct OctWord {
+    alignas(64) uint64_t v[8];
+    constexpr OctWord(uint64_t x) : v{x, x, x, x, x, x, x, x} {}
+    inline const __m512i& vec() const noexcept { return *reinterpret_cast<const __m512i*>(v); }
+};
+
+struct K512_SSE_Table {
+    alignas(16) uint64_t data[80][2];
+    constexpr K512_SSE_Table() : data{} {
+        for (int i = 0; i < 80; ++i) {
+            uint64_t val = K512[i];
+            data[i][0] = val; data[i][1] = val;
+        }
+    }
+};
+inline constexpr K512_SSE_Table g_k512_sse_table{};
+
+struct IV_SSE_Table {
+    alignas(16) uint64_t data[8][2];
+    constexpr IV_SSE_Table() : data{} {
+        for (int i = 0; i < 8; ++i) {
+            uint64_t val = IV[i];
+            data[i][0] = val; data[i][1] = val;
+        }
+    }
+};
+inline constexpr IV_SSE_Table g_iv_sse_table{};
+
+struct K512_AVX2_Table {
+    alignas(32) uint64_t data[80][4];
+    constexpr K512_AVX2_Table() : data{} {
+        for (int i = 0; i < 80; ++i) {
+            uint64_t val = K512[i];
+            data[i][0] = val; data[i][1] = val; data[i][2] = val; data[i][3] = val;
+        }
+    }
+};
+inline constexpr K512_AVX2_Table g_k512_avx2_table{};
+
+struct IV_AVX2_Table {
+    alignas(32) uint64_t data[8][4];
+    constexpr IV_AVX2_Table() : data{} {
+        for (int i = 0; i < 8; ++i) {
+            uint64_t val = IV[i];
+            data[i][0] = val; data[i][1] = val; data[i][2] = val; data[i][3] = val;
+        }
+    }
+};
+inline constexpr IV_AVX2_Table g_iv_avx2_table{};
+
+struct K512_AVX512_Table {
+    alignas(64) uint64_t data[80][8];
+    constexpr K512_AVX512_Table() : data{} {
+        for (int i = 0; i < 80; ++i) {
+            uint64_t val = K512[i];
+            for (int j = 0; j < 8; ++j) data[i][j] = val;
+        }
+    }
+};
+inline constexpr K512_AVX512_Table g_k512_avx512_table{};
+
+struct IV_AVX512_Table {
+    alignas(64) uint64_t data[8][8];
+    constexpr IV_AVX512_Table() : data{} {
+        for (int i = 0; i < 8; ++i) {
+            uint64_t val = IV[i];
+            for (int j = 0; j < 8; ++j) data[i][j] = val;
+        }
+    }
+};
+inline constexpr IV_AVX512_Table g_iv_avx512_table{};
+
+inline constexpr DoubleWord C_S1_W15_SSE  {0x00c0000000003018ULL};
+inline constexpr DoubleWord C_S0_W8_SSE   {0x4180000000000000ULL};
+inline constexpr DoubleWord C_S0_W15_SSE  {0x000000000000030aULL};
+inline constexpr DoubleWord C_W8_SSE      {0x8000000000000000ULL};
+inline constexpr DoubleWord C_W15_SSE     {0x0000000000000600ULL};
+inline constexpr DoubleWord K_FUSED_8_SSE {0xd807aa98a3030242ULL + 0x8000000000000000ULL};
+inline constexpr DoubleWord K_FUSED_15_SSE{0xc19bf174cf692694ULL + 0x0000000000000600ULL};
+
+inline constexpr QuadWord C_S1_W15_AVX2  {0x00c0000000003018ULL};
+inline constexpr QuadWord C_S0_W8_AVX2   {0x4180000000000000ULL};
+inline constexpr QuadWord C_S0_W15_AVX2  {0x000000000000030aULL};
+inline constexpr QuadWord C_W8_AVX2      {0x8000000000000000ULL};
+inline constexpr QuadWord C_W15_AVX2     {0x0000000000000600ULL};
+inline constexpr QuadWord K_FUSED_8_AVX2 {0xd807aa98a3030242ULL + 0x8000000000000000ULL};
+inline constexpr QuadWord K_FUSED_15_AVX2{0xc19bf174cf692694ULL + 0x0000000000000600ULL};
+
+inline constexpr OctWord C_S1_W15_AVX512  {0x00c0000000003018ULL};
+inline constexpr OctWord C_S0_W8_AVX512   {0x4180000000000000ULL};
+inline constexpr OctWord C_S0_W15_AVX512  {0x000000000000030aULL};
+inline constexpr OctWord C_W8_AVX512      {0x8000000000000000ULL};
+inline constexpr OctWord C_W15_AVX512     {0x0000000000000600ULL};
+inline constexpr OctWord K_FUSED_8_AVX512 {0xd807aa98a3030242ULL + 0x8000000000000000ULL};
+inline constexpr OctWord K_FUSED_15_AVX512{0xc19bf174cf692694ULL + 0x0000000000000600ULL};
+
+inline void precompute_kw_salt_tables(const uint64_t kw_salt[80],
+                                     uint64_t* sse_tbl,
+                                     uint64_t* avx2_tbl,
+                                     uint64_t* avx512_tbl) noexcept
+{
+    for (int i = 0; i < 80; ++i) {
+        uint64_t v = kw_salt[i];
+        if (sse_tbl) {
+            sse_tbl[i * 2 + 0] = v;
+            sse_tbl[i * 2 + 1] = v;
+        }
+        if (avx2_tbl) {
+            avx2_tbl[i * 4 + 0] = v;
+            avx2_tbl[i * 4 + 1] = v;
+            avx2_tbl[i * 4 + 2] = v;
+            avx2_tbl[i * 4 + 3] = v;
+        }
+        if (avx512_tbl) {
+            for (int j = 0; j < 8; ++j) avx512_tbl[i * 8 + j] = v;
+        }
+    }
+}
+
 }  // namespace pbkdf2_simd_detail
 
 // ============================================================================
-// Broadcasters de K / IV por ISA
+// Broadcasters de K / IV por ISA (Zero-guard, dados diretos em .rodata)
 // ============================================================================
 [[gnu::target("sse4.1"), gnu::always_inline]]
-static inline const __m128i* get_k512_sse() {
-    alignas(16) static const __m128i K[80] = {
-#define K_SSE(i) _mm_set1_epi64x((long long)pbkdf2_simd_detail::K512[i])
-        K_SSE(0),  K_SSE(1),  K_SSE(2),  K_SSE(3),  K_SSE(4),  K_SSE(5),  K_SSE(6),  K_SSE(7),
-        K_SSE(8),  K_SSE(9),  K_SSE(10), K_SSE(11), K_SSE(12), K_SSE(13), K_SSE(14), K_SSE(15),
-        K_SSE(16), K_SSE(17), K_SSE(18), K_SSE(19), K_SSE(20), K_SSE(21), K_SSE(22), K_SSE(23),
-        K_SSE(24), K_SSE(25), K_SSE(26), K_SSE(27), K_SSE(28), K_SSE(29), K_SSE(30), K_SSE(31),
-        K_SSE(32), K_SSE(33), K_SSE(34), K_SSE(35), K_SSE(36), K_SSE(37), K_SSE(38), K_SSE(39),
-        K_SSE(40), K_SSE(41), K_SSE(42), K_SSE(43), K_SSE(44), K_SSE(45), K_SSE(46), K_SSE(47),
-        K_SSE(48), K_SSE(49), K_SSE(50), K_SSE(51), K_SSE(52), K_SSE(53), K_SSE(54), K_SSE(55),
-        K_SSE(56), K_SSE(57), K_SSE(58), K_SSE(59), K_SSE(60), K_SSE(61), K_SSE(62), K_SSE(63),
-        K_SSE(64), K_SSE(65), K_SSE(66), K_SSE(67), K_SSE(68), K_SSE(69), K_SSE(70), K_SSE(71),
-        K_SSE(72), K_SSE(73), K_SSE(74), K_SSE(75), K_SSE(76), K_SSE(77), K_SSE(78), K_SSE(79)
-#undef K_SSE
-    };
-    return K;
+static inline const __m128i* get_k512_sse() noexcept {
+    return reinterpret_cast<const __m128i*>(pbkdf2_simd_detail::g_k512_sse_table.data);
 }
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
-static inline const __m128i* get_iv_sse() {
-    alignas(16) static const __m128i V[8] = {
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[0]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[1]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[2]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[3]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[4]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[5]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[6]),
-        _mm_set1_epi64x((long long)pbkdf2_simd_detail::IV[7])
-    };
-    return V;
+static inline const __m128i* get_iv_sse() noexcept {
+    return reinterpret_cast<const __m128i*>(pbkdf2_simd_detail::g_iv_sse_table.data);
 }
 
 [[gnu::target("avx2"), gnu::always_inline]]
-static inline const __m256i* get_k512_avx2() {
-    alignas(32) static const __m256i K[80] = {
-#define K_AVX2(i) _mm256_set1_epi64x((long long)pbkdf2_simd_detail::K512[i])
-        K_AVX2(0),  K_AVX2(1),  K_AVX2(2),  K_AVX2(3),  K_AVX2(4),  K_AVX2(5),  K_AVX2(6),  K_AVX2(7),
-        K_AVX2(8),  K_AVX2(9),  K_AVX2(10), K_AVX2(11), K_AVX2(12), K_AVX2(13), K_AVX2(14), K_AVX2(15),
-        K_AVX2(16), K_AVX2(17), K_AVX2(18), K_AVX2(19), K_AVX2(20), K_AVX2(21), K_AVX2(22), K_AVX2(23),
-        K_AVX2(24), K_AVX2(25), K_AVX2(26), K_AVX2(27), K_AVX2(28), K_AVX2(29), K_AVX2(30), K_AVX2(31),
-        K_AVX2(32), K_AVX2(33), K_AVX2(34), K_AVX2(35), K_AVX2(36), K_AVX2(37), K_AVX2(38), K_AVX2(39),
-        K_AVX2(40), K_AVX2(41), K_AVX2(42), K_AVX2(43), K_AVX2(44), K_AVX2(45), K_AVX2(46), K_AVX2(47),
-        K_AVX2(48), K_AVX2(49), K_AVX2(50), K_AVX2(51), K_AVX2(52), K_AVX2(53), K_AVX2(54), K_AVX2(55),
-        K_AVX2(56), K_AVX2(57), K_AVX2(58), K_AVX2(59), K_AVX2(60), K_AVX2(61), K_AVX2(62), K_AVX2(63),
-        K_AVX2(64), K_AVX2(65), K_AVX2(66), K_AVX2(67), K_AVX2(68), K_AVX2(69), K_AVX2(70), K_AVX2(71),
-        K_AVX2(72), K_AVX2(73), K_AVX2(74), K_AVX2(75), K_AVX2(76), K_AVX2(77), K_AVX2(78), K_AVX2(79)
-#undef K_AVX2
-    };
-    return K;
+static inline const __m256i* get_k512_avx2() noexcept {
+    return reinterpret_cast<const __m256i*>(pbkdf2_simd_detail::g_k512_avx2_table.data);
 }
 
 [[gnu::target("avx2"), gnu::always_inline]]
-static inline const __m256i* get_iv_avx2() {
-    alignas(32) static const __m256i V[8] = {
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[0]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[1]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[2]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[3]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[4]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[5]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[6]),
-        _mm256_set1_epi64x((long long)pbkdf2_simd_detail::IV[7])
-    };
-    return V;
+static inline const __m256i* get_iv_avx2() noexcept {
+    return reinterpret_cast<const __m256i*>(pbkdf2_simd_detail::g_iv_avx2_table.data);
 }
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline const __m512i* get_k512_avx512() {
-    alignas(64) static const __m512i K[80] = {
-#define K_AVX512(i) _mm512_set1_epi64((long long)pbkdf2_simd_detail::K512[i])
-        K_AVX512(0),  K_AVX512(1),  K_AVX512(2),  K_AVX512(3),  K_AVX512(4),  K_AVX512(5),  K_AVX512(6),  K_AVX512(7),
-        K_AVX512(8),  K_AVX512(9),  K_AVX512(10), K_AVX512(11), K_AVX512(12), K_AVX512(13), K_AVX512(14), K_AVX512(15),
-        K_AVX512(16), K_AVX512(17), K_AVX512(18), K_AVX512(19), K_AVX512(20), K_AVX512(21), K_AVX512(22), K_AVX512(23),
-        K_AVX512(24), K_AVX512(25), K_AVX512(26), K_AVX512(27), K_AVX512(28), K_AVX512(29), K_AVX512(30), K_AVX512(31),
-        K_AVX512(32), K_AVX512(33), K_AVX512(34), K_AVX512(35), K_AVX512(36), K_AVX512(37), K_AVX512(38), K_AVX512(39),
-        K_AVX512(40), K_AVX512(41), K_AVX512(42), K_AVX512(43), K_AVX512(44), K_AVX512(45), K_AVX512(46), K_AVX512(47),
-        K_AVX512(48), K_AVX512(49), K_AVX512(50), K_AVX512(51), K_AVX512(52), K_AVX512(53), K_AVX512(54), K_AVX512(55),
-        K_AVX512(56), K_AVX512(57), K_AVX512(58), K_AVX512(59), K_AVX512(60), K_AVX512(61), K_AVX512(62), K_AVX512(63),
-        K_AVX512(64), K_AVX512(65), K_AVX512(66), K_AVX512(67), K_AVX512(68), K_AVX512(69), K_AVX512(70), K_AVX512(71),
-        K_AVX512(72), K_AVX512(73), K_AVX512(74), K_AVX512(75), K_AVX512(76), K_AVX512(77), K_AVX512(78), K_AVX512(79)
-#undef K_AVX512
-    };
-    return K;
+static inline const __m512i* get_k512_avx512() noexcept {
+    return reinterpret_cast<const __m512i*>(pbkdf2_simd_detail::g_k512_avx512_table.data);
 }
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
-static inline const __m512i* get_iv_avx512() {
-    alignas(64) static const __m512i V[8] = {
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[0]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[1]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[2]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[3]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[4]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[5]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[6]),
-        _mm512_set1_epi64((long long)pbkdf2_simd_detail::IV[7])
-    };
-    return V;
+static inline const __m512i* get_iv_avx512() noexcept {
+    return reinterpret_cast<const __m512i*>(pbkdf2_simd_detail::g_iv_avx512_table.data);
 }
 
 // Máscaras de byte-shuffle para o ROR8 dentro do small-sigma0.
@@ -311,13 +373,13 @@ static inline void sha512_block64_sse(const __m128i iv[8], __m128i W[16], __m128
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
 static inline void sha512_padded_block64_sse(const __m128i iv[8], __m128i W[16], __m128i out[8]) {
-    alignas(16) static const __m128i C_S1_W15  = _mm_set1_epi64x(0x00c0000000003018ULL);
-    alignas(16) static const __m128i C_S0_W8   = _mm_set1_epi64x(0x4180000000000000ULL);
-    alignas(16) static const __m128i C_S0_W15  = _mm_set1_epi64x(0x000000000000030aULL);
-    alignas(16) static const __m128i C_W8      = _mm_set1_epi64x(0x8000000000000000ULL);
-    alignas(16) static const __m128i C_W15     = _mm_set1_epi64x(0x0000000000000600ULL);
-    alignas(16) static const __m128i K_FUSED_8  = _mm_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(16) static const __m128i K_FUSED_15 = _mm_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
+    const __m128i& C_S1_W15  = pbkdf2_simd_detail::C_S1_W15_SSE.vec();
+    const __m128i& C_S0_W8   = pbkdf2_simd_detail::C_S0_W8_SSE.vec();
+    const __m128i& C_S0_W15  = pbkdf2_simd_detail::C_S0_W15_SSE.vec();
+    const __m128i& C_W8      = pbkdf2_simd_detail::C_W8_SSE.vec();
+    const __m128i& C_W15     = pbkdf2_simd_detail::C_W15_SSE.vec();
+    const __m128i& K_FUSED_8  = pbkdf2_simd_detail::K_FUSED_8_SSE.vec();
+    const __m128i& K_FUSED_15 = pbkdf2_simd_detail::K_FUSED_15_SSE.vec();
 
     __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m128i* k_tbl = get_k512_sse();
@@ -411,13 +473,13 @@ static inline void pbkdf2_2lane_fused_stream(
 
 [[gnu::target("sse4.1"), gnu::always_inline]]
 static inline void sha512_salt_fastforward_sse(const __m128i iv[8],
-                                               const uint64_t kw_salt[80],
+                                               const __m128i kw_salt_vec[80],
                                                __m128i out[8])
 {
     __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
-        __m128i kw      = _mm_set1_epi64x((long long)kw_salt[i]);
+        __m128i kw      = kw_salt_vec[i];
         __m128i h_kw    = _mm_add_epi64(h, kw);
         __m128i e_terms = _mm_add_epi64(S1_SSE(e), CH_SSE(e, f, g));
         __m128i T1      = _mm_add_epi64(h_kw, e_terms);
@@ -433,6 +495,16 @@ static inline void sha512_salt_fastforward_sse(const __m128i iv[8],
     out[6] = _mm_add_epi64(iv[6], g); out[7] = _mm_add_epi64(iv[7], h);
 }
 
+[[gnu::target("sse4.1"), gnu::always_inline]]
+static inline void sha512_salt_fastforward_sse(const __m128i iv[8],
+                                               const uint64_t kw_salt[80],
+                                               __m128i out[8])
+{
+    alignas(16) __m128i kw_vec[80];
+    for (int i = 0; i < 80; ++i) kw_vec[i] = _mm_set1_epi64x((long long)kw_salt[i]);
+    sha512_salt_fastforward_sse(iv, kw_vec, out);
+}
+
 [[gnu::target("sse4.1")]]
 inline void pbkdf2_hmac_sha512_4way_sse(
     const char* p1, size_t l1, const char* p2, size_t l2,
@@ -440,7 +512,8 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     const uint8_t* salt, size_t salt_len, uint32_t iterations,
     uint8_t out1[64], uint8_t out2[64], uint8_t out3[64], uint8_t out4[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
-    const uint64_t* precomputed_kw_salt = nullptr)
+    const uint64_t* precomputed_kw_salt = nullptr,
+    const void* precomputed_kw_salt_vec = nullptr)
 {
     using namespace pbkdf2_simd_detail;
 
@@ -464,7 +537,11 @@ inline void pbkdf2_hmac_sha512_4way_sse(
 
     // --- 3. Bloco do salt (U_1) ---
     __m128i s_lo[8], s_hi[8];
-    if (precomputed_kw_salt) {
+    if (precomputed_kw_salt_vec) {
+        const auto* kw_vec = static_cast<const __m128i*>(precomputed_kw_salt_vec);
+        sha512_salt_fastforward_sse(ipad_iv_lo, kw_vec, s_lo);
+        sha512_salt_fastforward_sse(ipad_iv_hi, kw_vec, s_hi);
+    } else if (precomputed_kw_salt) {
         sha512_salt_fastforward_sse(ipad_iv_lo, precomputed_kw_salt, s_lo);
         sha512_salt_fastforward_sse(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
@@ -485,10 +562,8 @@ inline void pbkdf2_hmac_sha512_4way_sse(
     // --- 4. Outer hash de U_1 ---
     __m128i T_lo[8], T_hi[8];
     for (int i=0;i<8;++i) W[i] = s_lo[i];
-    for (int i=8;i<16;++i) W[i] = _mm_setzero_si128();
     sha512_padded_block64_sse(opad_iv_lo, W, T_lo);
     for (int i=0;i<8;++i) W[i] = s_hi[i];
-    for (int i=8;i<16;++i) W[i] = _mm_setzero_si128();
     sha512_padded_block64_sse(opad_iv_hi, W, T_hi);
 
     // --- 5. Iterações 2..N ---
@@ -553,13 +628,13 @@ static inline void sha512_block64_avx2(const __m256i iv[8], __m256i W[16], __m25
 
 [[gnu::target("avx2"), gnu::always_inline]]
 static inline void sha512_padded_block64_avx2(const __m256i iv[8], __m256i W[16], __m256i out[8]) {
-    alignas(32) static const __m256i C_S1_W15  = _mm256_set1_epi64x(0x00c0000000003018ULL);
-    alignas(32) static const __m256i C_S0_W8   = _mm256_set1_epi64x(0x4180000000000000ULL);
-    alignas(32) static const __m256i C_S0_W15  = _mm256_set1_epi64x(0x000000000000030aULL);
-    alignas(32) static const __m256i C_W8      = _mm256_set1_epi64x(0x8000000000000000ULL);
-    alignas(32) static const __m256i C_W15     = _mm256_set1_epi64x(0x0000000000000600ULL);
-    alignas(32) static const __m256i K_FUSED_8  = _mm256_set1_epi64x(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(32) static const __m256i K_FUSED_15 = _mm256_set1_epi64x(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
+    const __m256i& C_S1_W15  = pbkdf2_simd_detail::C_S1_W15_AVX2.vec();
+    const __m256i& C_S0_W8   = pbkdf2_simd_detail::C_S0_W8_AVX2.vec();
+    const __m256i& C_S0_W15  = pbkdf2_simd_detail::C_S0_W15_AVX2.vec();
+    const __m256i& C_W8      = pbkdf2_simd_detail::C_W8_AVX2.vec();
+    const __m256i& C_W15     = pbkdf2_simd_detail::C_W15_AVX2.vec();
+    const __m256i& K_FUSED_8  = pbkdf2_simd_detail::K_FUSED_8_AVX2.vec();
+    const __m256i& K_FUSED_15 = pbkdf2_simd_detail::K_FUSED_15_AVX2.vec();
 
     __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m256i* k_tbl = get_k512_avx2();
@@ -653,13 +728,13 @@ static inline void pbkdf2_4lane_fused_stream(
 
 [[gnu::target("avx2"), gnu::always_inline]]
 static inline void sha512_salt_fastforward_avx2(const __m256i iv[8],
-                                                const uint64_t kw_salt[80],
+                                                const __m256i kw_salt_vec[80],
                                                 __m256i out[8])
 {
     __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
-        __m256i kw      = _mm256_set1_epi64x((long long)kw_salt[i]);
+        __m256i kw      = kw_salt_vec[i];
         __m256i h_kw    = _mm256_add_epi64(h, kw);
         __m256i e_terms = _mm256_add_epi64(S1_AVX2(e), CH_AVX2(e, f, g));
         __m256i T1      = _mm256_add_epi64(h_kw, e_terms);
@@ -673,6 +748,16 @@ static inline void sha512_salt_fastforward_avx2(const __m256i iv[8],
     out[2] = _mm256_add_epi64(iv[2], c); out[3] = _mm256_add_epi64(iv[3], d);
     out[4] = _mm256_add_epi64(iv[4], e); out[5] = _mm256_add_epi64(iv[5], f);
     out[6] = _mm256_add_epi64(iv[6], g); out[7] = _mm256_add_epi64(iv[7], h);
+}
+
+[[gnu::target("avx2"), gnu::always_inline]]
+static inline void sha512_salt_fastforward_avx2(const __m256i iv[8],
+                                                const uint64_t kw_salt[80],
+                                                __m256i out[8])
+{
+    alignas(32) __m256i kw_vec[80];
+    for (int i = 0; i < 80; ++i) kw_vec[i] = _mm256_set1_epi64x((long long)kw_salt[i]);
+    sha512_salt_fastforward_avx2(iv, kw_vec, out);
 }
 
 // Compat: mantém a assinatura antiga (recebe salt_blk64 já pronto).
@@ -690,7 +775,8 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     uint8_t out1[64],  uint8_t out2[64],  uint8_t out3[64],  uint8_t out4[64],
     uint8_t out5[64],  uint8_t out6[64],  uint8_t out7[64],  uint8_t out8[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
-    const uint64_t* precomputed_kw_salt = nullptr)
+    const uint64_t* precomputed_kw_salt = nullptr,
+    const void* precomputed_kw_salt_vec = nullptr)
 {
     using namespace pbkdf2_simd_detail;
 
@@ -714,7 +800,11 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
 
     // --- 3. Bloco do salt (U_1) ---
     __m256i s_lo[8], s_hi[8];
-    if (precomputed_kw_salt) {
+    if (precomputed_kw_salt_vec) {
+        const auto* kw_vec = static_cast<const __m256i*>(precomputed_kw_salt_vec);
+        sha512_salt_fastforward_avx2(ipad_iv_lo, kw_vec, s_lo);
+        sha512_salt_fastforward_avx2(ipad_iv_hi, kw_vec, s_hi);
+    } else if (precomputed_kw_salt) {
         sha512_salt_fastforward_avx2(ipad_iv_lo, precomputed_kw_salt, s_lo);
         sha512_salt_fastforward_avx2(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
@@ -735,10 +825,8 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
     // --- 4. Outer hash de U_1 ---
     __m256i T_lo[8], T_hi[8];
     for (int i=0;i<8;++i) W[i] = s_lo[i];
-    for (int i=8;i<16;++i) W[i] = _mm256_setzero_si256();
     sha512_padded_block64_avx2(opad_iv_lo, W, T_lo);
     for (int i=0;i<8;++i) W[i] = s_hi[i];
-    for (int i=8;i<16;++i) W[i] = _mm256_setzero_si256();
     sha512_padded_block64_avx2(opad_iv_hi, W, T_hi);
 
     // --- 5. Iterações 2..N ---
@@ -802,13 +890,13 @@ static inline void sha512_block64_avx512(const __m512i iv[8], __m512i W[16], __m
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
 static inline void sha512_padded_block64_avx512(const __m512i iv[8], __m512i W[16], __m512i out[8]) {
-    alignas(64) static const __m512i C_S1_W15  = _mm512_set1_epi64(0x00c0000000003018ULL);
-    alignas(64) static const __m512i C_S0_W8   = _mm512_set1_epi64(0x4180000000000000ULL);
-    alignas(64) static const __m512i C_S0_W15  = _mm512_set1_epi64(0x000000000000030aULL);
-    alignas(64) static const __m512i C_W8      = _mm512_set1_epi64(0x8000000000000000ULL);
-    alignas(64) static const __m512i C_W15     = _mm512_set1_epi64(0x0000000000000600ULL);
-    alignas(64) static const __m512i K_FUSED_8  = _mm512_set1_epi64(0xd807aa98a3030242ULL + 0x8000000000000000ULL);
-    alignas(64) static const __m512i K_FUSED_15 = _mm512_set1_epi64(0xc19bf174cf692694ULL + 0x0000000000000600ULL);
+    const __m512i& C_S1_W15  = pbkdf2_simd_detail::C_S1_W15_AVX512.vec();
+    const __m512i& C_S0_W8   = pbkdf2_simd_detail::C_S0_W8_AVX512.vec();
+    const __m512i& C_S0_W15  = pbkdf2_simd_detail::C_S0_W15_AVX512.vec();
+    const __m512i& C_W8      = pbkdf2_simd_detail::C_W8_AVX512.vec();
+    const __m512i& C_W15     = pbkdf2_simd_detail::C_W15_AVX512.vec();
+    const __m512i& K_FUSED_8  = pbkdf2_simd_detail::K_FUSED_8_AVX512.vec();
+    const __m512i& K_FUSED_15 = pbkdf2_simd_detail::K_FUSED_15_AVX512.vec();
 
     __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m512i* k_tbl = get_k512_avx512();
@@ -902,13 +990,13 @@ static inline void pbkdf2_8lane_fused_stream(
 
 [[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
 static inline void sha512_salt_fastforward_avx512(const __m512i iv[8],
-                                                  const uint64_t kw_salt[80],
+                                                  const __m512i kw_salt_vec[80],
                                                   __m512i out[8])
 {
     __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
-        __m512i kw      = _mm512_set1_epi64((long long)kw_salt[i]);
+        __m512i kw      = kw_salt_vec[i];
         __m512i h_kw    = _mm512_add_epi64(h, kw);
         __m512i e_terms = _mm512_add_epi64(S1_AVX512(e), CH_AVX512(e, f, g));
         __m512i T1      = _mm512_add_epi64(h_kw, e_terms);
@@ -922,6 +1010,16 @@ static inline void sha512_salt_fastforward_avx512(const __m512i iv[8],
     out[2] = _mm512_add_epi64(iv[2], c); out[3] = _mm512_add_epi64(iv[3], d);
     out[4] = _mm512_add_epi64(iv[4], e); out[5] = _mm512_add_epi64(iv[5], f);
     out[6] = _mm512_add_epi64(iv[6], g); out[7] = _mm512_add_epi64(iv[7], h);
+}
+
+[[gnu::target("avx512f,avx512vl"), gnu::always_inline]]
+static inline void sha512_salt_fastforward_avx512(const __m512i iv[8],
+                                                  const uint64_t kw_salt[80],
+                                                  __m512i out[8])
+{
+    alignas(64) __m512i kw_vec[80];
+    for (int i = 0; i < 80; ++i) kw_vec[i] = _mm512_set1_epi64((long long)kw_salt[i]);
+    sha512_salt_fastforward_avx512(iv, kw_vec, out);
 }
 
 [[gnu::target("avx512f,avx512vl")]]
@@ -940,7 +1038,8 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     uint8_t out9[64],  uint8_t out10[64], uint8_t out11[64], uint8_t out12[64],
     uint8_t out13[64], uint8_t out14[64], uint8_t out15[64], uint8_t out16[64],
     const uint64_t* precomputed_salt_blk64 = nullptr,
-    const uint64_t* precomputed_kw_salt = nullptr)
+    const uint64_t* precomputed_kw_salt = nullptr,
+    const void* precomputed_kw_salt_vec = nullptr)
 {
     using namespace pbkdf2_simd_detail;
 
@@ -964,7 +1063,11 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
 
     // --- 3. Bloco do salt (U_1) ---
     __m512i s_lo[8], s_hi[8];
-    if (precomputed_kw_salt) {
+    if (precomputed_kw_salt_vec) {
+        const auto* kw_vec = static_cast<const __m512i*>(precomputed_kw_salt_vec);
+        sha512_salt_fastforward_avx512(ipad_iv_lo, kw_vec, s_lo);
+        sha512_salt_fastforward_avx512(ipad_iv_hi, kw_vec, s_hi);
+    } else if (precomputed_kw_salt) {
         sha512_salt_fastforward_avx512(ipad_iv_lo, precomputed_kw_salt, s_lo);
         sha512_salt_fastforward_avx512(ipad_iv_hi, precomputed_kw_salt, s_hi);
     } else {
@@ -985,10 +1088,8 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
     // --- 4. Outer hash de U_1 ---
     __m512i T_lo[8], T_hi[8];
     for (int i=0;i<8;++i) W[i] = s_lo[i];
-    for (int i=8;i<16;++i) W[i] = _mm512_setzero_si512();
     sha512_padded_block64_avx512(opad_iv_lo, W, T_lo);
     for (int i=0;i<8;++i) W[i] = s_hi[i];
-    for (int i=8;i<16;++i) W[i] = _mm512_setzero_si512();
     sha512_padded_block64_avx512(opad_iv_hi, W, T_hi);
 
     // --- 5. Iterações 2..N ---

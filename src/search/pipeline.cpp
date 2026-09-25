@@ -95,6 +95,7 @@ ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) 
     }
     ctx->salt_block64[15] = static_cast<uint64_t>(128 + ctx->salt_len + 4) * 8;
     precompute_kw_salt(ctx->salt_block64, ctx->kw_salt);
+    pbkdf2_simd_detail::precompute_kw_salt_tables(ctx->kw_salt, ctx->kw_salt_sse, ctx->kw_salt_avx2, ctx->kw_salt_avx512);
 
     if (opt_.slice0_static_len > 0) {
         for (size_t b = 0; b < 16; ++b) {
