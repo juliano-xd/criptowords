@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <deque>
 #include <fstream>
 #include <print>
 #include <thread>
@@ -63,22 +64,55 @@ namespace cryptowords {
         void monitor_progress(const SearchState& state, [[maybe_unused]] size_t num_threads,
                               std::chrono::steady_clock::time_point start,
                               double total_comb, double math_comb) {
-            auto last = start;
-            uint64_t last_n = 0;
+            struct Sample {
+                std::chrono::steady_clock::time_point time;
+                uint64_t count;
+            };
+
+            std::deque<Sample> history;
+            history.push_back({start, 0});
+            double smoothed_spd = 0.0;
+
             const double prune_ratio = (total_comb > 0 && math_comb > total_comb) ? (math_comb / total_comb) : 1.0;
 
             while (!state.found.load(std::memory_order_relaxed) && !state.all_done.load(std::memory_order_relaxed)) {
-                for (int s = 0; s < 10; ++s) {
+                for (int s = 0; s < 4; ++s) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(25));
                     if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
                 }
                 if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
 
                 const auto now     = std::chrono::steady_clock::now();
-                const double dt    = std::chrono::duration<double>(now - last).count();
                 const double elap  = std::chrono::duration<double>(now - start).count();
                 const uint64_t cur = state.tested_count.load(std::memory_order_relaxed);
-                const double pbkdf2_spd = dt > 0 ? static_cast<double>(cur - last_n) / dt : 0.0;
+
+                // Janela deslizante de ~1.2s para estabilidade máxima contra batches e jitter
+                history.push_back({now, cur});
+                while (history.size() > 2) {
+                    const double age = std::chrono::duration<double>(now - history.front().time).count();
+                    if (age > 1.2) {
+                        history.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                const double window_dt = std::chrono::duration<double>(now - history.front().time).count();
+                const uint64_t window_dn = (cur >= history.front().count) ? (cur - history.front().count) : 0;
+                const double raw_window_spd = (window_dt > 0.02) ? (static_cast<double>(window_dn) / window_dt) : 0.0;
+
+                // Suavização EMA (Exponential Moving Average)
+                if (smoothed_spd <= 0.0) {
+                    smoothed_spd = raw_window_spd;
+                } else if (raw_window_spd > 0.0) {
+                    constexpr double alpha = 0.25;
+                    smoothed_spd = alpha * raw_window_spd + (1.0 - alpha) * smoothed_spd;
+                } else {
+                    smoothed_spd *= 0.8;
+                    if (smoothed_spd < 0.1) smoothed_spd = 0.0;
+                }
+
+                const double pbkdf2_spd = smoothed_spd;
                 const double eff_spd    = pbkdf2_spd * prune_ratio;
 
                 const double pct = (total_comb > 0)
@@ -93,9 +127,9 @@ namespace cryptowords {
                 std::string empty;
                 for (int i = filled; i < BAR_WIDTH; ++i) empty += "░";
 
-                const double eta_sec = (pbkdf2_spd > 1.0 && cur < total_comb)
+                const double eta_sec = (pbkdf2_spd > 0.1 && cur < total_comb)
                     ? (total_comb - cur) / pbkdf2_spd
-                    : -1.0;
+                    : (cur >= total_comb ? 0.0 : -1.0);
 
                 std::string eta_str = format_eta(eta_sec);
                 std::string elap_str = format_eta(elap);
@@ -103,7 +137,7 @@ namespace cryptowords {
                 if (prune_ratio > 1.05) {
                     std::string eff_spd_str = format_speed(eff_spd);
                     std::string pbk_spd_str = format_speed(pbkdf2_spd);
-                    std::string cur_space_str = format_num(static_cast<double>(cur) * prune_ratio);
+                    std::string cur_space_str = format_num(std::min(static_cast<double>(cur) * prune_ratio, math_comb));
                     std::string tot_space_str = format_num(math_comb);
 
                     std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;36m%-11s\033[0m \033[90m(PBKDF2: %s)\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
@@ -128,9 +162,6 @@ namespace cryptowords {
                                  elap_str.c_str());
                 }
                 std::fflush(stderr);
-
-                last   = now;
-                last_n = cur;
             }
             std::fprintf(stderr, "\r\033[2K");
             std::fflush(stderr);
