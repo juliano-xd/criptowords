@@ -13,11 +13,11 @@ namespace crypto {
             void update(const void* data, size_t len);
             void finalize(uint8_t out[20]);
             static void hash(const void* data, size_t len, uint8_t out[20]);
-            static void hash32(const std::array<u8, 32> &in, array<u8, 20> &out) noexcept;
+            static void hash32(const std::array<uint8_t, 32> &in, std::array<uint8_t, 20> &out) noexcept;
 
         private:
-            array<u32, 5> h_;
-            array<u8, 64> buf_;
+            std::array<uint32_t, 5> h_;
+            std::array<uint8_t, 64> buf_;
             size_t buf_len_;
             uint64_t total_len_;
 

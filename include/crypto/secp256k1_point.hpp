@@ -462,8 +462,8 @@ FORCE_INLINE void store_be256(uint8_t be[32], const UInt<4>& v) noexcept {
     std::memcpy(be + 24, &w0, 8);
 }
 
-// Cria chave pública comprimida (33 bytes) a partir da chave privada (32 bytes)
-inline bool secp256k1_pubkey_create_fast(uint8_t out_pub[33], const uint8_t seckey[32]) noexcept {
+// Multiplicação de gerador G * seckey convertida para coordenadas afins (X, Y)
+inline bool secp256k1_ecmult_gen_affine(UInt<4>& x_aff, UInt<4>& y_aff, const uint8_t seckey[32]) noexcept {
     UInt<4> k = load_be256(seckey);
     if (__builtin_expect(k.eqz(), 0)) return false;
 
@@ -483,9 +483,15 @@ inline bool secp256k1_pubkey_create_fast(uint8_t out_pub[33], const uint8_t seck
     UInt<4> z_inv = inv_mod_p(acc.Z);
     UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
     UInt<4> z_inv3 = mul_mod_p(z_inv, z_inv2);
-    UInt<4> x_aff = mul_mod_p(acc.X, z_inv2);
-    UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
+    x_aff = mul_mod_p(acc.X, z_inv2);
+    y_aff = mul_mod_p(acc.Y, z_inv3);
+    return true;
+}
 
+// Cria chave pública comprimida (33 bytes) a partir da chave privada (32 bytes)
+inline bool secp256k1_pubkey_create_fast(uint8_t out_pub[33], const uint8_t seckey[32]) noexcept {
+    UInt<4> x_aff, y_aff;
+    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey)) return false;
     out_pub[0] = (y_aff.bits[0] & 1ULL) ? 0x03 : 0x02;
     store_be256(out_pub + 1, x_aff);
     return true;
@@ -497,28 +503,8 @@ inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const
 
 // Cria chave pública não comprimida (65 bytes: 0x04 || X || Y)
 inline bool secp256k1_pubkey_create_uncompressed(uint8_t out_pub[65], const uint8_t seckey[32]) noexcept {
-    UInt<4> k = load_be256(seckey);
-    if (__builtin_expect(k.eqz(), 0)) return false;
-
-    PointJacobian acc;
-    for (int limb = 0; limb < 4; ++limb) {
-        uint64_t w = k.bits[limb];
-        while (w != 0) {
-            int bit = __builtin_ctzll(w);
-            const auto& pt = G_TABLE_CONSTEXPR[limb * 64 + bit];
-            point_add_mixed_raw(acc, pt.x, pt.y);
-            w &= (w - 1);
-        }
-    }
-
-    if (acc.is_infinity) return false;
-
-    UInt<4> z_inv = inv_mod_p(acc.Z);
-    UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
-    UInt<4> z_inv3 = mul_mod_p(z_inv, z_inv2);
-    UInt<4> x_aff = mul_mod_p(acc.X, z_inv2);
-    UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
-
+    UInt<4> x_aff, y_aff;
+    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey)) return false;
     out_pub[0] = 0x04;
     store_be256(out_pub + 1, x_aff);
     store_be256(out_pub + 33, y_aff);
