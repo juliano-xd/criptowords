@@ -16,14 +16,38 @@
 namespace cryptowords {
 
 struct BitcoinSeedHmacTemplate {
-    crypto::HMAC_SHA512 hmac;
+    alignas(64) uint64_t inner_iv[8];
+    alignas(64) uint64_t outer_iv[8];
 
     BitcoinSeedHmacTemplate() {
+        crypto::HMAC_SHA512 hmac;
         hmac.preset("Bitcoin seed", 12, 64);
+        std::memcpy(inner_iv, hmac.inner_state(), 64);
+        std::memcpy(outer_iv, hmac.outer_state(), 64);
     }
 
     inline void compute_master_node(const uint8_t* seed, std::array<uint8_t, 64> &master_node) const noexcept {
-        hmac.complete(seed, 64, master_node);
+        alignas(64) uint64_t W[16];
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            W[i] = crypto::SHA512::load_be64(seed + i * 8);
+        }
+
+        uint64_t inner[8];
+        crypto::SHA512::compress_padded_block64(inner_iv, W, inner);
+
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            W[i] = inner[i];
+        }
+
+        uint64_t outer[8];
+        crypto::SHA512::compress_padded_block64(outer_iv, W, outer);
+
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            crypto::SHA512::store_be64(master_node.data() + i * 8, outer[i]);
+        }
     }
 };
 

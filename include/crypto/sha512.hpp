@@ -93,6 +93,7 @@ private:
 #endif
     }
 
+public:
     SHA512_FORCE_INLINE static word load_be64(const void* p) noexcept {
         word v;
         std::memcpy(&v, p, sizeof(v));
@@ -248,6 +249,188 @@ private:
         state[7] = h;
     }
 
+    #define SHA512_STEP_SCALAR(k_term, w_val) do { \
+        word T1 = (h) + (k_term) + (w_val) + big1(e) + ch(e, f, g); \
+        word T2 = big0(a) + maj(a, b, c); \
+        h = g; g = f; f = e; \
+        e = d + T1; \
+        d = c; c = b; b = a; \
+        a = T1 + T2; \
+    } while(0)
+
+    #define SHA512_STEP_FUSED_SCALAR(k_fused) do { \
+        word T1 = (h) + (k_fused) + big1(e) + ch(e, f, g); \
+        word T2 = big0(a) + maj(a, b, c); \
+        h = g; g = f; f = e; \
+        e = d + T1; \
+        d = c; c = b; b = a; \
+        a = T1 + T2; \
+    } while(0)
+
+    SHA512_FORCE_INLINE static void compress_padded_block64(const word iv[8], word W[16], word out[8]) noexcept {
+        constexpr word K_FUSED_8  = 0xd807aa98a3030242ULL + 0x8000000000000000ULL;
+        constexpr word K_FUSED_15 = 0xc19bf174cf692694ULL + 0x0000000000000600ULL;
+        constexpr word C_S1_W15   = 0x00c0000000003018ULL;
+        constexpr word C_S0_W8    = 0x4180000000000000ULL;
+        constexpr word C_S0_W15   = 0x000000000000030aULL;
+        constexpr word C_W8       = 0x8000000000000000ULL;
+        constexpr word C_W15      = 0x0000000000000600ULL;
+
+        word a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
+
+        SHA512_STEP_SCALAR(K_[0], W[0]);  W[0] += small0(W[1]);
+        SHA512_STEP_SCALAR(K_[1], W[1]);  W[1] += small0(W[2]) + C_S1_W15;
+        SHA512_STEP_SCALAR(K_[2], W[2]);  W[2] += small0(W[3]) + small1(W[0]);
+        SHA512_STEP_SCALAR(K_[3], W[3]);  W[3] += small0(W[4]) + small1(W[1]);
+        SHA512_STEP_SCALAR(K_[4], W[4]);  W[4] += small0(W[5]) + small1(W[2]);
+        SHA512_STEP_SCALAR(K_[5], W[5]);  W[5] += small0(W[6]) + small1(W[3]);
+        SHA512_STEP_SCALAR(K_[6], W[6]);  W[6] += small0(W[7]) + C_W15 + small1(W[4]);
+        SHA512_STEP_SCALAR(K_[7], W[7]);  W[7] += C_S0_W8 + W[0] + small1(W[5]);
+
+        SHA512_STEP_FUSED_SCALAR(K_FUSED_8);  W[8]  = C_W8 + W[1] + small1(W[6]);
+        SHA512_STEP_FUSED_SCALAR(K_[9]);      W[9]  = W[2] + small1(W[7]);
+        SHA512_STEP_FUSED_SCALAR(K_[10]);     W[10] = W[3] + small1(W[8]);
+        SHA512_STEP_FUSED_SCALAR(K_[11]);     W[11] = W[4] + small1(W[9]);
+        SHA512_STEP_FUSED_SCALAR(K_[12]);     W[12] = W[5] + small1(W[10]);
+        SHA512_STEP_FUSED_SCALAR(K_[13]);     W[13] = W[6] + small1(W[11]);
+        SHA512_STEP_FUSED_SCALAR(K_[14]);     W[14] = C_S0_W15 + W[7] + small1(W[12]);
+        SHA512_STEP_FUSED_SCALAR(K_FUSED_15); W[15] = C_W15 + small0(W[0]) + W[8] + small1(W[13]);
+
+        #pragma GCC unroll 4
+        for (int r = 1; r < 5; ++r) {
+            #pragma GCC unroll 16
+            for (int i = 0; i < 16; ++i) {
+                word T1 = h + K_[r*16+i] + W[i] + big1(e) + ch(e, f, g);
+                word T2 = big0(a) + maj(a, b, c);
+                h = g; g = f; f = e;
+                e = d + T1;
+                d = c; c = b; b = a;
+                a = T1 + T2;
+                if (r < 4) {
+                    W[i] += small0(W[(i+1)&15]) + W[(i+9)&15] + small1(W[(i+14)&15]);
+                }
+            }
+        }
+
+        out[0] = iv[0] + a; out[1] = iv[1] + b;
+        out[2] = iv[2] + c; out[3] = iv[3] + d;
+        out[4] = iv[4] + e; out[5] = iv[5] + f;
+        out[6] = iv[6] + g; out[7] = iv[7] + h;
+    }
+
+    SHA512_FORCE_INLINE static void compress_padded_block37(const word iv[8], word W[16], word out[8]) noexcept {
+        constexpr word C_W15_37      = 1320ULL;
+        constexpr word C_S0_1320     = (std::rotr(1320ULL, 1) ^ std::rotr(1320ULL, 8) ^ (1320ULL >> 7));
+        constexpr word C_S1_1320     = (std::rotr(1320ULL, 19) ^ std::rotr(1320ULL, 61) ^ (1320ULL >> 6));
+        constexpr word K_FUSED_15_37 = 0xc19bf174cf692694ULL + 1320ULL;
+
+        word a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
+
+        SHA512_STEP_SCALAR(K_[0], W[0]);  W[0] += small0(W[1]);
+        SHA512_STEP_SCALAR(K_[1], W[1]);  W[1] += small0(W[2]) + C_S1_1320;
+        SHA512_STEP_SCALAR(K_[2], W[2]);  W[2] += small0(W[3]) + small1(W[0]);
+        SHA512_STEP_SCALAR(K_[3], W[3]);  W[3] += small0(W[4]) + small1(W[1]);
+        SHA512_STEP_SCALAR(K_[4], W[4]);  W[4] += small1(W[2]);
+
+        SHA512_STEP_FUSED_SCALAR(K_[5]);  W[5]  = small1(W[3]);
+        SHA512_STEP_FUSED_SCALAR(K_[6]);  W[6]  = C_W15_37 + small1(W[4]);
+        SHA512_STEP_FUSED_SCALAR(K_[7]);  W[7]  = W[0] + small1(W[5]);
+        SHA512_STEP_FUSED_SCALAR(K_[8]);  W[8]  = W[1] + small1(W[6]);
+        SHA512_STEP_FUSED_SCALAR(K_[9]);  W[9]  = W[2] + small1(W[7]);
+        SHA512_STEP_FUSED_SCALAR(K_[10]); W[10] = W[3] + small1(W[8]);
+        SHA512_STEP_FUSED_SCALAR(K_[11]); W[11] = W[4] + small1(W[9]);
+        SHA512_STEP_FUSED_SCALAR(K_[12]); W[12] = W[5] + small1(W[10]);
+        SHA512_STEP_FUSED_SCALAR(K_[13]); W[13] = W[6] + small1(W[11]);
+        SHA512_STEP_FUSED_SCALAR(K_[14]); W[14] = C_S0_1320 + W[7] + small1(W[12]);
+        SHA512_STEP_FUSED_SCALAR(K_FUSED_15_37); W[15] = C_W15_37 + small0(W[0]) + W[8] + small1(W[13]);
+
+        #pragma GCC unroll 4
+        for (int r = 1; r < 5; ++r) {
+            #pragma GCC unroll 16
+            for (int i = 0; i < 16; ++i) {
+                word T1 = h + K_[r*16+i] + W[i] + big1(e) + ch(e, f, g);
+                word T2 = big0(a) + maj(a, b, c);
+                h = g; g = f; f = e;
+                e = d + T1;
+                d = c; c = b; b = a;
+                a = T1 + T2;
+                if (r < 4) {
+                    W[i] += small0(W[(i+1)&15]) + W[(i+9)&15] + small1(W[(i+14)&15]);
+                }
+            }
+        }
+
+        out[0] = iv[0] + a; out[1] = iv[1] + b;
+        out[2] = iv[2] + c; out[3] = iv[3] + d;
+        out[4] = iv[4] + e; out[5] = iv[5] + f;
+        out[6] = iv[6] + g; out[7] = iv[7] + h;
+    }
+
+    template<word PAD>
+    SHA512_FORCE_INLINE static void compress_pad128_32bytekey(const word key_words[4], word out[8]) noexcept {
+        constexpr word C_S0_PAD = (std::rotr(PAD, 1) ^ std::rotr(PAD, 8) ^ (PAD >> 7));
+        constexpr word C_S1_PAD = (std::rotr(PAD, 19) ^ std::rotr(PAD, 61) ^ (PAD >> 6));
+        constexpr word C_PAD_PLUS_S1 = PAD + C_S1_PAD;
+        constexpr word C_PAD_PLUS_S0 = PAD + C_S0_PAD;
+        constexpr word C_2PAD_PLUS_S0 = PAD + PAD + C_S0_PAD;
+
+        word W[16];
+        W[0] = key_words[0] ^ PAD;
+        W[1] = key_words[1] ^ PAD;
+        W[2] = key_words[2] ^ PAD;
+        W[3] = key_words[3] ^ PAD;
+
+        word a = IV_[0], b = IV_[1], c = IV_[2], d = IV_[3];
+        word e = IV_[4], f = IV_[5], g = IV_[6], h = IV_[7];
+
+        SHA512_STEP_SCALAR(K_[0], W[0]); W[0] += small0(W[1]) + C_PAD_PLUS_S1;
+        SHA512_STEP_SCALAR(K_[1], W[1]); W[1] += small0(W[2]) + C_PAD_PLUS_S1;
+        SHA512_STEP_SCALAR(K_[2], W[2]); W[2] += small0(W[3]) + PAD + small1(W[0]);
+        SHA512_STEP_SCALAR(K_[3], W[3]); W[3] += C_PAD_PLUS_S0 + small1(W[1]);
+
+        SHA512_STEP_FUSED_SCALAR(K_[4] + PAD); W[4] = C_2PAD_PLUS_S0 + small1(W[2]);
+        SHA512_STEP_FUSED_SCALAR(K_[5] + PAD); W[5] = C_2PAD_PLUS_S0 + small1(W[3]);
+        SHA512_STEP_FUSED_SCALAR(K_[6] + PAD); W[6] = C_2PAD_PLUS_S0 + small1(W[4]);
+        SHA512_STEP_FUSED_SCALAR(K_[7] + PAD); W[7] = C_PAD_PLUS_S0 + W[0] + small1(W[5]);
+        SHA512_STEP_FUSED_SCALAR(K_[8] + PAD); W[8] = C_PAD_PLUS_S0 + W[1] + small1(W[6]);
+        SHA512_STEP_FUSED_SCALAR(K_[9] + PAD); W[9] = C_PAD_PLUS_S0 + W[2] + small1(W[7]);
+        SHA512_STEP_FUSED_SCALAR(K_[10] + PAD); W[10] = C_PAD_PLUS_S0 + W[3] + small1(W[8]);
+        SHA512_STEP_FUSED_SCALAR(K_[11] + PAD); W[11] = C_PAD_PLUS_S0 + W[4] + small1(W[9]);
+        SHA512_STEP_FUSED_SCALAR(K_[12] + PAD); W[12] = C_PAD_PLUS_S0 + W[5] + small1(W[10]);
+        SHA512_STEP_FUSED_SCALAR(K_[13] + PAD); W[13] = C_PAD_PLUS_S0 + W[6] + small1(W[11]);
+        SHA512_STEP_FUSED_SCALAR(K_[14] + PAD); W[14] = C_PAD_PLUS_S0 + W[7] + small1(W[12]);
+        SHA512_STEP_FUSED_SCALAR(K_[15] + PAD); W[15] = PAD + small0(W[0]) + W[8] + small1(W[13]);
+
+        #pragma GCC unroll 4
+        for (int r = 1; r < 5; ++r) {
+            #pragma GCC unroll 16
+            for (int i = 0; i < 16; ++i) {
+                word T1 = h + K_[r*16+i] + W[i] + big1(e) + ch(e, f, g);
+                word T2 = big0(a) + maj(a, b, c);
+                h = g; g = f; f = e;
+                e = d + T1;
+                d = c; c = b; b = a;
+                a = T1 + T2;
+                if (r < 4) {
+                    W[i] += small0(W[(i+1)&15]) + W[(i+9)&15] + small1(W[(i+14)&15]);
+                }
+            }
+        }
+
+        out[0] = IV_[0] + a;
+        out[1] = IV_[1] + b;
+        out[2] = IV_[2] + c;
+        out[3] = IV_[3] + d;
+        out[4] = IV_[4] + e;
+        out[5] = IV_[5] + f;
+        out[6] = IV_[6] + g;
+        out[7] = IV_[7] + h;
+    }
+
+    #undef SHA512_STEP_SCALAR
+    #undef SHA512_STEP_FUSED_SCALAR
+
+private:
     void build_template_tables(const byte* block) noexcept {
         for (unsigned i = 0; i < 16; ++i)
             template_w_[i] = load_be64(block + (i << 3));

@@ -87,37 +87,28 @@ public:
     }
 
     // BIP-32: HMAC-SHA512(chain_code, data[37]) — key 32B, msg 37B.
-    // BIP-32: HMAC-SHA512(chain_code, data[37]) — key 32B, msg 37B.
-    // Otimização Algébrica: Sem alocação de buffers na stack, pré-formatação direta de palavras e compressão via registradores
+    // Otimização Algébrica: Todos os 4 blocos (Pad128, Msg37, Pad128, Msg64)
+    // usam expansão e compressão direta com constantes fundidas, sem stack overhead.
     static void bip32_hash(const std::array<uint8_t, 32> &chain_code,
                            const std::array<uint8_t, 37> &data,
                            std::array<uint8_t, SHA512::digest_size> &out) noexcept {
-        // 1. Bloco Inner Pad (128B) carregado diretamente em W[16]
+        uint64_t cc_words[4];
+        cc_words[0] = SHA512::load_be64(chain_code.data() + 0);
+        cc_words[1] = SHA512::load_be64(chain_code.data() + 8);
+        cc_words[2] = SHA512::load_be64(chain_code.data() + 16);
+        cc_words[3] = SHA512::load_be64(chain_code.data() + 24);
+
+        // 1. Bloco Inner Pad (128B) -> FUSED pad128
+        uint64_t inner_state[8];
+        SHA512::compress_pad128_32bytekey<0x3636363636363636ULL>(cc_words, inner_state);
+
+        // 2. Bloco Inner Msg (37B + padding) -> FUSED block37
         alignas(64) uint64_t w_in[16];
-        w_in[0] = SHA512::load_be64(chain_code.data() + 0)  ^ 0x3636363636363636ULL;
-        w_in[1] = SHA512::load_be64(chain_code.data() + 8)  ^ 0x3636363636363636ULL;
-        w_in[2] = SHA512::load_be64(chain_code.data() + 16) ^ 0x3636363636363636ULL;
-        w_in[3] = SHA512::load_be64(chain_code.data() + 24) ^ 0x3636363636363636ULL;
-        #pragma GCC unroll 12
-        for (int i = 4; i < 16; ++i) {
-            w_in[i] = 0x3636363636363636ULL;
-        }
-
-        std::array<uint64_t, 8> inner_state = {
-            0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
-            0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
-            0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
-            0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
-        };
-        SHA512::compress_words(inner_state, w_in);
-
-        // 2. Bloco Inner Msg (37B + padding) -> Total stream: 128 + 37 = 165 bytes (1320 bits)
         w_in[0] = SHA512::load_be64(data.data() + 0);
         w_in[1] = SHA512::load_be64(data.data() + 8);
         w_in[2] = SHA512::load_be64(data.data() + 16);
         w_in[3] = SHA512::load_be64(data.data() + 24);
 
-        // Palavra 4: bytes 32..36 (5 bytes) + 0x80 + 2 bytes de zero
         uint64_t w4 = (static_cast<uint64_t>(data[32]) << 56) |
                       (static_cast<uint64_t>(data[33]) << 48) |
                       (static_cast<uint64_t>(data[34]) << 40) |
@@ -126,50 +117,25 @@ public:
                       (0x80ULL << 16);
         w_in[4] = w4;
 
-        #pragma GCC unroll 10
-        for (int i = 5; i < 15; ++i) {
-            w_in[i] = 0ULL;
-        }
-        w_in[15] = 1320ULL;
+        uint64_t final_inner[8];
+        SHA512::compress_padded_block37(inner_state, w_in, final_inner);
 
-        SHA512::compress_words(inner_state, w_in);
+        // 3. Bloco Outer Pad (128B) -> FUSED pad128
+        uint64_t outer_state[8];
+        SHA512::compress_pad128_32bytekey<0x5c5c5c5c5c5c5c5cULL>(cc_words, outer_state);
 
-        // 3. Bloco Outer Pad (128B)
-        w_in[0] = SHA512::load_be64(chain_code.data() + 0)  ^ 0x5c5c5c5c5c5c5c5cULL;
-        w_in[1] = SHA512::load_be64(chain_code.data() + 8)  ^ 0x5c5c5c5c5c5c5c5cULL;
-        w_in[2] = SHA512::load_be64(chain_code.data() + 16) ^ 0x5c5c5c5c5c5c5c5cULL;
-        w_in[3] = SHA512::load_be64(chain_code.data() + 24) ^ 0x5c5c5c5c5c5c5c5cULL;
-        #pragma GCC unroll 12
-        for (int i = 4; i < 16; ++i) {
-            w_in[i] = 0x5c5c5c5c5c5c5c5cULL;
-        }
-
-        std::array<uint64_t, 8> outer_state = {
-            0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
-            0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
-            0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
-            0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
-        };
-        SHA512::compress_words(outer_state, w_in);
-
-        // 4. Bloco Outer Msg (64B + padding) -> Total stream: 128 + 64 = 192 bytes (1536 bits)
+        // 4. Bloco Outer Msg (64B + padding) -> FUSED block64
         #pragma GCC unroll 8
         for (int i = 0; i < 8; ++i) {
-            w_in[i] = inner_state[i];
+            w_in[i] = final_inner[i];
         }
-        w_in[8] = 0x8000000000000000ULL;
-        #pragma GCC unroll 6
-        for (int i = 9; i < 15; ++i) {
-            w_in[i] = 0ULL;
-        }
-        w_in[15] = 1536ULL;
 
-        SHA512::compress_words(outer_state, w_in);
+        uint64_t final_outer[8];
+        SHA512::compress_padded_block64(outer_state, w_in, final_outer);
 
         #pragma GCC unroll 8
         for (int i = 0; i < 8; ++i) {
-            uint64_t s_be = std::byteswap(outer_state[i]);
-            std::memcpy(out.data() + i * 8, &s_be, 8);
+            SHA512::store_be64(out.data() + i * 8, final_outer[i]);
         }
     }
 
