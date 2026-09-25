@@ -47,6 +47,14 @@ struct PipelineThreadContext {
     size_t   k_last_w_idx   = 0;
     alignas(64) uint8_t k_block64[64] = {};
 
+    // OTM-39: Cache de Vetores de Palavras Pré-embaralhadas em F_2^C (Zero PSHUFB no Inner Loop)
+    alignas(16) uint8_t streaming_word_vecs[2048 * 16] = {};
+    alignas(16) uint8_t streaming_clear_mask[16] = {};
+    alignas(16) uint8_t streaming_combined_shuf_mask[16] = {};
+    alignas(16) uint8_t streaming_msg2[16] = {};
+    alignas(16) uint8_t streaming_msg3[16] = {};
+    bool streaming_vecs_initialized = false;
+
     // OTM-23: Fast-Forwarding PBKDF2 Round 1
     alignas(64) uint64_t kw_salt[80] = {};
 
