@@ -404,6 +404,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         for (uint16_t w0 : opt.wheels[0]) {
             cryptowords::detail::set_11bits(block, u0_bit, w0);
             for (uint16_t w1 : opt.wheels[1]) {
+                if (cfg.distinct && w0 == w1) continue;
                 cryptowords::detail::set_11bits(block, u1_bit, w1);
 #if defined(__SHA__)
                 uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(block);
@@ -413,9 +414,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 uint8_t h = hash[0];
 #endif
                 if ((h >> (8 - checksum_bits)) == expected_cs) {
-                    if (!cfg.distinct || w0 != w1) {
-                        opt.valid_pairs.emplace_back(w0, w1);
-                    }
+                    opt.valid_pairs.emplace_back(w0, w1);
                 }
             }
         }

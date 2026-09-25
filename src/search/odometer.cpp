@@ -2,6 +2,8 @@
 #include "../../include/crypto/sha256.hpp"
 #include "../../include/crypto/sha256_shani.hpp"
 #include <cstring>
+#include <algorithm>
+#include <immintrin.h>
 
 namespace cryptowords {
 
@@ -40,35 +42,84 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
         }
         is_init = false;
 
+        alignas(32) uint16_t outer_vals[32];
+        std::memset(outer_vals, 0xFF, sizeof(outer_vals));
+
         size_t parity_sum = 0;
+        bool outer_dup = false;
+        size_t dup_pos = 0;
+
         for (size_t i = 0; i < M; ++i) {
             size_t w_size = opt.wheels[i].size();
             size_t eff = (opt.has_gray_code && (parity_sum % 2 != 0)) ? (w_size - 1 - ctx.outer_state[i]) : ctx.outer_state[i];
             parity_sum += ctx.outer_state[i];
             uint16_t w_val = opt.wheels[i][eff];
+            outer_vals[i] = w_val;
+
+            if (opt.is_distinct) {
+                for (size_t prev = 0; prev < i; ++prev) {
+                    if (w_val == outer_vals[prev]) {
+                        outer_dup = true;
+                        dup_pos = i;
+                        break;
+                    }
+                }
+                if (outer_dup) break;
+            }
+
             cryptowords::detail::set_11bits(ctx.k_block64, opt.unknown_bit_offsets[i], w_val);
             ctx.current_ids[opt.unknown_positions[i]] = w_val;
         }
 
-        // OTM-36: Poda Precoce de Não-Repetição em Streaming (--distinct em K=3)
-        if (opt.is_distinct) {
-            if (M == 2) {
-                if (ctx.current_ids[opt.unknown_positions[0]] == ctx.current_ids[opt.unknown_positions[1]]) {
-                    continue;
+        if (outer_dup) {
+            if (dup_pos < M - 1) {
+                // OTM-36: Salto Instantâneo de Subárvores (Subtree Skipping)
+                for (size_t k = dup_pos + 1; k < M; ++k) {
+                    ctx.outer_state[k] = 0;
                 }
-            } else {
-                bool dup = false;
-                for (size_t i = 0; i < M; ++i) {
-                    for (size_t j = i + 1; j < M; ++j) {
-                        if (ctx.current_ids[opt.unknown_positions[i]] == ctx.current_ids[opt.unknown_positions[j]]) {
-                            dup = true;
-                            break;
+                size_t carry = 1;
+                for (int k = static_cast<int>(dup_pos); k >= 0 && carry > 0; --k) {
+                    size_t sum = ctx.outer_state[k] + carry;
+                    if (sum < opt.wheels[k].size()) {
+                        ctx.outer_state[k] = sum;
+                        carry = 0;
+                    } else {
+                        ctx.outer_state[k] = sum % opt.wheels[k].size();
+                        carry = sum / opt.wheels[k].size();
+                    }
+                }
+                if (carry > 0) {
+                    ctx.is_done = true;
+                    return false;
+                }
+
+                if (ctx.step_size > 1) {
+                    size_t rem = 0;
+                    for (size_t k = 0; k < M; ++k) {
+                        rem = (rem * (opt.wheels[k].size() % ctx.step_size) + (ctx.outer_state[k] % ctx.step_size)) % ctx.step_size;
+                    }
+                    size_t offset = (ctx.thread_idx >= rem) ? (ctx.thread_idx - rem) : (ctx.thread_idx + ctx.step_size - rem);
+                    if (offset > 0) {
+                        size_t add_carry = offset;
+                        for (int k = static_cast<int>(M) - 1; k >= 0 && add_carry > 0; --k) {
+                            size_t sum = ctx.outer_state[k] + add_carry;
+                            if (sum < opt.wheels[k].size()) {
+                                ctx.outer_state[k] = sum;
+                                add_carry = 0;
+                            } else {
+                                ctx.outer_state[k] = sum % opt.wheels[k].size();
+                                add_carry = sum / opt.wheels[k].size();
+                            }
+                        }
+                        if (add_carry > 0) {
+                            ctx.is_done = true;
+                            return false;
                         }
                     }
-                    if (dup) break;
                 }
-                if (dup) continue;
+                is_init = true;
             }
+            continue;
         }
 
         ctx.k_last_w_count = 0;
@@ -83,15 +134,50 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
                                     (static_cast<uint32_t>(ctx.k_block64[byte_pos + 1]) << 8) |
                                     (static_cast<uint32_t>(ctx.k_block64[byte_pos + 2]))) & mask;
 
-        const uint16_t u0_val = ctx.current_ids[opt.unknown_positions[0]];
-        const uint16_t u1_val = (M > 1) ? ctx.current_ids[opt.unknown_positions[1]] : 0xFFFF;
+        const uint16_t u0_val = outer_vals[0];
+        const uint16_t u1_val = (M > 1) ? outer_vals[1] : 0xFFFF;
+        const uint16_t u2_val = (M > 2) ? outer_vals[2] : 0xFFFF;
+        const uint16_t u3_val = (M > 3) ? outer_vals[3] : 0xFFFF;
+
         auto is_dup = [&](uint16_t w) -> bool {
             if (!opt.is_distinct) return false;
             if (M == 2) return (w == u0_val || w == u1_val);
-            for (size_t i = 0; i < M; ++i) {
-                if (w == ctx.current_ids[opt.unknown_positions[i]]) return true;
+            if (M == 3) return (w == u0_val || w == u1_val || w == u2_val);
+            if (M == 4) return (w == u0_val || w == u1_val || w == u2_val || w == u3_val);
+            if (M == 1) return (w == u0_val);
+#if defined(__AVX2__)
+            __m256i target = _mm256_set1_epi16(static_cast<short>(w));
+            __m256i o0 = _mm256_load_si256((const __m256i*)&outer_vals[0]);
+            __m256i cmp0 = _mm256_cmpeq_epi16(target, o0);
+            if (!_mm256_testz_si256(cmp0, cmp0)) return true;
+            if (M > 16) {
+                __m256i o1 = _mm256_load_si256((const __m256i*)&outer_vals[16]);
+                __m256i cmp1 = _mm256_cmpeq_epi16(target, o1);
+                if (!_mm256_testz_si256(cmp1, cmp1)) return true;
             }
             return false;
+#elif defined(__SSE2__)
+            __m128i target = _mm_set1_epi16(static_cast<short>(w));
+            __m128i o0 = _mm_loadu_si128((const __m128i*)&outer_vals[0]);
+            __m128i cmp0 = _mm_cmpeq_epi16(target, o0);
+            if (_mm_movemask_epi8(cmp0) != 0) return true;
+            if (M > 8) {
+                __m128i o1 = _mm_loadu_si128((const __m128i*)&outer_vals[8]);
+                __m128i cmp1 = _mm_cmpeq_epi16(target, o1);
+                if (_mm_movemask_epi8(cmp1) != 0) return true;
+            }
+            if (M > 16) {
+                __m128i o2 = _mm_loadu_si128((const __m128i*)&outer_vals[16]);
+                __m128i cmp2 = _mm_cmpeq_epi16(target, o2);
+                if (_mm_movemask_epi8(cmp2) != 0) return true;
+            }
+            return false;
+#else
+            for (size_t i = 0; i < M; ++i) {
+                if (w == outer_vals[i]) return true;
+            }
+            return false;
+#endif
         };
 
         const size_t word_end_byte = opt.has_cascade_deduction ? byte_pos : (last_u_bit + 10) / 8;
@@ -227,19 +313,8 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
 
                     uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(ctx.k_block64);
                     uint16_t syn = e_base | (h >> cs_shift);
-                    if (opt.allowed_last_words[syn]) {
-                        bool dup = false;
-                        if (opt.is_distinct) {
-                            for (size_t i = 0; i < M; ++i) {
-                                if (syn == ctx.current_ids[opt.unknown_positions[i]]) {
-                                    dup = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!dup) {
-                            ctx.k_last_w_list[ctx.k_last_w_count++] = syn;
-                        }
+                    if (opt.allowed_last_words[syn] && !is_dup(syn)) {
+                        ctx.k_last_w_list[ctx.k_last_w_count++] = syn;
                     }
                 }
             }
@@ -254,19 +329,8 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
                 crypto::SHA256::hash(ctx.k_block64, opt.entropy_bytes, hash);
                 uint8_t h = hash[0];
                 uint16_t syn = e_base | (h >> cs_shift);
-                if (opt.allowed_last_words[syn]) {
-                    bool dup = false;
-                    if (opt.is_distinct) {
-                        for (size_t i = 0; i < M; ++i) {
-                            if (syn == ctx.current_ids[opt.unknown_positions[i]]) {
-                                dup = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!dup) {
-                        ctx.k_last_w_list[ctx.k_last_w_count++] = syn;
-                    }
+                if (opt.allowed_last_words[syn] && !is_dup(syn)) {
+                    ctx.k_last_w_list[ctx.k_last_w_count++] = syn;
                 }
             }
 #endif
@@ -396,16 +460,7 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
             }
 #else
             for (uint16_t w_last : opt.wheels[M]) {
-                if (opt.is_distinct) {
-                    bool dup = false;
-                    for (size_t i = 0; i < M; ++i) {
-                        if (w_last == ctx.current_ids[opt.unknown_positions[i]]) {
-                            dup = true;
-                            break;
-                        }
-                    }
-                    if (dup) continue;
-                }
+                if (opt.is_distinct && is_dup(w_last)) continue;
                 uint32_t cur = base_curr | ((static_cast<uint32_t>(w_last & 0x7FF)) << shift);
                 ctx.k_block64[byte_pos]     = static_cast<uint8_t>((cur >> 16) & 0xFF);
                 ctx.k_block64[byte_pos + 1] = static_cast<uint8_t>((cur >> 8) & 0xFF);
@@ -425,6 +480,100 @@ static bool refill_streaming_tuples(PipelineThreadContext& ctx, const OptimizedM
             ctx.current_ids[last_u_idx] = ctx.k_last_w_list[ctx.k_last_w_idx++];
             return true;
         }
+    }
+}
+
+static bool advance_mixed_radix(PipelineThreadContext& ctx, const OptimizedMnemonics& opt, bool is_init) {
+    const size_t W_COUNT = opt.wheels.size();
+    if (W_COUNT == 0) { ctx.is_done = true; return false; }
+
+    while (true) {
+        if (!is_init) {
+            size_t carry = ctx.step_size;
+            for (int i = static_cast<int>(W_COUNT) - 1; i >= 0 && carry > 0; --i) {
+                const size_t w   = opt.wheels[i].size();
+                const size_t sum = ctx.state[i] + carry;
+
+                if (sum < w) {
+                    ctx.state[i] = sum;
+                    carry = 0;
+                } else {
+                    ctx.state[i] = sum % w;
+                    carry        = sum / w;
+                }
+            }
+            if (carry > 0) { ctx.is_done = true; return false; }
+        }
+        is_init = false;
+
+        size_t parity_sum = 0;
+        bool has_dup = false;
+        size_t dup_pos = 0;
+
+        for (size_t i = 0; i < W_COUNT; ++i) {
+            size_t w_size = opt.wheels[i].size();
+            size_t eff = (opt.has_gray_code && (parity_sum % 2 != 0)) ? (w_size - 1 - ctx.state[i]) : ctx.state[i];
+            parity_sum += ctx.state[i];
+            uint16_t w_val = opt.wheels[i][eff];
+            ctx.current_ids[opt.unknown_positions[i]] = w_val;
+
+            if (opt.is_distinct) {
+                for (size_t prev = 0; prev < i; ++prev) {
+                    if (w_val == ctx.current_ids[opt.unknown_positions[prev]]) {
+                        has_dup = true;
+                        dup_pos = i;
+                        break;
+                    }
+                }
+                if (has_dup) break;
+            }
+        }
+
+        if (has_dup) {
+            if (dup_pos < W_COUNT - 1) {
+                for (size_t k = dup_pos + 1; k < W_COUNT; ++k) {
+                    ctx.state[k] = 0;
+                }
+                size_t c = 1;
+                for (int k = static_cast<int>(dup_pos); k >= 0 && c > 0; --k) {
+                    size_t sum = ctx.state[k] + c;
+                    if (sum < opt.wheels[k].size()) {
+                        ctx.state[k] = sum;
+                        c = 0;
+                    } else {
+                        ctx.state[k] = sum % opt.wheels[k].size();
+                        c = sum / opt.wheels[k].size();
+                    }
+                }
+                if (c > 0) { ctx.is_done = true; return false; }
+
+                if (ctx.step_size > 1) {
+                    size_t rem = 0;
+                    for (size_t k = 0; k < W_COUNT; ++k) {
+                        rem = (rem * (opt.wheels[k].size() % ctx.step_size) + (ctx.state[k] % ctx.step_size)) % ctx.step_size;
+                    }
+                    size_t offset = (ctx.thread_idx >= rem) ? (ctx.thread_idx - rem) : (ctx.thread_idx + ctx.step_size - rem);
+                    if (offset > 0) {
+                        size_t add_carry = offset;
+                        for (int k = static_cast<int>(W_COUNT) - 1; k >= 0 && add_carry > 0; --k) {
+                            size_t sum = ctx.state[k] + add_carry;
+                            if (sum < opt.wheels[k].size()) {
+                                ctx.state[k] = sum;
+                                add_carry = 0;
+                            } else {
+                                ctx.state[k] = sum % opt.wheels[k].size();
+                                add_carry = sum / opt.wheels[k].size();
+                            }
+                        }
+                        if (add_carry > 0) { ctx.is_done = true; return false; }
+                    }
+                }
+                is_init = true;
+            }
+            continue;
+        }
+
+        return true;
     }
 }
 
@@ -592,12 +741,18 @@ void GenericOdometer::init_state(PipelineThreadContext& ctx, size_t thread_idx,
     }
     if (temp > 0) { ctx.is_done = true; return; }
 
-    size_t parity_sum = 0;
-    for (size_t i = 0; i < opt.wheels.size(); ++i) {
-        size_t w_size = opt.wheels[i].size();
-        size_t eff = (opt.has_gray_code && (parity_sum % 2 != 0)) ? (w_size - 1 - ctx.state[i]) : ctx.state[i];
-        parity_sum += ctx.state[i];
-        ctx.current_ids[opt.unknown_positions[i]] = opt.wheels[i][eff];
+    if (opt.is_distinct) {
+        if (!advance_mixed_radix(ctx, opt, true)) {
+            ctx.is_done = true;
+        }
+    } else {
+        size_t parity_sum = 0;
+        for (size_t i = 0; i < opt.wheels.size(); ++i) {
+            size_t w_size = opt.wheels[i].size();
+            size_t eff = (opt.has_gray_code && (parity_sum % 2 != 0)) ? (w_size - 1 - ctx.state[i]) : ctx.state[i];
+            parity_sum += ctx.state[i];
+            ctx.current_ids[opt.unknown_positions[i]] = opt.wheels[i][eff];
+        }
     }
 }
 
@@ -659,30 +814,7 @@ bool GenericOdometer::advance(PipelineThreadContext& ctx, const OptimizedMnemoni
         return refill_streaming_tuples(ctx, opt, false);
     }
 
-    size_t carry = ctx.step_size;
-    for (int i = static_cast<int>(opt.wheels.size()) - 1; i >= 0 && carry > 0; --i) {
-        const size_t w   = opt.wheels[i].size();
-        const size_t sum = ctx.state[i] + carry;
-
-        if (sum < w) {
-            ctx.state[i] = sum;
-            carry = 0;
-        } else {
-            ctx.state[i] = sum % w;
-            carry        = sum / w;
-        }
-    }
-
-    if (carry > 0) { ctx.is_done = true; return false; }
-
-    size_t parity_sum = 0;
-    for (size_t i = 0; i < opt.wheels.size(); ++i) {
-        size_t w_size = opt.wheels[i].size();
-        size_t eff = (opt.has_gray_code && (parity_sum % 2 != 0)) ? (w_size - 1 - ctx.state[i]) : ctx.state[i];
-        parity_sum += ctx.state[i];
-        ctx.current_ids[opt.unknown_positions[i]] = opt.wheels[i][eff];
-    }
-    return true;
+    return advance_mixed_radix(ctx, opt, false);
 }
 
 } // namespace cryptowords
