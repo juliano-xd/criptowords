@@ -129,7 +129,14 @@ void SearchReporter::print_plan(const OptimizedMnemonics& opt, const AppConfig& 
 
     print_box_line("\033[1;36m2. OTIMIZAÇÕES & ACELERAÇÕES EM HARDWARE ATIVAS\033[0m", INNER_WIDTH);
 
-    if (opt.has_valid_pairs) {
+    if (opt.has_valid_triplets) {
+        std::string l1 = std::format("   [-] OTM-03 / OTM-34 (F₂ᶜ - K=3): {:>6} triplas  [Redução: {:>5.1f}x]",
+                                     format_num(static_cast<double>(opt.valid_triplets.size())), ratio);
+        print_box_line(l1, INNER_WIDTH);
+        std::string l2 = std::format("   [-] Filtro Checksum BIP-39  : {:>10} chaves   [100% válidas - SHA-NI]",
+                                     format_num(static_cast<double>(opt.valid_triplets.size())));
+        print_box_line(l2, INNER_WIDTH);
+    } else if (opt.has_valid_pairs) {
         std::string l1 = std::format("   [-] OTM-02 (Pruning em F₂ᶜ) : {:>10} pares    [Redução: {:>5.1f}x]",
                                      format_num(static_cast<double>(opt.valid_pairs.size())), ratio);
         print_box_line(l1, INNER_WIDTH);

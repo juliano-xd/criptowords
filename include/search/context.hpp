@@ -34,6 +34,8 @@ struct PipelineThreadContext {
     size_t step_size = 1;
     size_t pair_idx  = 0;
     size_t pair_end  = 0;
+    size_t triplet_idx = 0;
+    size_t triplet_end = 0;
     bool   is_done   = false;
 
     // OTM-03 / Generalização Afim em F_2^C (K >= 3)

@@ -17,6 +17,7 @@ public:
 
 class GenericOdometer final : public IOdometer {
     std::atomic<size_t> next_pair_idx_{0};
+    std::atomic<size_t> next_triplet_idx_{0};
     bool is_dynamic_partition_{false};
     size_t gpu_batch_{1024};
 

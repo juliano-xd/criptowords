@@ -52,6 +52,13 @@ struct OptimizedMnemonics {
     bool has_valid_pairs = false;
     std::vector<std::pair<uint16_t, uint16_t>> valid_pairs;
 
+    // OTM-34: Tabela Analítica de Triplas Válidas em F_2^C (K = 3)
+    struct Triplet {
+        uint16_t w0, w1, w2;
+    };
+    bool has_valid_triplets = false;
+    std::vector<Triplet> valid_triplets;
+
     // OTM-03 / Generalização Afim em F_2^C (K >= 3)
     bool has_streaming_pruning = false;
     bool has_k3_pruning = false;
@@ -75,6 +82,7 @@ struct OptimizedMnemonics {
     uint8_t expected_checksum = 0;
 
     // OTM-30: Restrição de Não-Repetição (--distinct)
+    bool   is_distinct            = false;
     bool   has_distinct_pruning   = false;
     size_t distinct_pruned_words  = 0;
 
