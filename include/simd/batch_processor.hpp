@@ -160,8 +160,8 @@ class SimdBatchProcessor : public IBatchProcessor {
             if constexpr (Arch == SimdArch::SSE) {
                 SHA256_SSE_State s1, s2;
                 sha256_init_sse(&s1); sha256_init_sse(&s2);
-                alignas(64) array<array<uint32_t, 16>, 4> blocks1 = {};
-                alignas(64) array<array<uint32_t, 16>, 4> blocks2 = {};
+                alignas(64) std::array<std::array<uint32_t, 16>, 4> blocks1 = {};
+                alignas(64) std::array<std::array<uint32_t, 16>, 4> blocks2 = {};
 
                 for (int b = 0; b < 8; ++b) {
                     alignas(64) uint8_t block64[64];

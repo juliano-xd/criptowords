@@ -1,7 +1,6 @@
 #include "../../include/benchmark/benchmark_runner.hpp"
 #include "../../include/crypto/bip39.hpp"
 #include "../../include/crypto/hmac_sha512.hpp"
-// #include "../../include/crypto/sha256.hpp"
 #include "../../include/crypto/sha512.hpp"
 #include "../../include/crypto/secp256k1_scalar.hpp"
 #include "../../include/crypto/secp256k1_point.hpp"
@@ -9,7 +8,6 @@
 #include "../../include/gpu/gpu_info.hpp"
 #include "../../include/cli/ui.hpp"
 
-// #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -18,8 +16,6 @@
 #include <format>
 #include <latch>
 #include <print>
-#include <print>
-#include <printf.h>
 #include <string>
 #include <thread>
 #include <vector>

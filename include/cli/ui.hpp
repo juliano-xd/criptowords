@@ -5,7 +5,6 @@
 #include <string_view>
 #include <format>
 #include <algorithm>
-#include <printf.h>
 #include <cstdint>
 
 #pragma GCC diagnostic push
@@ -17,14 +16,9 @@ namespace cryptowords::ui {
 
 inline constexpr size_t DEFAULT_INNER_WIDTH = 80;
 
-inline std::string format_num(double val) {
-    if (val < 0.0) return "0";
-    if (val >= 1e19) {
-        return std::format("{:.3e}", val);
-    }
-    uint64_t n = static_cast<uint64_t>(val);
-    std::string s = std::to_string(n);
+inline std::string format_grouped_digits(std::string_view s) {
     std::string res;
+    res.reserve(s.size() + s.size() / 3);
     int count = 0;
     for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
         res += s[i];
@@ -37,21 +31,18 @@ inline std::string format_num(double val) {
     return res;
 }
 
+inline std::string format_num(double val) {
+    if (val < 0.0) return "0";
+    if (val >= 1e19) {
+        return std::format("{:.3e}", val);
+    }
+    return format_grouped_digits(std::to_string(static_cast<uint64_t>(val)));
+}
+
 template <unsigned char N>
 inline std::string format_num(const UInt<N>& val) {
     if (val.eqz()) return "0";
-    std::string s = val.to_string();
-    std::string res;
-    int count = 0;
-    for (int i = static_cast<int>(s.size()) - 1; i >= 0; --i) {
-        res += s[i];
-        if (++count == 3 && i > 0) {
-            res += '.';
-            count = 0;
-        }
-    }
-    std::reverse(res.begin(), res.end());
-    return res;
+    return format_grouped_digits(val.to_string());
 }
 
 inline size_t visible_length(std::string_view s) {

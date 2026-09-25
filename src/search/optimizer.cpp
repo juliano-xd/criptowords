@@ -20,7 +20,11 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             opt.base_mnemonic[i] = id;
             if (id == AppConfig::UNKNOWN_WORD) {
                 opt.unknown_positions.push_back(i);
-                static std::array<uint16_t, 2048> full_wheel_static;
+                static const auto full_wheel_static = [] {
+                    std::array<uint16_t, 2048> w;
+                    std::iota(w.begin(), w.end(), static_cast<uint16_t>(0));
+                    return w;
+                }();
                 opt.wheels.push_back(std::vector<uint16_t>(full_wheel_static.begin(), full_wheel_static.end()));
             }
         } else if (std::holds_alternative<std::vector<uint16_t>>(cfg.mnemonics[i])) {
