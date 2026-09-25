@@ -116,8 +116,15 @@ std::vector<DiscoveredDevice> enumerate_devices() {
                     d_upper.find("H100") != std::string::npos ||
                     d_upper.find("RADEON") != std::string::npos ||
                     d_upper.find("RX") != std::string::npos ||
+                    d_upper.find("GFX") != std::string::npos ||
                     d_upper.find("ARC") != std::string::npos) {
                     dev.score += 50000;
+                }
+
+                if (p_upper.find("ACCELERATED PARALLEL PROCESSING") != std::string::npos ||
+                    p_upper.find("NVIDIA") != std::string::npos ||
+                    p_upper.find("CUDA") != std::string::npos) {
+                    dev.score += 20000;
                 }
             } else if (dev.device_type & CL_DEVICE_TYPE_ACCELERATOR) {
                 dev.type_str = "Acelerador";

@@ -150,6 +150,7 @@ inline void sha512_block_fast_padded(ulong* H, const ulong* in8) {
     STEP_GPU_ROUND(K[31] + W[15]);
 
     // Chunks 2..4 (rounds 32..79) com adição associativa em árvore
+    #pragma unroll
     for (int chunk = 2; chunk < 5; ++chunk) {
         #pragma unroll 16
         for (int j = 0; j < 16; ++j) {
@@ -192,6 +193,7 @@ __kernel void pbkdf2_batch(
     }
     
     if (pwd_len <= 128) {
+        ulong raw_words[16];
         for(int i=0; i<16; i++) {
             ulong word_raw = 0;
             #pragma unroll 8
@@ -200,19 +202,13 @@ __kernel void pbkdf2_batch(
                 uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
                 word_raw = (word_raw << 8) | b;
             }
+            raw_words[i] = word_raw;
             W[i] = word_raw ^ 0x3636363636363636UL;
         }
         sha512_block_fast(ipad_state, W);
 
         for(int i=0; i<16; i++) {
-            ulong word_raw = 0;
-            #pragma unroll 8
-            for(int j=0; j<8; j++) {
-                uint idx = i*8 + j;
-                uchar b = (idx < pwd_len) ? passwords[offset + idx] : 0;
-                word_raw = (word_raw << 8) | b;
-            }
-            W[i] = word_raw ^ 0x5c5c5c5c5c5c5c5cUL;
+            W[i] = raw_words[i] ^ 0x5c5c5c5c5c5c5c5cUL;
         }
         sha512_block_fast(opad_state, W);
     } else {
@@ -310,12 +306,7 @@ __kernel void pbkdf2_batch(
     #pragma unroll 8
     for(int i=0; i<8; i++) U[i] = opad_state[i];
     
-    #pragma unroll 8
-    for(int i=0; i<8; i++) W[i] = H_work[i];
-    W[8] = 0x8000000000000000UL;
-    W[9] = 0; W[10] = 0; W[11] = 0; W[12] = 0; W[13] = 0; W[14] = 0;
-    W[15] = 1536;
-    sha512_block_fast(U, W);
+    sha512_block_fast_padded(U, H_work);
     
     ulong F[8];
     #pragma unroll 8

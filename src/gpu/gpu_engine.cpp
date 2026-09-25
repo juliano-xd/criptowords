@@ -108,7 +108,7 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
         if (requested > max_keys_by_alloc) requested = (max_keys_by_alloc / 64) * 64;
         max_batch_size_ = std::max(size_t(512), requested);
     } else {
-        size_t local_sz = (dev.max_work_group >= 64) ? 64 : dev.max_work_group;
+        size_t local_sz = (dev.max_work_group >= 128) ? 128 : ((dev.max_work_group >= 64) ? 64 : dev.max_work_group);
         size_t calc_batch = dev.compute_units * local_sz * 16;
 
         size_t min_b = 512;
@@ -121,8 +121,9 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
             min_b = 32768;
             max_b = 262144;
         } else if (dev.compute_units <= 4 || dev.global_mem < 4ULL * 1024 * 1024 * 1024) {
-            min_b = 512;
-            max_b = 1024;
+            min_b = 1024;
+            max_b = 4096;
+            calc_batch = 2048; // Ponto de operação ótimo para manter P-state alto
         }
 
         if (calc_batch < min_b) calc_batch = min_b;
@@ -265,11 +266,17 @@ bool GPUEngine::init(int platform_id, int device_id, size_t batch_size, const ui
     // Ajuste dinâmico de workgroup size para máxima ocupação de wavefronts (Wave32/Wave64)
     size_t pref_mul = 0;
     clGetKernelWorkGroupInfo(pbkdf2_kernel_[0], d_id, CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE, sizeof(pref_mul), &pref_mul, nullptr);
-    if (pref_mul > 0 && pref_mul <= dev.max_work_group) {
-        local_work_size_ = pref_mul;
-    } else {
-        local_work_size_ = (dev.max_work_group >= 64) ? 64 : dev.max_work_group;
+    size_t target_lws = 128;
+    if (pref_mul > 0) {
+        target_lws = ((target_lws + pref_mul - 1) / pref_mul) * pref_mul;
     }
+    if (target_lws > dev.max_work_group) {
+        target_lws = dev.max_work_group;
+    }
+    if (target_lws < 64 && dev.max_work_group >= 64) {
+        target_lws = 64;
+    }
+    local_work_size_ = target_lws;
 
     for (size_t s = 1; s < NUM_SLOTS; ++s) {
         pbkdf2_kernel_[s] = clCreateKernel(pbkdf2_prog_, "pbkdf2_batch", &err);
