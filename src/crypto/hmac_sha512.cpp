@@ -1,10 +1,8 @@
 #include "../../include/crypto/hmac_sha512.hpp"
 #include "../../include/crypto/pbkdf2_simd.hpp"
-#include "../../include/math/UInt.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <immintrin.h>
@@ -39,10 +37,8 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         return;
     }
 
-    HMAC_SHA512 h_iter;
-    h_iter.preset(password, password_len, HASH_LEN);
-    const uint64_t* in_iv = h_iter.inner_state();
-    const uint64_t* out_iv = h_iter.outer_state();
+    const uint64_t* in_iv = h1.inner_state();
+    const uint64_t* out_iv = h1.outer_state();
 
     uint64_t T_words[8];
     uint64_t U_words[8];

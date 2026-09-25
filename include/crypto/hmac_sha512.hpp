@@ -38,7 +38,19 @@ public:
     void finalize(uint8_t* out) noexcept {
         std::array<uint8_t, SHA512::digest_size> inner_hash;
         inner_.finalize(inner_hash.data());
-        outer_base_.complete(inner_hash.data(), out);
+
+        alignas(64) uint64_t W[16];
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            W[i] = SHA512::load_be64(inner_hash.data() + i * 8);
+        }
+        uint64_t outer_words[8];
+        SHA512::compress_padded_block64(outer_state(), W, outer_words);
+
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            SHA512::store_be64(out + i * 8, outer_words[i]);
+        }
     }
 
     void reset_inner() noexcept { inner_ = inner_base_; }
@@ -59,20 +71,119 @@ public:
         expected_len_ = expected_data_len;
     }
 
-    constexpr void complete(const void* data, size_t len, std::array<uint8_t, SHA512::digest_size> &out) const noexcept {
+    void complete(const void* data, size_t len, std::array<uint8_t, SHA512::digest_size> &out) const noexcept {
+        if (len == 64 && is_preset_ && expected_len_ == 64) {
+            alignas(64) uint64_t W[16];
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = SHA512::load_be64(static_cast<const uint8_t*>(data) + i * 8);
+            }
+            uint64_t inner_words[8];
+            SHA512::compress_padded_block64(inner_state(), W, inner_words);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = inner_words[i];
+            }
+            uint64_t outer_words[8];
+            SHA512::compress_padded_block64(outer_state(), W, outer_words);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                SHA512::store_be64(out.data() + i * 8, outer_words[i]);
+            }
+            return;
+        }
+
         std::array<uint8_t, SHA512::digest_size> inner_hash;
         inner_base_.complete(data, len, inner_hash.data());
-        outer_base_.complete(inner_hash.data(), out.data());
+
+        alignas(64) uint64_t W[16];
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            W[i] = SHA512::load_be64(inner_hash.data() + i * 8);
+        }
+        uint64_t outer_words[8];
+        SHA512::compress_padded_block64(outer_state(), W, outer_words);
+
+        #pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) {
+            SHA512::store_be64(out.data() + i * 8, outer_words[i]);
+        }
     }
 
-    constexpr void complete(const void* data, std::array<uint8_t, SHA512::digest_size> &out) const noexcept {
+    void complete(const void* data, std::array<uint8_t, SHA512::digest_size> &out) const noexcept {
         complete(data, expected_len_, out);
     }
 
     // =========================================================
     // STATIC FAST-PATHS & ONE-SHOT API
     // =========================================================
-    constexpr static void hash(const void* key, size_t key_len, const void* data, size_t data_len, std::array<uint8_t, SHA512::digest_size> &out) noexcept {
+    static void hash(const void* key, size_t key_len, const void* data, size_t data_len, std::array<uint8_t, SHA512::digest_size> &out) noexcept {
+        if (key_len == 32 && data_len == 64) {
+            uint64_t kw[4];
+            #pragma GCC unroll 4
+            for (int i = 0; i < 4; ++i) {
+                kw[i] = SHA512::load_be64(static_cast<const uint8_t*>(key) + i * 8);
+            }
+            uint64_t inner_iv[8], outer_iv[8];
+            SHA512::compress_pad128_32bytekey<0x3636363636363636ULL>(kw, inner_iv);
+            SHA512::compress_pad128_32bytekey<0x5c5c5c5c5c5c5c5cULL>(kw, outer_iv);
+
+            alignas(64) uint64_t W[16];
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = SHA512::load_be64(static_cast<const uint8_t*>(data) + i * 8);
+            }
+            uint64_t inner[8];
+            SHA512::compress_padded_block64(inner_iv, W, inner);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = inner[i];
+            }
+            uint64_t outer[8];
+            SHA512::compress_padded_block64(outer_iv, W, outer);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                SHA512::store_be64(out.data() + i * 8, outer[i]);
+            }
+            return;
+        }
+
+        if (key_len == 64 && data_len == 64) {
+            uint64_t kw[8];
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                kw[i] = SHA512::load_be64(static_cast<const uint8_t*>(key) + i * 8);
+            }
+            uint64_t inner_iv[8], outer_iv[8];
+            SHA512::compress_pad128_64bytekey<0x3636363636363636ULL>(kw, inner_iv);
+            SHA512::compress_pad128_64bytekey<0x5c5c5c5c5c5c5c5cULL>(kw, outer_iv);
+
+            alignas(64) uint64_t W[16];
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = SHA512::load_be64(static_cast<const uint8_t*>(data) + i * 8);
+            }
+            uint64_t inner[8];
+            SHA512::compress_padded_block64(inner_iv, W, inner);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                W[i] = inner[i];
+            }
+            uint64_t outer[8];
+            SHA512::compress_padded_block64(outer_iv, W, outer);
+
+            #pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) {
+                SHA512::store_be64(out.data() + i * 8, outer[i]);
+            }
+            return;
+        }
+
         // Caminho rápido: mensagem cabe em um único bloco após o ipad.
         if (data_len <= 111) {
             HMAC_SHA512 h;
