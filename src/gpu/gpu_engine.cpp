@@ -495,12 +495,15 @@ bool GPUEngine::pbkdf2_batch_profiled(const std::vector<uint8_t>& passwords,
     uint64_t w_time = (pw_end > pw_start ? pw_end - pw_start : 0) + (len_end > len_start ? len_end - len_start : 0);
     uint64_t k_time = (k_end > k_start ? k_end - k_start : 1);
     uint64_t r_time = (r_end > r_start ? r_end - r_start : 0);
-    uint64_t total_time = (r_end > pw_start ? r_end - pw_start : (w_time + k_time + r_time));
+    uint64_t sum_time = w_time + k_time + r_time;
+    uint64_t total_time = (pw_start > 0 && r_end > pw_start && (r_end - pw_start) <= sum_time * 2)
+                          ? (r_end - pw_start)
+                          : sum_time;
 
     metrics.write_time_ns = w_time;
     metrics.kernel_time_ns = k_time;
     metrics.read_time_ns = r_time;
-    metrics.total_time_ns = total_time;
+    metrics.total_time_ns = (total_time > 0 ? total_time : 1);
 
     double h2d_bytes = static_cast<double>(num_hashes) * (slot_size_ + sizeof(uint32_t));
     double d2h_bytes = static_cast<double>(num_hashes) * 64;

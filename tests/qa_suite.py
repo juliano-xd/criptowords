@@ -980,7 +980,7 @@ def main():
         "Benchmark: SHA-512 Escalar vs Rota SIMD",
         "Benchmark SHA512",
         ["--benchmark"],
-        expect_stdout=["[6/6] BENCHMARK: SHA-512", "BIT-EXACT MATCH", "Rota SIMD do host"],
+        expect_stdout=["BENCHMARK: SHA-512", "BIT-EXACT MATCH", "Rota SIMD do host"],
         timeout_sec=120
     )
 

@@ -203,9 +203,7 @@ public:
         SHA512_UNROLL16
         for (unsigned t = 16; t < 80; ++t) {
             const unsigned i = t & 15;
-            w[i] += small0(w[(i + 1) & 15]) +
-                    w[(i + 9) & 15] +
-                    small1(w[(i + 14) & 15]);
+            w[i] += small0(w[(i + 1) & 15]) + w[(i + 9) & 15] + small1(w[(i + 14) & 15]);
             round(a, b, c, d, e, f, g, h, K_[t], w[i]);
         }
 
