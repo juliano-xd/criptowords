@@ -10,9 +10,9 @@
 #include <CL/cl.h>
 #endif
 
-#include <vector>
-#include <string>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace cryptowords {
 namespace gpu {
@@ -44,5 +44,5 @@ std::optional<DiscoveredDevice> select_device(int req_platform, int req_device);
 void print_device_list();
 void print_device_capabilities(const DiscoveredDevice& d);
 
-} // namespace gpu
-} // namespace cryptowords
+}  // namespace gpu
+}  // namespace cryptowords

@@ -1,13 +1,14 @@
 #include "../../include/search/optimizer.hpp"
-#include "../../include/crypto/bip39.hpp"
-#include "../../include/crypto/sha256.hpp"
-#include "../../include/crypto/sha256_shani.hpp"
+
 #include <algorithm>
-#include <numeric>
-#include <bitset>
-#include <cstring>
-#include <cmath>
 #include <bit>
+#include <bitset>
+#include <cmath>
+#include <cstring>
+#include <numeric>
+
+#include "../../include/crypto/bip39.hpp"
+#include "../../include/crypto/sha256_shani.hpp"
 
 OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     OptimizedMnemonics opt;
@@ -76,7 +77,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
 
     for (size_t i = 0; i < opt.prefix_words; ++i) {
         opt.prefix_str += cfg.wordlist[opt.base_mnemonic[i]];
-        if (i < mnemonic_len - 1) opt.prefix_str += cfg.separator;
+        if (i < mnemonic_len - 1)
+            opt.prefix_str += cfg.separator;
     }
 
     // ==========================================
@@ -168,7 +170,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         }
 
         if (opt.base_mnemonic[mnemonic_len - 1] != AppConfig::UNKNOWN_WORD) {
-            opt.expected_checksum = static_cast<uint8_t>(opt.base_mnemonic[mnemonic_len - 1] & ((1 << checksum_bits) - 1));
+            opt.expected_checksum =
+                static_cast<uint8_t>(opt.base_mnemonic[mnemonic_len - 1] & ((1 << checksum_bits) - 1));
         }
     }
 
@@ -188,7 +191,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         }
         opt.wheels[0] = std::move(filtered_wheel);
         opt.auto_deduce_last_word = false;
-        opt.direct_valid_wheels   = true;
+        opt.direct_valid_wheels = true;
     }
     // ==========================================
     // OTIMIZAÇÃO 33: Dedução Cascata de Checksum em Par (2 incógnitas com última incógnita w_{N-1} = ?)
@@ -255,8 +258,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             }
         }
 
-        opt.has_valid_pairs       = true;
-        opt.direct_valid_wheels   = true;
+        opt.has_valid_pairs = true;
+        opt.direct_valid_wheels = true;
         opt.auto_deduce_last_word = false;
     }
     // ==========================================
@@ -311,7 +314,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 for (uint16_t w0 : opt.wheels[0]) {
                     cryptowords::detail::set_11bits(block, u0_bit, w0);
                     for (uint16_t w1 : opt.wheels[1]) {
-                        if (cfg.distinct && w0 == w1) continue;
+                        if (cfg.distinct && w0 == w1)
+                            continue;
                         cryptowords::detail::set_11bits(block, u1_bit, w1);
                         for (size_t e = 0; e < num_base_states; ++e) {
                             uint16_t e_base = static_cast<uint16_t>(e << checksum_bits);
@@ -334,14 +338,14 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                     }
                 }
 
-                opt.has_valid_triplets    = true;
-                opt.direct_valid_wheels   = true;
+                opt.has_valid_triplets = true;
+                opt.direct_valid_wheels = true;
                 opt.auto_deduce_last_word = false;
             } else {
                 opt.has_cascade_deduction = true;
                 opt.has_streaming_pruning = true;
-                opt.has_k3_pruning        = true;
-                opt.direct_valid_wheels   = true;
+                opt.has_k3_pruning = true;
+                opt.direct_valid_wheels = true;
                 opt.auto_deduce_last_word = true;
 
                 std::vector<uint16_t> new_last_wheel;
@@ -354,8 +358,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         } else {
             opt.has_cascade_deduction = true;
             opt.has_streaming_pruning = true;
-            opt.has_k3_pruning        = false;
-            opt.direct_valid_wheels   = true;
+            opt.has_k3_pruning = false;
+            opt.direct_valid_wheels = true;
             opt.auto_deduce_last_word = true;
 
             std::vector<uint16_t> new_last_wheel;
@@ -404,7 +408,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
         for (uint16_t w0 : opt.wheels[0]) {
             cryptowords::detail::set_11bits(block, u0_bit, w0);
             for (uint16_t w1 : opt.wheels[1]) {
-                if (cfg.distinct && w0 == w1) continue;
+                if (cfg.distinct && w0 == w1)
+                    continue;
                 cryptowords::detail::set_11bits(block, u1_bit, w1);
 #if defined(__SHA__)
                 uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(block);
@@ -419,7 +424,7 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             }
         }
 
-        opt.has_valid_pairs     = true;
+        opt.has_valid_pairs = true;
         opt.direct_valid_wheels = true;
     }
     // ==========================================
@@ -427,7 +432,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     // ==========================================
     else if (cfg.only_valids && opt.unknown_positions.size() >= 3) {
         if (opt.unknown_positions.size() == 3) {
-            uint64_t raw_comb = static_cast<uint64_t>(opt.wheels[0].size()) * opt.wheels[1].size() * opt.wheels[2].size();
+            uint64_t raw_comb =
+                static_cast<uint64_t>(opt.wheels[0].size()) * opt.wheels[1].size() * opt.wheels[2].size();
             if (raw_comb <= 524288) {
                 // OTM-34: Tabela Analítica de Triplas Válidas em F_2^C (Checksum Fixo)
                 const size_t u0 = opt.unknown_positions[0];
@@ -466,10 +472,12 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 for (uint16_t w0 : opt.wheels[0]) {
                     cryptowords::detail::set_11bits(block, u0_bit, w0);
                     for (uint16_t w1 : opt.wheels[1]) {
-                        if (cfg.distinct && w0 == w1) continue;
+                        if (cfg.distinct && w0 == w1)
+                            continue;
                         cryptowords::detail::set_11bits(block, u1_bit, w1);
                         for (uint16_t w2 : opt.wheels[2]) {
-                            if (cfg.distinct && (w2 == w0 || w2 == w1)) continue;
+                            if (cfg.distinct && (w2 == w0 || w2 == w1))
+                                continue;
                             cryptowords::detail::set_11bits(block, u2_bit, w2);
 #if defined(__SHA__)
                             uint8_t h = cryptowords::detail::sha256_bip39_first_byte_shani(block);
@@ -485,35 +493,35 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                     }
                 }
 
-                opt.has_valid_triplets  = true;
+                opt.has_valid_triplets = true;
                 opt.direct_valid_wheels = true;
             } else {
                 opt.has_streaming_pruning = true;
-                opt.has_k3_pruning        = true;
-                opt.direct_valid_wheels   = true;
+                opt.has_k3_pruning = true;
+                opt.direct_valid_wheels = true;
             }
         } else {
             opt.has_streaming_pruning = true;
-            opt.has_k3_pruning        = false;
-            opt.direct_valid_wheels   = true;
+            opt.has_k3_pruning = false;
+            opt.direct_valid_wheels = true;
         }
     }
 
     // ==========================================
     // OTIMIZAÇÃO OTM-29: Priorização por Gradiente de Hamming & Estratégias
     // ==========================================
-    opt.active_strategies    = cfg.strategies;
-    opt.active_strategy      = cfg.strategies.empty() ? SearchStrategy::Default : cfg.strategies[0];
+    opt.active_strategies = cfg.strategies;
+    opt.active_strategy = cfg.strategies.empty() ? SearchStrategy::Default : cfg.strategies[0];
     opt.has_midstate_caching = (opt.prefix_words >= 3);
     opt.has_hamming_gradient = cfg.has_strategy(SearchStrategy::HammingGradient);
-    opt.has_frequency        = cfg.has_strategy(SearchStrategy::Frequency);
-    opt.has_typo             = cfg.has_strategy(SearchStrategy::Typo);
-    opt.has_gray_code        = true;
+    opt.has_frequency = cfg.has_strategy(SearchStrategy::Frequency);
+    opt.has_typo = cfg.has_strategy(SearchStrategy::Typo);
+    opt.has_gray_code = true;
 
     const bool has_any_strategy = opt.has_hamming_gradient || opt.has_frequency || opt.has_typo;
 
     if (has_any_strategy) {
-        opt.has_beam_search  = true;
+        opt.has_beam_search = true;
         opt.beam_shell_count = 3;
 
         auto score_word_fn = [&](size_t u_pos, uint16_t w) -> double {
@@ -538,7 +546,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 if (u_pos > 0 && opt.base_mnemonic[u_pos - 1] != AppConfig::UNKNOWN_WORD) {
                     uint16_t prev = opt.base_mnemonic[u_pos - 1];
                     size_t bit_pos = (u_pos * 11) % 8;
-                    uint8_t cross = static_cast<uint8_t>(((prev << (8 - bit_pos)) | (w >> (11 - (8 - bit_pos)))) & 0xFF);
+                    uint8_t cross =
+                        static_cast<uint8_t>(((prev << (8 - bit_pos)) | (w >> (11 - (8 - bit_pos)))) & 0xFF);
                     h_score += std::abs(static_cast<int>(std::popcount(static_cast<unsigned int>(cross))) - 4);
                 }
                 score += static_cast<double>(h_score) * 10.0;
@@ -555,7 +564,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 const auto& cand = cfg.wordlist[w];
                 int match = 0;
                 for (char c : cand) {
-                    if (ref_word.find(c) != std::string::npos) match++;
+                    if (ref_word.find(c) != std::string::npos)
+                        match++;
                 }
                 score -= static_cast<double>(match) * 5.0;
             }
@@ -568,7 +578,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             std::stable_sort(opt.wheels[k].begin(), opt.wheels[k].end(), [&](uint16_t a, uint16_t b) {
                 double sa = score_word_fn(u_pos, a);
                 double sb = score_word_fn(u_pos, b);
-                if (sa != sb) return sa < sb;
+                if (sa != sb)
+                    return sa < sb;
                 return a < b;
             });
         }
@@ -580,9 +591,12 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             std::stable_sort(opt.valid_triplets.begin(), opt.valid_triplets.end(), [&](const auto& a, const auto& b) {
                 double sa = score_word_fn(u0, a.w0) + score_word_fn(u1, a.w1) + score_word_fn(u2, a.w2);
                 double sb = score_word_fn(u0, b.w0) + score_word_fn(u1, b.w1) + score_word_fn(u2, b.w2);
-                if (sa != sb) return sa < sb;
-                if (a.w0 != b.w0) return a.w0 < b.w0;
-                if (a.w1 != b.w1) return a.w1 < b.w1;
+                if (sa != sb)
+                    return sa < sb;
+                if (a.w0 != b.w0)
+                    return a.w0 < b.w0;
+                if (a.w1 != b.w1)
+                    return a.w1 < b.w1;
                 return a.w2 < b.w2;
             });
         }
@@ -593,7 +607,8 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
             std::stable_sort(opt.valid_pairs.begin(), opt.valid_pairs.end(), [&](const auto& a, const auto& b) {
                 double sa = score_word_fn(u0, a.first) + score_word_fn(u1, a.second);
                 double sb = score_word_fn(u0, b.first) + score_word_fn(u1, b.second);
-                if (sa != sb) return sa < sb;
+                if (sa != sb)
+                    return sa < sb;
                 return a < b;
             });
         }
@@ -617,9 +632,11 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
                 opt.exact_total_combinations *= static_cast<uint64_t>(w.size());
             }
         } else {
-            opt.total_combinations = std::max(1.0, std::round(opt.math_combinations / static_cast<double>(1ULL << checksum_bits)));
+            opt.total_combinations =
+                std::max(1.0, std::round(opt.math_combinations / static_cast<double>(1ULL << checksum_bits)));
             opt.exact_total_combinations = opt.exact_math_combinations >> static_cast<uint16_t>(checksum_bits);
-            if (opt.exact_total_combinations.eqz()) opt.exact_total_combinations = 1;
+            if (opt.exact_total_combinations.eqz())
+                opt.exact_total_combinations = 1;
         }
     } else {
         opt.exact_total_combinations = 1;
@@ -632,9 +649,11 @@ OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {
     opt.valid_combinations = opt.total_combinations;
     opt.exact_valid_combinations = opt.exact_total_combinations;
     if (cfg.only_valids && !opt.direct_valid_wheels && !opt.auto_deduce_last_word) {
-        opt.valid_combinations = std::max(1.0, std::round(opt.total_combinations / static_cast<double>(1ULL << checksum_bits)));
+        opt.valid_combinations =
+            std::max(1.0, std::round(opt.total_combinations / static_cast<double>(1ULL << checksum_bits)));
         opt.exact_valid_combinations = opt.exact_total_combinations >> static_cast<uint16_t>(checksum_bits);
-        if (opt.exact_valid_combinations.eqz()) opt.exact_valid_combinations = 1;
+        if (opt.exact_valid_combinations.eqz())
+            opt.exact_valid_combinations = 1;
     }
 
     // ==========================================

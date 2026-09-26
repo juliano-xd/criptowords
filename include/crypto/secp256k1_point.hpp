@@ -6,10 +6,12 @@
 #include "../math/UInt.hpp"
 #pragma GCC diagnostic pop
 
-#include "secp256k1_scalar.hpp"
+#include <immintrin.h>
+
 #include <cstdint>
 #include <cstring>
-#include <immintrin.h>
+
+#include "secp256k1_scalar.hpp"
 
 namespace crypto {
 
@@ -36,20 +38,21 @@ struct ConstexprUInt256 {
     constexpr ConstexprUInt256() = default;
     constexpr ConstexprUInt256(uint64_t b0, uint64_t b1, uint64_t b2, uint64_t b3) : bits{b0, b1, b2, b3} {}
 
-    constexpr bool eqz() const {
-        return (bits[0] | bits[1] | bits[2] | bits[3]) == 0;
-    }
+    constexpr bool eqz() const { return (bits[0] | bits[1] | bits[2] | bits[3]) == 0; }
 
     constexpr bool operator>=(const ConstexprUInt256& o) const {
         for (int i = 3; i >= 0; --i) {
-            if (bits[i] > o.bits[i]) return true;
-            if (bits[i] < o.bits[i]) return false;
+            if (bits[i] > o.bits[i])
+                return true;
+            if (bits[i] < o.bits[i])
+                return false;
         }
         return true;
     }
 };
 
-constexpr ConstexprUInt256 CP(0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL);
+constexpr ConstexprUInt256 CP(0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+                              0xFFFFFFFFFFFFFFFFULL);
 
 constexpr ConstexprUInt256 c_add_mod_p(const ConstexprUInt256& a, const ConstexprUInt256& b) {
     ConstexprUInt256 res{};
@@ -155,10 +158,13 @@ constexpr ConstexprUInt256 c_mul_mod_p(const ConstexprUInt256& a, const Constexp
     return res;
 }
 
-constexpr ConstexprUInt256 c_sqr_mod_p(const ConstexprUInt256& a) { return c_mul_mod_p(a, a); }
+constexpr ConstexprUInt256 c_sqr_mod_p(const ConstexprUInt256& a) {
+    return c_mul_mod_p(a, a);
+}
 
 constexpr ConstexprUInt256 c_sqr_n(ConstexprUInt256 a, int n) {
-    for (int i = 0; i < n; ++i) a = c_sqr_mod_p(a);
+    for (int i = 0; i < n; ++i)
+        a = c_sqr_mod_p(a);
     return a;
 }
 
@@ -183,7 +189,8 @@ constexpr ConstexprUInt256 c_inv_mod_p(const ConstexprUInt256& a) {
         if ((LOW32 >> b) & 1U) {
             low_acc = c_mul_mod_p(low_acc, base);
         }
-        if (b < 31) base = c_sqr_mod_p(base);
+        if (b < 31)
+            base = c_sqr_mod_p(base);
     }
     return c_mul_mod_p(t, low_acc);
 }
@@ -194,13 +201,14 @@ struct ConstexprPointJ {
     ConstexprUInt256 Z;
     bool is_inf = true;
 
-    constexpr ConstexprPointJ() : X(0,0,0,0), Y(0,0,0,0), Z(0,0,0,0), is_inf(true) {}
+    constexpr ConstexprPointJ() : X(0, 0, 0, 0), Y(0, 0, 0, 0), Z(0, 0, 0, 0), is_inf(true) {}
     constexpr ConstexprPointJ(ConstexprUInt256 x, ConstexprUInt256 y, ConstexprUInt256 z, bool inf = false)
         : X(x), Y(y), Z(z), is_inf(inf) {}
 };
 
 constexpr ConstexprPointJ c_point_double(const ConstexprPointJ& p) {
-    if (p.is_inf || p.Y.eqz()) return ConstexprPointJ();
+    if (p.is_inf || p.Y.eqz())
+        return ConstexprPointJ();
     ConstexprUInt256 A = c_sqr_mod_p(p.X);
     ConstexprUInt256 B = c_sqr_mod_p(p.Y);
     ConstexprUInt256 C = c_sqr_mod_p(B);
@@ -263,8 +271,8 @@ constexpr auto generate_secp256k1_g_table_256() {
         ConstexprUInt256 x = c_mul_mod_p(jac_points[i].X, z_inv2);
         ConstexprUInt256 y = c_mul_mod_p(jac_points[i].Y, z_inv3);
 
-        table[i] = ConstexprPointA{{x.bits[0], x.bits[1], x.bits[2], x.bits[3]},
-                                   {y.bits[0], y.bits[1], y.bits[2], y.bits[3]}};
+        table[i] =
+            ConstexprPointA{{x.bits[0], x.bits[1], x.bits[2], x.bits[3]}, {y.bits[0], y.bits[1], y.bits[2], y.bits[3]}};
     }
 
     ConstexprUInt256 z_inv = inv_all;
@@ -272,8 +280,8 @@ constexpr auto generate_secp256k1_g_table_256() {
     ConstexprUInt256 z_inv3 = c_mul_mod_p(z_inv, z_inv2);
     ConstexprUInt256 x = c_mul_mod_p(jac_points[0].X, z_inv2);
     ConstexprUInt256 y = c_mul_mod_p(jac_points[0].Y, z_inv3);
-    table[0] = ConstexprPointA{{x.bits[0], x.bits[1], x.bits[2], x.bits[3]},
-                               {y.bits[0], y.bits[1], y.bits[2], y.bits[3]}};
+    table[0] =
+        ConstexprPointA{{x.bits[0], x.bits[1], x.bits[2], x.bits[3]}, {y.bits[0], y.bits[1], y.bits[2], y.bits[3]}};
 
     return table;
 }
@@ -325,8 +333,10 @@ FORCE_INLINE UInt<4> mul_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
     }
 
     UInt<4> res;
-    for (int i = 0; i < 4; ++i) res.bits[i] = s[i];
-    if (res >= P) res -= P;
+    for (int i = 0; i < 4; ++i)
+        res.bits[i] = s[i];
+    if (res >= P)
+        res -= P;
     return res;
 }
 #pragma GCC diagnostic pop
@@ -339,7 +349,9 @@ FORCE_INLINE UInt<4> add_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
     c = _addcarry_u64(c, a.bits[1], b.bits[1], reinterpret_cast<unsigned long long*>(&res.bits[1]));
     c = _addcarry_u64(c, a.bits[2], b.bits[2], reinterpret_cast<unsigned long long*>(&res.bits[2]));
     c = _addcarry_u64(c, a.bits[3], b.bits[3], reinterpret_cast<unsigned long long*>(&res.bits[3]));
-    if (c || res >= P) { res -= P; }
+    if (c || res >= P) {
+        res -= P;
+    }
     return res;
 }
 
@@ -352,7 +364,9 @@ FORCE_INLINE UInt<4> sub_mod_p(const UInt<4>& a, const UInt<4>& b) noexcept {
     borrow = _subborrow_u64(borrow, a.bits[1], b.bits[1], reinterpret_cast<unsigned long long*>(&res.bits[1]));
     borrow = _subborrow_u64(borrow, a.bits[2], b.bits[2], reinterpret_cast<unsigned long long*>(&res.bits[2]));
     borrow = _subborrow_u64(borrow, a.bits[3], b.bits[3], reinterpret_cast<unsigned long long*>(&res.bits[3]));
-    if (borrow) { res += p; }
+    if (borrow) {
+        res += p;
+    }
     return res;
 }
 
@@ -361,7 +375,8 @@ FORCE_INLINE UInt<4> sqr_mod_p(const UInt<4>& a) noexcept {
 }
 
 FORCE_INLINE UInt<4> sqr_n(UInt<4> a, int n) noexcept {
-    for (int i = 0; i < n; ++i) a = sqr_mod_p(a);
+    for (int i = 0; i < n; ++i)
+        a = sqr_mod_p(a);
     return a;
 }
 
@@ -387,7 +402,8 @@ inline UInt<4> inv_mod_p(const UInt<4>& a) noexcept {
         if ((LOW32 >> b) & 1U) {
             low_acc = mul_mod_p(low_acc, base);
         }
-        if (b < 31) base = sqr_mod_p(base);
+        if (b < 31)
+            base = sqr_mod_p(base);
     }
     return mul_mod_p(t, low_acc);
 }
@@ -402,14 +418,20 @@ struct PointJacobian {
 // Adição mista Jacobiana-Afim
 FORCE_INLINE void point_add_mixed_raw(PointJacobian& p1, const uint64_t p2_x[4], const uint64_t p2_y[4]) noexcept {
     if (p1.is_infinity) {
-        for (int i = 0; i < 4; ++i) { p1.X.bits[i] = p2_x[i]; p1.Y.bits[i] = p2_y[i]; }
+        for (int i = 0; i < 4; ++i) {
+            p1.X.bits[i] = p2_x[i];
+            p1.Y.bits[i] = p2_y[i];
+        }
         p1.Z = 1;
         p1.is_infinity = false;
         return;
     }
 
     UInt<4> p2x, p2y;
-    for (int i = 0; i < 4; ++i) { p2x.bits[i] = p2_x[i]; p2y.bits[i] = p2_y[i]; }
+    for (int i = 0; i < 4; ++i) {
+        p2x.bits[i] = p2_x[i];
+        p2y.bits[i] = p2_y[i];
+    }
 
     UInt<4> Z1Z1 = mul_mod_p(p1.Z, p1.Z);
     UInt<4> U2 = mul_mod_p(p2x, Z1Z1);
@@ -419,8 +441,12 @@ FORCE_INLINE void point_add_mixed_raw(PointJacobian& p1, const uint64_t p2_x[4],
     UInt<4> R = sub_mod_p(S2, p1.Y);
 
     if (H.eqz()) {
-        if (R.eqz()) return;
-        else { p1.is_infinity = true; return; }
+        if (R.eqz())
+            return;
+        else {
+            p1.is_infinity = true;
+            return;
+        }
     }
 
     UInt<4> Z3 = mul_mod_p(p1.Z, H);
@@ -514,7 +540,8 @@ inline bool secp256k1_ecmult_gen_affine(UInt<4>& x_aff, UInt<4>& y_aff, const ui
         }
     }
 
-    if (__builtin_expect(acc.is_infinity, 0)) return false;
+    if (__builtin_expect(acc.is_infinity, 0))
+        return false;
 
     UInt<4> z_inv = inv_mod_p(acc.Z);
     UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
@@ -527,28 +554,32 @@ inline bool secp256k1_ecmult_gen_affine(UInt<4>& x_aff, UInt<4>& y_aff, const ui
 // Cria chave pública comprimida (33 bytes) a partir da chave privada (32 bytes)
 inline bool secp256k1_pubkey_create_fast(uint8_t out_pub[33], const uint8_t seckey[32]) noexcept {
     UInt<4> x_aff, y_aff;
-    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey)) return false;
+    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey))
+        return false;
     out_pub[0] = (y_aff.bits[0] & 1ULL) ? 0x03 : 0x02;
     store_be256(out_pub + 1, x_aff);
     return true;
 }
 
-inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33> &out_pub, const std::array<uint8_t, 32> &seckey) noexcept {
+inline bool secp256k1_pubkey_create_fast(std::array<uint8_t, 33>& out_pub,
+                                         const std::array<uint8_t, 32>& seckey) noexcept {
     return secp256k1_pubkey_create_fast(out_pub.data(), seckey.data());
 }
 
 // Cria chave pública não comprimida (65 bytes: 0x04 || X || Y)
 inline bool secp256k1_pubkey_create_uncompressed(uint8_t out_pub[65], const uint8_t seckey[32]) noexcept {
     UInt<4> x_aff, y_aff;
-    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey)) return false;
+    if (!secp256k1_ecmult_gen_affine(x_aff, y_aff, seckey))
+        return false;
     out_pub[0] = 0x04;
     store_be256(out_pub + 1, x_aff);
     store_be256(out_pub + 33, y_aff);
     return true;
 }
 
-inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65> &out_pub, const std::array<uint8_t, 32> &seckey) noexcept {
+inline bool secp256k1_pubkey_create_uncompressed(std::array<uint8_t, 65>& out_pub,
+                                                 const std::array<uint8_t, 32>& seckey) noexcept {
     return secp256k1_pubkey_create_uncompressed(out_pub.data(), seckey.data());
 }
 
-} // namespace crypto
+}  // namespace crypto

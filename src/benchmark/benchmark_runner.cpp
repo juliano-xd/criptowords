@@ -1,19 +1,4 @@
 #include "../../include/benchmark/benchmark_runner.hpp"
-#include "../../include/crypto/bip39.hpp"
-#include "../../include/crypto/hmac_sha512.hpp"
-#include "../../include/crypto/pbkdf2_simd.hpp"
-#include "../../include/crypto/sha256.hpp"
-#include "../../include/crypto/sha256_shani.hpp"
-#include "../../include/crypto/keccak256.hpp"
-#include "../../include/crypto/ripemd160.hpp"
-#include "../../include/crypto/sha512.hpp"
-#include "../../include/crypto/secp256k1_scalar.hpp"
-#include "../../include/crypto/secp256k1_point.hpp"
-#include "../../include/gpu/gpu_engine.hpp"
-#include "../../include/gpu/gpu_info.hpp"
-#include "../../include/simd/arch.hpp"
-#include "../../include/cli/ui.hpp"
-#include "../../include/hardware/host_probe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +15,22 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "../../include/cli/ui.hpp"
+#include "../../include/crypto/bip39.hpp"
+#include "../../include/crypto/hmac_sha512.hpp"
+#include "../../include/crypto/keccak256.hpp"
+#include "../../include/crypto/pbkdf2_simd.hpp"
+#include "../../include/crypto/ripemd160.hpp"
+#include "../../include/crypto/secp256k1_point.hpp"
+#include "../../include/crypto/secp256k1_scalar.hpp"
+#include "../../include/crypto/sha256.hpp"
+#include "../../include/crypto/sha256_shani.hpp"
+#include "../../include/crypto/sha512.hpp"
+#include "../../include/gpu/gpu_engine.hpp"
+#include "../../include/gpu/gpu_info.hpp"
+#include "../../include/hardware/host_probe.hpp"
+#include "../../include/simd/arch.hpp"
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -49,71 +50,71 @@ using namespace std;
 using Clock = chrono::high_resolution_clock;
 
 namespace {
-    // Impede que o otimizador elimine o loop de benchmark inteiro.
-    [[gnu::always_inline]] inline void bench_barrier(uint64_t sink) noexcept {
-        asm volatile("" :: "r"(sink) : "memory");
-    }
+// Impede que o otimizador elimine o loop de benchmark inteiro.
+[[gnu::always_inline]] inline void bench_barrier(uint64_t sink) noexcept {
+    asm volatile("" ::"r"(sink) : "memory");
+}
 
 #if defined(__x86_64__) || defined(_M_X64)
-    [[gnu::always_inline]] static inline uint64_t rdtsc_val() noexcept {
-        unsigned int aux;
-        return __rdtscp(&aux);
-    }
+[[gnu::always_inline]] static inline uint64_t rdtsc_val() noexcept {
+    unsigned int aux;
+    return __rdtscp(&aux);
+}
 #else
-    [[gnu::always_inline]] static inline uint64_t rdtsc_val() noexcept {
-        return 0;
-    }
+[[gnu::always_inline]] static inline uint64_t rdtsc_val() noexcept {
+    return 0;
+}
 #endif
 
-    struct BenchmarkStats {
-        double min_val = 0.0;
-        double max_val = 0.0;
-        double avg_val = 0.0;
-        double median_val = 0.0;
-        double jitter_pct = 0.0;
-    };
+struct BenchmarkStats {
+    double min_val = 0.0;
+    double max_val = 0.0;
+    double avg_val = 0.0;
+    double median_val = 0.0;
+    double jitter_pct = 0.0;
+};
 
-    template <typename Fn>
-    BenchmarkStats measure_stats(size_t runs, Fn&& fn) {
-        vector<double> results;
-        results.reserve(runs);
-        for (size_t r = 0; r < runs; ++r) {
-            results.push_back(fn());
-        }
-        sort(results.begin(), results.end());
-        BenchmarkStats s;
-        s.min_val = results.front();
-        s.max_val = results.back();
-        double sum = accumulate(results.begin(), results.end(), 0.0);
-        s.avg_val = sum / static_cast<double>(runs);
-        s.median_val = (runs % 2 == 1) ? results[runs / 2] : (results[runs / 2 - 1] + results[runs / 2]) * 0.5;
-        s.jitter_pct = (s.avg_val > 0.0) ? (((s.max_val - s.min_val) / s.avg_val) * 100.0) : 0.0;
-        return s;
+template <typename Fn>
+BenchmarkStats measure_stats(size_t runs, Fn&& fn) {
+    vector<double> results;
+    results.reserve(runs);
+    for (size_t r = 0; r < runs; ++r) {
+        results.push_back(fn());
     }
+    sort(results.begin(), results.end());
+    BenchmarkStats s;
+    s.min_val = results.front();
+    s.max_val = results.back();
+    double sum = accumulate(results.begin(), results.end(), 0.0);
+    s.avg_val = sum / static_cast<double>(runs);
+    s.median_val = (runs % 2 == 1) ? results[runs / 2] : (results[runs / 2 - 1] + results[runs / 2]) * 0.5;
+    s.jitter_pct = (s.avg_val > 0.0) ? (((s.max_val - s.min_val) / s.avg_val) * 100.0) : 0.0;
+    return s;
+}
 
-    static string sanitize_device_name(string name) {
+static string sanitize_device_name(string name) {
+    if (name.size() > 32) {
+        auto p = name.find('(');
+        if (p != string::npos && p > 4) {
+            name = name.substr(0, p - 1);
+        }
         if (name.size() > 32) {
-            auto p = name.find('(');
-            if (p != string::npos && p > 4) {
-                name = name.substr(0, p - 1);
-            }
-            if (name.size() > 32) {
-                name = name.substr(0, 29) + "...";
-            }
+            name = name.substr(0, 29) + "...";
         }
-        return name;
     }
+    return name;
+}
 
-    static string sanitize_platform_name(string name) {
-        if (name.find("Accelerated Parallel Processing") != string::npos) {
-            return "AMD APP";
-        }
-        if (name.size() > 16) {
-            name = name.substr(0, 13) + "...";
-        }
-        return name;
+static string sanitize_platform_name(string name) {
+    if (name.find("Accelerated Parallel Processing") != string::npos) {
+        return "AMD APP";
     }
-} // namespace
+    if (name.size() > 16) {
+        name = name.substr(0, 13) + "...";
+    }
+    return name;
+}
+}  // namespace
 
 int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     print_box_top("CRIPTOWORDS v2.0 - SUÍTE DE BENCHMARK & PROFILING AVANÇADO", DEFAULT_INNER_WIDTH);
@@ -125,13 +126,13 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     // 1. DESCOBERTA E INFORMAÇÕES DE HARDWARE
     // =========================================================================
     auto cpu = hardware::HostProbe::probe_cpu();
-    size_t hw_threads = cpu.topology.logical_threads > 0 ? cpu.topology.logical_threads : thread::hardware_concurrency();
+    size_t hw_threads =
+        cpu.topology.logical_threads > 0 ? cpu.topology.logical_threads : thread::hardware_concurrency();
 
     print_box_top("[1/8] HARDWARE & CAPACIDADES DETECTADAS DO HOST", DEFAULT_INNER_WIDTH);
     print_box_line(format("Processador Host (CPU)    : {}", cpu.brand_string));
     print_box_line(format("Núcleos & Threads CPU     : {} físicos, {} threads lógicas{}",
-                          cpu.topology.physical_cores > 0 ? to_string(cpu.topology.physical_cores) : "?",
-                          hw_threads,
+                          cpu.topology.physical_cores > 0 ? to_string(cpu.topology.physical_cores) : "?", hw_threads,
                           cpu.scaling_governor.empty() ? "" : format(" [Gov: {}]", cpu.scaling_governor)));
 
     string simd_list = "";
@@ -150,7 +151,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
 #if defined(__BMI2__)
     simd_list += "BMI2, ";
 #endif
-    if (simd_list.ends_with(", ")) simd_list.resize(simd_list.size() - 2);
+    if (simd_list.ends_with(", "))
+        simd_list.resize(simd_list.size() - 2);
     print_box_line(format("Extensões SIMD de CPU     : {}", simd_list));
 
     auto devices = gpu::enumerate_devices();
@@ -160,10 +162,10 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         string badge = (i == 0) ? " ★ [AUTO]" : "";
         string d_name = sanitize_device_name(dev.device_name);
         string p_name = sanitize_platform_name(dev.platform_name);
-        print_box_line(format("  ├─ [Plat {}, Dev {}] {} ({}){}",
-                              dev.platform_idx, dev.device_idx, d_name, p_name, badge));
-        print_box_line(format("  │  CUs: {} │ Clock: {} MHz │ VRAM: {} MB │ Max WG: {}",
-                              dev.compute_units, dev.clock_freq, dev.global_mem / (1024 * 1024), dev.max_work_group));
+        print_box_line(
+            format("  ├─ [Plat {}, Dev {}] {} ({}){}", dev.platform_idx, dev.device_idx, d_name, p_name, badge));
+        print_box_line(format("  │  CUs: {} │ Clock: {} MHz │ VRAM: {} MB │ Max WG: {}", dev.compute_units,
+                              dev.clock_freq, dev.global_mem / (1024 * 1024), dev.max_work_group));
     }
     print_box_bottom(DEFAULT_INNER_WIDTH);
     println();
@@ -200,8 +202,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         print_box_line(format("Vazão de Verificação      : {:>10.2f} Mop/s (Média de 3 execuções)", mops_avg));
         print_box_line(format("Latência por Checksum     : {:>10.2f} ns/op (Melhor: {:.2f} ns, Jitter: ±{:.1f}%)",
                               ns_avg, ns_min, chk_stats.jitter_pct));
-        print_box_line(format("Validação Matemática      : Checksums válidos: {} ({:.2f}% de aprovação)",
-                              valid_cnt, 100.0 * valid_cnt / CHECKS_PER_RUN));
+        print_box_line(format("Validação Matemática      : Checksums válidos: {} ({:.2f}% de aprovação)", valid_cnt,
+                              100.0 * valid_cnt / CHECKS_PER_RUN));
 
         print_box_separator(DEFAULT_INNER_WIDTH);
         print_box_line("Microbenchmark SHA-256 em Bloco de 64 Bytes (100.000 iterações):");
@@ -228,10 +230,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
 
         // Rota Hardware SHA-NI
 #if defined(__SHA__)
-        uint32_t shani_state[8] = {
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-        };
+        uint32_t shani_state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
         auto t_ni0 = Clock::now();
         for (size_t i = 0; i < SHA_ITERS; ++i) {
             cryptowords::detail::sha256_process_x86(shani_state, sha_block, 64);
@@ -248,8 +248,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
                               sc_ns, sc_mbs, sc_mhash));
         print_box_line(format("  SHA-256 Hardware SHA-NI : {:>10.2f} ns/bloco ({:>7.2f} MB/s | {:>6.2f} Mhash/s)",
                               ni_ns, ni_mbs, ni_mhash));
-        print_box_line(format("  Aceleração por Hardware : {:>10.2f}x speedup das instruções Intel/AMD SHA-NI",
-                              ni_speedup));
+        print_box_line(
+            format("  Aceleração por Hardware : {:>10.2f}x speedup das instruções Intel/AMD SHA-NI", ni_speedup));
 #else
         print_box_line(format("  SHA-256 Escalar Software: {:>10.2f} ns/bloco ({:>7.2f} MB/s | {:>6.2f} Mhash/s)",
                               sc_ns, sc_mbs, sc_mhash));
@@ -265,19 +265,19 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     print_box_top("[3/8] CPU PBKDF2-HMAC-SHA512 (SIMD MULTI-WAY, CICLOS TSC & JITTER)", DEFAULT_INNER_WIDTH);
 
     const SimdArch host_arch = detect_best_simd();
-    const string arch_label = (host_arch == SimdArch::AVX512) ? "AVX-512 (16 lanes)" :
-                              (host_arch == SimdArch::AVX2)   ? "AVX2 (8 lanes)" :
-                                                                "SSE4.1 (4 lanes)";
-    const size_t simd_lanes = (host_arch == SimdArch::AVX512) ? 16 :
-                              (host_arch == SimdArch::AVX2)   ? 8 : 4;
+    const string arch_label = (host_arch == SimdArch::AVX512) ? "AVX-512 (16 lanes)"
+                            : (host_arch == SimdArch::AVX2)   ? "AVX2 (8 lanes)"
+                                                              : "SSE4.1 (4 lanes)";
+    const size_t simd_lanes = (host_arch == SimdArch::AVX512) ? 16 : (host_arch == SimdArch::AVX2) ? 8 : 4;
 
-    const string test_pw = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const string test_pw =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const string test_salt = "mnemonic";
 
     // Pré-computa buffers de salt para o motor SIMD
     uint8_t s_buf[128] = {};
     memcpy(s_buf, test_salt.data(), test_salt.size());
-    s_buf[test_salt.size()]     = 0;
+    s_buf[test_salt.size()] = 0;
     s_buf[test_salt.size() + 1] = 0;
     s_buf[test_salt.size() + 2] = 0;
     s_buf[test_salt.size() + 3] = 1;
@@ -302,40 +302,26 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     auto run_simd_lane = [&](uint8_t out[16][64]) {
         if (host_arch == SimdArch::AVX512) {
             pbkdf2_hmac_sha512_16way_avx512(
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(),
-                2048,
-                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
-                out[8], out[9], out[10], out[11], out[12], out[13], out[14], out[15],
-                salt_block64, kw_salt, kw_salt_avx512
-            );
+                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                test_pw.data(), test_pw.size(), reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(),
+                2048, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8], out[9], out[10], out[11],
+                out[12], out[13], out[14], out[15], salt_block64, kw_salt, kw_salt_avx512);
         } else if (host_arch == SimdArch::AVX2) {
-            pbkdf2_hmac_sha512_8way_avx2(
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(),
-                2048,
-                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
-                salt_block64, kw_salt, kw_salt_avx2
-            );
+            pbkdf2_hmac_sha512_8way_avx2(test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(),
+                                         test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
+                                         test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(),
+                                         test_pw.size(), reinterpret_cast<const uint8_t*>(test_salt.data()),
+                                         test_salt.size(), 2048, out[0], out[1], out[2], out[3], out[4], out[5], out[6],
+                                         out[7], salt_block64, kw_salt, kw_salt_avx2);
         } else {
-            pbkdf2_hmac_sha512_4way_sse(
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(),
-                reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(),
-                2048,
-                out[0], out[1], out[2], out[3],
-                salt_block64, kw_salt, kw_salt_sse
-            );
+            pbkdf2_hmac_sha512_4way_sse(test_pw.data(), test_pw.size(), test_pw.data(), test_pw.size(), test_pw.data(),
+                                        test_pw.size(), test_pw.data(), test_pw.size(),
+                                        reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(), 2048,
+                                        out[0], out[1], out[2], out[3], salt_block64, kw_salt, kw_salt_sse);
         }
     };
 
@@ -346,9 +332,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     uint64_t tsc_sc0 = rdtsc_val();
     auto t_sc0 = Clock::now();
     for (size_t i = 0; i < SINGLE_HASHES; ++i) {
-        crypto::pbkdf2_hmac_sha512(test_pw.data(), test_pw.size(),
-            reinterpret_cast<const uint8_t*>(test_salt.data()), test_salt.size(),
-            2048, sc_single_out, 64);
+        crypto::pbkdf2_hmac_sha512(test_pw.data(), test_pw.size(), reinterpret_cast<const uint8_t*>(test_salt.data()),
+                                   test_salt.size(), 2048, sc_single_out, 64);
         sc_guard += sc_single_out[0];
     }
     auto t_sc1 = Clock::now();
@@ -379,10 +364,10 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     const double cycles_per_round = (sm_cycles_per_key > 0) ? (static_cast<double>(sm_cycles_per_key) / 2048.0) : 0.0;
 
     print_box_line(format("Motor SIMD Ativo no Host  : {}", arch_label));
-    print_box_line(format("1-Th Escalar (1 chave)    : {:>8.2f} keys/s ({:.2f} ms | {:>7} cyc/key)",
-                          sc_rate, sc_ms_per_key, sc_cycles_per_key));
-    print_box_line(format("1-Th SIMD ({:>2} lanes)       : {:>8.2f} keys/s ({:.2f} ms | {:>7} cyc/key)",
-                          simd_lanes, sm_rate, sm_ms_per_key, sm_cycles_per_key));
+    print_box_line(format("1-Th Escalar (1 chave)    : {:>8.2f} keys/s ({:.2f} ms | {:>7} cyc/key)", sc_rate,
+                          sc_ms_per_key, sc_cycles_per_key));
+    print_box_line(format("1-Th SIMD ({:>2} lanes)       : {:>8.2f} keys/s ({:.2f} ms | {:>7} cyc/key)", simd_lanes,
+                          sm_rate, sm_ms_per_key, sm_cycles_per_key));
     print_box_line(format("Eficiência de Instrução   : {:>6.1f} ciclos TSC/rodada ({:.2f}x speedup vetorial)",
                           cycles_per_round, simd_vector_speedup));
 
@@ -442,7 +427,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
             }
 
             auto t0 = Clock::now();
-            for (auto& w : workers) w.join();
+            for (auto& w : workers)
+                w.join();
             auto t1 = Clock::now();
 
             bench_barrier(guard.load(memory_order_relaxed));
@@ -453,13 +439,15 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         double median_sec = mt_stats.median_val;
         double rate = total_hashes / median_sec;
 
-        if (threads == 1) simd_baseline_rate = rate;
-        if (rate > cpu_peak_rate) cpu_peak_rate = rate;
+        if (threads == 1)
+            simd_baseline_rate = rate;
+        if (rate > cpu_peak_rate)
+            cpu_peak_rate = rate;
         double speedup = (simd_baseline_rate > 0) ? (rate / simd_baseline_rate) : 1.0;
         double efficiency = (speedup / static_cast<double>(threads)) * 100.0;
 
-        println("│ {:^7} │ {:^7} │ {:>9.2f} │ {:>19.2f} │ {:>7.1f}% │ {:>6.2f}x │ {:>6.1f}% │",
-                threads, hashes_per_thread, median_sec * 1000.0, rate, mt_stats.jitter_pct, speedup, efficiency);
+        println("│ {:^7} │ {:^7} │ {:>9.2f} │ {:>19.2f} │ {:>7.1f}% │ {:>6.2f}x │ {:>6.1f}% │", threads,
+                hashes_per_thread, median_sec * 1000.0, rate, mt_stats.jitter_pct, speedup, efficiency);
     }
     println("╰─────────┴─────────┴───────────┴─────────────────────┴──────────┴─────────┴─────────╯");
     println();
@@ -487,10 +475,10 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
             string p_name = sanitize_platform_name(dev.platform_name);
 
             print_box_separator(DEFAULT_INNER_WIDTH);
-            print_box_line(format("▶ DISPOSITIVO: [Plat {}, Dev {}] {} ({})",
-                                  dev.platform_idx, dev.device_idx, d_name, p_name));
-            print_box_line(format("  VRAM: {} MB │ CUs: {} │ Clock Base: {} MHz",
-                                  dev.global_mem / (1024 * 1024), dev.compute_units, dev.clock_freq));
+            print_box_line(
+                format("▶ DISPOSITIVO: [Plat {}, Dev {}] {} ({})", dev.platform_idx, dev.device_idx, d_name, p_name));
+            print_box_line(format("  VRAM: {} MB │ CUs: {} │ Clock Base: {} MHz", dev.global_mem / (1024 * 1024),
+                                  dev.compute_units, dev.clock_freq));
             println("├────────┼───────────┼────────────┼─────────────┼─────────────┼──────────┼───────────┤");
             println("│  Lote  │ H2D (ms)  │ H2D (GB/s) │ Kernel (ms) │ Kernel kh/s │ D2H (ms) │ Efet(kh/s)│");
             println("├────────┼───────────┼────────────┼─────────────┼─────────────┼──────────┼───────────┤");
@@ -510,7 +498,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
             for (size_t batch : cur_batch_sizes) {
                 gpu_engine.cleanup();
                 if (!gpu_engine.init(dev.platform_idx, dev.device_idx, batch, nullptr, true, bench_slot_sz)) {
-                    println("│ {:>6} │ [Falha na inicialização da GPU para este lote]                            │", batch);
+                    println("│ {:>6} │ [Falha na inicialização da GPU para este lote]                            │",
+                            batch);
                     break;
                 }
 
@@ -528,34 +517,36 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
                 }
 
                 GpuExecutionMetrics metrics;
-                bool ok = gpu_engine.pbkdf2_batch_profiled(
-                    pw_batch, pw_lens, seed_out, static_cast<uint32_t>(batch), metrics);
+                bool ok = gpu_engine.pbkdf2_batch_profiled(pw_batch, pw_lens, seed_out, static_cast<uint32_t>(batch),
+                                                           metrics);
                 if (!ok) {
-                    println("│ {:>6} │ [Falha de execução do kernel OpenCL]                                     │", batch);
+                    println("│ {:>6} │ [Falha de execução do kernel OpenCL]                                     │",
+                            batch);
                     break;
                 }
 
-                const double h2d_ms   = static_cast<double>(metrics.write_time_ns)  / 1e6;
-                const double kern_ms  = static_cast<double>(metrics.kernel_time_ns) / 1e6;
-                const double d2h_ms   = static_cast<double>(metrics.read_time_ns)   / 1e6;
+                const double h2d_ms = static_cast<double>(metrics.write_time_ns) / 1e6;
+                const double kern_ms = static_cast<double>(metrics.kernel_time_ns) / 1e6;
+                const double d2h_ms = static_cast<double>(metrics.read_time_ns) / 1e6;
                 const double kern_khs = metrics.kernel_keys_per_sec / 1e3;
                 const double total_ms = h2d_ms + kern_ms + d2h_ms;
-                const double eff_khs  = (metrics.total_keys_per_sec > 0.0)
-                                        ? (metrics.total_keys_per_sec / 1e3)
-                                        : (total_ms > 0.0 ? (static_cast<double>(batch) / total_ms) : 0.0);
+                const double eff_khs = (metrics.total_keys_per_sec > 0.0)
+                                         ? (metrics.total_keys_per_sec / 1e3)
+                                         : (total_ms > 0.0 ? (static_cast<double>(batch) / total_ms) : 0.0);
 
                 if (eff_khs > best_effective_khs) {
                     best_effective_khs = eff_khs;
                     best_batch = batch;
                 }
 
-                println("│ {:>6} │ {:>9.3f} │ {:>10.3f} │ {:>11.3f} │ {:>11.2f} │ {:>8.3f} │ {:>9.2f} │",
-                        batch, h2d_ms, metrics.bandwidth_h2d_gb_s, kern_ms, kern_khs, d2h_ms, eff_khs);
+                println("│ {:>6} │ {:>9.3f} │ {:>10.3f} │ {:>11.3f} │ {:>11.2f} │ {:>8.3f} │ {:>9.2f} │", batch, h2d_ms,
+                        metrics.bandwidth_h2d_gb_s, kern_ms, kern_khs, d2h_ms, eff_khs);
 
                 // Trava de estabilidade/watchdog TDR (evita hang detection / context reset no driver)
                 if ((is_rusticl && kern_ms > 450.0) || (dev.compute_units <= 2 && batch >= 8192) || kern_ms > 1200.0) {
                     println("├────────┴───────────┴────────────┴─────────────┴─────────────┴──────────┴───────────┤");
-                    print_box_line(format("➔ Ponto de Saturação: Lotes > {:>5} atingem a janela de estabilidade do driver.", batch));
+                    print_box_line(format(
+                        "➔ Ponto de Saturação: Lotes > {:>5} atingem a janela de estabilidade do driver.", batch));
                     break;
                 }
             }
@@ -591,7 +582,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         uint64_t scalar_guard = 0;
         auto t_s0 = Clock::now();
         for (size_t i = 0; i < SCALAR_ITERS; ++i) {
-            scalar_guard += static_cast<uint64_t>(secp256k1_ec_seckey_tweak_add(secp_ctx, k_bench.data(), tw_bench.data()));
+            scalar_guard +=
+                static_cast<uint64_t>(secp256k1_ec_seckey_tweak_add(secp_ctx, k_bench.data(), tw_bench.data()));
         }
         auto t_s1 = Clock::now();
         bench_barrier(scalar_guard);
@@ -607,7 +599,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double fast_ns = chrono::duration<double, nano>(t_f1 - t_f0).count() / SCALAR_ITERS;
 
         print_box_line(format("Adição Escalar libsecp256k1    : {:>11.2f} ns/op", secp_ns));
-        print_box_line(format("Adição Escalar UInt<4> Nativa   : {:>11.2f} ns/op ({:.2f}x speedup)", fast_ns, secp_ns / fast_ns));
+        print_box_line(
+            format("Adição Escalar UInt<4> Nativa   : {:>11.2f} ns/op ({:.2f}x speedup)", fast_ns, secp_ns / fast_ns));
 
         // --- 5.2 Aritmética de Campo F_p: Mul, Sqr e Inv (UInt<4>) ---
         constexpr size_t FIELD_ITERS = 1'000'000;
@@ -644,7 +637,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double inv_ns = chrono::duration<double, nano>(t_inv1 - t_inv0).count() / INV_ITERS;
 
         print_box_line(format("Multiplicação F_p mul_mod_p     : {:>11.2f} ns/op", mul_ns));
-        print_box_line(format("Quadratura F_p sqr_mod_p        : {:>11.2f} ns/op ({:.2f}x speedup)", sqr_ns, mul_ns / sqr_ns));
+        print_box_line(
+            format("Quadratura F_p sqr_mod_p        : {:>11.2f} ns/op ({:.2f}x speedup)", sqr_ns, mul_ns / sqr_ns));
         print_box_line(format("Inversão Modular inv_mod_p      : {:>11.2f} ns/op (a^(p-2) mod p | {:.2f} Mop/s)",
                               inv_ns, 1000.0 / inv_ns));
 
@@ -673,7 +667,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double fast_div_ns = chrono::duration<double, nano>(t_df1 - t_df0).count() / DIV_ITERS;
 
         print_box_line(format("Divisão Knuth divmod(UInt<4>)   : {:>11.2f} ns/op", knuth_ns));
-        print_box_line(format("Divisão Escalar divmod(58)      : {:>11.2f} ns/op ({:.2f}x speedup)", fast_div_ns, knuth_ns / fast_div_ns));
+        print_box_line(format("Divisão Escalar divmod(58)      : {:>11.2f} ns/op ({:.2f}x speedup)", fast_div_ns,
+                              knuth_ns / fast_div_ns));
 
         // --- 5.4 Multiplicação de ponto P = k * G ---
         constexpr size_t PUB_ITERS = 5000;
@@ -685,8 +680,7 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         uint64_t pub_guard = 0;
         auto t_p0 = Clock::now();
         for (size_t i = 0; i < PUB_ITERS; ++i) {
-            pub_guard += static_cast<uint64_t>(
-                secp256k1_ec_pubkey_create(secp_ctx, &secp_pub, seckey_bench.data()));
+            pub_guard += static_cast<uint64_t>(secp256k1_ec_pubkey_create(secp_ctx, &secp_pub, seckey_bench.data()));
         }
         auto t_p1 = Clock::now();
         bench_barrier(pub_guard);
@@ -701,7 +695,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double fast_pub_us = chrono::duration<double, micro>(t_pf1 - t_pf0).count() / PUB_ITERS;
 
         print_box_line(format("Pubkey Create libsecp256k1      : {:>11.2f} µs/op", secp_pub_us));
-        print_box_line(format("Pubkey Create Comb 8-bit Nativa : {:>11.2f} µs/op ({:.2f}x vs libsecp)", fast_pub_us, secp_pub_us / fast_pub_us));
+        print_box_line(format("Pubkey Create Comb 8-bit Nativa : {:>11.2f} µs/op ({:.2f}x vs libsecp)", fast_pub_us,
+                              secp_pub_us / fast_pub_us));
 
         secp256k1_context_destroy(secp_ctx);
     }
@@ -742,10 +737,10 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double eth_pipe_ns = chrono::duration<double, nano>(t_e1 - t_e0).count() / PIPE_ITERS;
 
         print_box_line("Comparativo de Pipeline de Endereço a partir de Chave Pública:");
-        print_box_line(format("  Bitcoin (Pubkey 33B -> Hash160)  : {:>8.2f} ns/op ({:>7.2f} kops/s)",
-                              btc_pipe_ns, 1e6 / btc_pipe_ns));
-        print_box_line(format("  Ethereum (Pubkey 64B -> Keccak)  : {:>8.2f} ns/op ({:>7.2f} kops/s)",
-                              eth_pipe_ns, 1e6 / eth_pipe_ns));
+        print_box_line(format("  Bitcoin (Pubkey 33B -> Hash160)  : {:>8.2f} ns/op ({:>7.2f} kops/s)", btc_pipe_ns,
+                              1e6 / btc_pipe_ns));
+        print_box_line(format("  Ethereum (Pubkey 64B -> Keccak)  : {:>8.2f} ns/op ({:>7.2f} kops/s)", eth_pipe_ns,
+                              1e6 / eth_pipe_ns));
         print_box_line(format("  Vantagem Ethereum                : {:>8.2f}x mais rápido no hash de endereço",
                               btc_pipe_ns / eth_pipe_ns));
 
@@ -778,7 +773,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double filter_pct = 100.0 * static_cast<double>(filtered) / static_cast<double>(DERIV_COUNT);
 
         print_box_line(format("Derivação Completa BIP-32/BIP-44 : {:>10} derivações", DERIV_COUNT));
-        print_box_line(format("Throughput de Verificação        : {:>10.2f} deriv/s ({:.2f} µs/chave)", d_rate, us_per_key));
+        print_box_line(
+            format("Throughput de Verificação        : {:>10.2f} deriv/s ({:.2f} µs/chave)", d_rate, us_per_key));
         print_box_line(format("Filtro Precoce C1-64             : {:>6.2f}% eliminadas antes de memcmp", filter_pct));
     }
     print_box_bottom(DEFAULT_INNER_WIDTH);
@@ -791,14 +787,13 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     {
         constexpr size_t PREFIX_LEN = 128;
         constexpr size_t SUFFIX_LEN = 16;
-        constexpr size_t BATCH      = 1u << 16;
+        constexpr size_t BATCH = 1u << 16;
 
         vector<uint8_t> prefix(PREFIX_LEN, 0x5A);
         vector<uint8_t> suffixes(BATCH * SUFFIX_LEN);
         for (size_t i = 0; i < BATCH; ++i) {
             for (size_t j = 0; j < SUFFIX_LEN; ++j) {
-                suffixes[i * SUFFIX_LEN + j] =
-                    static_cast<uint8_t>((i * 131u + j * 7u) & 0xFFu);
+                suffixes[i * SUFFIX_LEN + j] = static_cast<uint8_t>((i * 131u + j * 7u) & 0xFFu);
             }
         }
         vector<uint8_t> out_a(BATCH * 64), out_b(BATCH * 64);
@@ -826,18 +821,18 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double b_khs = BATCH / b_sec / 1000.0;
         const double speedup = (b_sec > 0.0) ? (a_sec / b_sec) : 1.0;
 
-        print_box_line(format("Rota SIMD do host               : {} ({} lanes)",
-                              crypto::SHA512::simd_name(), crypto::SHA512::simd_lanes()));
+        print_box_line(format("Rota SIMD do host               : {} ({} lanes)", crypto::SHA512::simd_name(),
+                              crypto::SHA512::simd_lanes()));
         print_box_line(format("Conformidade rota A vs B        : {}",
                               match ? "\033[92m[BIT-EXACT MATCH]\033[0m" : "\033[91m[DIVERGENCIA]\033[0m"));
         print_box_line(format("Prefixo / Sufixo                : {} B / {} B", PREFIX_LEN, SUFFIX_LEN));
         print_box_line(format("Amostras                        : {} hashes", BATCH));
-        print_box_line(format("Rota A (streaming one-shot)     : {:>10.2f} kh/s ({:>7.1f} ns/hash)",
-                              a_khs, (a_sec / BATCH) * 1e9));
-        print_box_line(format("Rota B (preset + complete)      : {:>10.2f} kh/s ({:>7.1f} ns/hash)",
-                              b_khs, (b_sec / BATCH) * 1e9));
-        print_box_line(format("Ganho do template               : {:>+9.1f}% ({:.2f}x speedup)",
-                              (speedup - 1.0) * 100.0, speedup));
+        print_box_line(format("Rota A (streaming one-shot)     : {:>10.2f} kh/s ({:>7.1f} ns/hash)", a_khs,
+                              (a_sec / BATCH) * 1e9));
+        print_box_line(format("Rota B (preset + complete)      : {:>10.2f} kh/s ({:>7.1f} ns/hash)", b_khs,
+                              (b_sec / BATCH) * 1e9));
+        print_box_line(
+            format("Ganho do template               : {:>+9.1f}% ({:.2f}x speedup)", (speedup - 1.0) * 100.0, speedup));
     }
     print_box_bottom(DEFAULT_INNER_WIDTH);
     println();
@@ -851,7 +846,8 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     print_box_line(format("Vazão Física CPU (SIMD {}) : {:>10.2f} keys/s", arch_label, cpu_peak_rate));
     if (gpu_peak_rate > 0.0) {
         print_box_line(format("Vazão Física GPU (OpenCL)       : {:>10.2f} keys/s", gpu_peak_rate));
-        print_box_line(format("Vazão Híbrida Combinada (CPU+GPU): {:>9.2f} keys/s (100% de uso de hardware)", hybrid_peak_rate));
+        print_box_line(
+            format("Vazão Híbrida Combinada (CPU+GPU): {:>9.2f} keys/s (100% de uso de hardware)", hybrid_peak_rate));
     } else {
         print_box_line("Vazão Física GPU (OpenCL)       : [N/A - Dispositivo não disponível]");
         print_box_line(format("Vazão Máxima do Sistema         : {:>10.2f} keys/s", cpu_peak_rate));
@@ -860,8 +856,10 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     print_box_separator(DEFAULT_INNER_WIDTH);
     const double eff_rate_12w = hybrid_peak_rate * 16.0;
     const double eff_rate_24w = hybrid_peak_rate * 256.0;
-    print_box_line(format("Throughput Efetivo (12 Palavras): {:>10.2f} Kkeys/s (com poda analítica 16x)", eff_rate_12w / 1e3));
-    print_box_line(format("Throughput Efetivo (24 Palavras): {:>10.2f} Mkeys/s (com poda analítica 256x)", eff_rate_24w / 1e6));
+    print_box_line(
+        format("Throughput Efetivo (12 Palavras): {:>10.2f} Kkeys/s (com poda analítica 16x)", eff_rate_12w / 1e3));
+    print_box_line(
+        format("Throughput Efetivo (24 Palavras): {:>10.2f} Mkeys/s (com poda analítica 256x)", eff_rate_24w / 1e6));
 
     print_box_separator(DEFAULT_INNER_WIDTH);
     print_box_line("Projeção de Tempo de Busca (Modo Híbrido / Capacidade Máxima):");
@@ -869,18 +867,17 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     println("│ Incógnitas  │   Espaço Bruto   │ Lote Efet. (12w) │   ETA (12w)    │   ETA (24w)   │");
     println("├─────────────┼──────────────────┼──────────────────┼────────────────┼───────────────┤");
 
-    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │",
-            "1 palavra", "2.048", "128", "< 0.01 s", "< 0.01 s");
+    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │", "1 palavra", "2.048", "128", "< 0.01 s", "< 0.01 s");
 
     const double eta_12w_2 = (hybrid_peak_rate > 0) ? (262144.0 / hybrid_peak_rate) : 0.0;
-    const double eta_24w_2 = (hybrid_peak_rate > 0) ? (16384.0  / hybrid_peak_rate) : 0.0;
-    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │",
-            "2 palavras", "4.194.304", "262.144", format_eta(eta_12w_2), format_eta(eta_24w_2));
+    const double eta_24w_2 = (hybrid_peak_rate > 0) ? (16384.0 / hybrid_peak_rate) : 0.0;
+    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │", "2 palavras", "4.194.304", "262.144",
+            format_eta(eta_12w_2), format_eta(eta_24w_2));
 
     const double eta_12w_3 = (hybrid_peak_rate > 0) ? (536870912.0 / hybrid_peak_rate) : 0.0;
-    const double eta_24w_3 = (hybrid_peak_rate > 0) ? (33554432.0  / hybrid_peak_rate) : 0.0;
-    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │",
-            "3 palavras", "8.589.934.592", "536.870.912", format_eta(eta_12w_3), format_eta(eta_24w_3));
+    const double eta_24w_3 = (hybrid_peak_rate > 0) ? (33554432.0 / hybrid_peak_rate) : 0.0;
+    println("│ {:<11} │ {:>16} │ {:>16} │ {:>14} │ {:>13} │", "3 palavras", "8.589.934.592", "536.870.912",
+            format_eta(eta_12w_3), format_eta(eta_24w_3));
 
     println("╰─────────────┴──────────────────┴──────────────────┴────────────────┴───────────────╯");
     println();
@@ -891,16 +888,19 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     print_box_top("RESUMO EXECUTIVO CONSOLIDADO DE PERFORMANCE & RECOMENDAÇÕES", DEFAULT_INNER_WIDTH);
     print_box_line("1. PODA MATEMÁTICA ANALÍTICA:", DEFAULT_INNER_WIDTH);
     print_box_line("   - Dedução Cascata (w_N-1 = ?): Reduz espaço em 16x (12w) a 256x (24w).", DEFAULT_INNER_WIDTH);
-    print_box_line("   - Restrição Não-Repetição (--distinct): Subtrai de 10 a 23 palavras por roda.", DEFAULT_INNER_WIDTH);
+    print_box_line("   - Restrição Não-Repetição (--distinct): Subtrai de 10 a 23 palavras por roda.",
+                   DEFAULT_INNER_WIDTH);
     print_box_line("   - Checksum SHA-NI: Milhões de verificações/s com custo quase nulo.", DEFAULT_INNER_WIDTH);
     print_box_line("2. ARQUITETURA COMPUTACIONAL:", DEFAULT_INNER_WIDTH);
     print_box_line("   - O gargalo primário é o PBKDF2 (2048 rodadas HMAC-SHA512).", DEFAULT_INNER_WIDTH);
-    print_box_line("   - O filtro precoce C1 elimina 99.999% da sobrecarga de verificação de chave.", DEFAULT_INNER_WIDTH);
+    print_box_line("   - O filtro precoce C1 elimina 99.999% da sobrecarga de verificação de chave.",
+                   DEFAULT_INNER_WIDTH);
     print_box_line("3. RECOMENDAÇÃO DE HARDWARE:", DEFAULT_INNER_WIDTH);
     if (!devices.empty()) {
         if (gpu_peak_rate > 0 && cpu_peak_rate > 0) {
             print_box_line(format("   - Modo Híbrido: Combina CPU + GPU para vazão de pico ({:.2f} Kkeys/s).",
-                                  hybrid_peak_rate / 1e3), DEFAULT_INNER_WIDTH);
+                                  hybrid_peak_rate / 1e3),
+                           DEFAULT_INNER_WIDTH);
         }
         print_box_line("   - Use '--hybrid' ou '--gpu' para cargas com espaço massivo (K >= 3).", DEFAULT_INNER_WIDTH);
         print_box_line("   - Use CPU SIMD (padrão) para buscas instantâneas (1 ou 2 incógnitas).", DEFAULT_INNER_WIDTH);
@@ -913,4 +913,4 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     return 0;
 }
 
-} // namespace cryptowords
+}  // namespace cryptowords

@@ -301,4 +301,4 @@ __kernel void pbkdf2_batch(
 }
 )OPENCL";
 
-} // namespace cryptowords::gpu
+}  // namespace cryptowords::gpu

@@ -10,13 +10,14 @@
 #include <CL/cl.h>
 #endif
 
-#include "gpu_info.hpp"
 #include <array>
-#include <vector>
-#include <string>
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
+
+#include "gpu_info.hpp"
 
 namespace cryptowords {
 
@@ -32,50 +33,44 @@ struct GpuExecutionMetrics {
 };
 
 class GPUEngine {
-public:
+   public:
     static GPUEngine& get_instance() {
         static GPUEngine instance;
         return instance;
     }
 
-    bool init(int platform_id = -1, int device_id = -1, size_t batch_size = 0, const uint64_t* salt_block = nullptr, bool silent = false, size_t slot_size = 256);
+    bool init(int platform_id = -1, int device_id = -1, size_t batch_size = 0, const uint64_t* salt_block = nullptr,
+              bool silent = false, size_t slot_size = 256);
     void cleanup();
     size_t get_optimal_batch_size() const { return max_batch_size_; }
     size_t get_slot_size() const { return slot_size_; }
     const gpu::DiscoveredDevice* get_active_device() const {
         return active_device_.has_value() ? &active_device_.value() : nullptr;
     }
-    
+
     static constexpr size_t NUM_SLOTS = 3;
 
-    bool pbkdf2_batch(const std::vector<uint8_t>& passwords, 
-                      const std::vector<uint32_t>& pass_lens, 
-                      std::vector<uint8_t>& out_seeds,
-                      uint32_t num_hashes);
+    bool pbkdf2_batch(const std::vector<uint8_t>& passwords, const std::vector<uint32_t>& pass_lens,
+                      std::vector<uint8_t>& out_seeds, uint32_t num_hashes);
 
-    bool pbkdf2_batch_profiled(const std::vector<uint8_t>& passwords, 
-                               const std::vector<uint32_t>& pass_lens, 
-                               std::vector<uint8_t>& out_seeds,
-                               uint32_t num_hashes,
-                               GpuExecutionMetrics& metrics);
+    bool pbkdf2_batch_profiled(const std::vector<uint8_t>& passwords, const std::vector<uint32_t>& pass_lens,
+                               std::vector<uint8_t>& out_seeds, uint32_t num_hashes, GpuExecutionMetrics& metrics);
 
     // Métodos do pipeline assíncrono Triple-Buffering
-    bool enqueue_batch_async(size_t slot,
-                             const std::vector<uint8_t>& passwords,
-                             const std::vector<uint32_t>& pass_lens,
-                             uint32_t num_hashes,
-                             uint8_t* out_seeds_ptr);
+    bool enqueue_batch_async(size_t slot, const std::vector<uint8_t>& passwords, const std::vector<uint32_t>& pass_lens,
+                             uint32_t num_hashes, uint8_t* out_seeds_ptr);
 
     bool wait_batch(size_t slot);
     bool is_slot_in_flight(size_t slot) const {
-        if (slot >= NUM_SLOTS) return false;
+        if (slot >= NUM_SLOTS)
+            return false;
         std::lock_guard<std::mutex> lock(mu_);
         return slot_in_flight_[slot];
     }
     bool is_unified_memory() const { return is_unified_memory_; }
     size_t get_local_work_size() const { return local_work_size_; }
 
-private:
+   private:
     GPUEngine() = default;
     ~GPUEngine();
 
@@ -109,4 +104,4 @@ private:
     size_t slot_size_ = 256;
 };
 
-} // namespace cryptowords
+}  // namespace cryptowords

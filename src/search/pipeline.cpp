@@ -1,20 +1,20 @@
 #include "../../include/search/pipeline.hpp"
-#include "../../include/simd/factory.hpp"
-#include "../../include/gpu/gpu_batch_processor.hpp"
-#include "../../include/crypto/bip39.hpp"
-#include "../../include/crypto/pbkdf2_simd.hpp"
-#include "../../include/cli/ui.hpp"
 
 #include <cstring>
 #include <iostream>
 #include <print>
 
+#include "../../include/cli/ui.hpp"
+#include "../../include/crypto/bip39.hpp"
+#include "../../include/crypto/pbkdf2_simd.hpp"
+#include "../../include/gpu/gpu_batch_processor.hpp"
+#include "../../include/simd/factory.hpp"
+
 using namespace cryptowords::ui;
 
 namespace cryptowords {
 
-ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemonics& opt)
-    : cfg_(cfg), opt_(opt) {
+ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemonics& opt) : cfg_(cfg), opt_(opt) {
     odometer_ = std::make_unique<GenericOdometer>(cfg_.use_hybrid || cfg_.use_gpu, cfg_.gpu_batch);
 
     if (cfg_.use_hybrid) {
@@ -23,13 +23,20 @@ ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemon
         cpu_processor_ = make_simd_processor(cfg_, opt_, arch);
         std::string cpu_name;
         switch (arch) {
-            case SimdArch::AVX512: cpu_name = "AVX512 (16-way)"; break;
-            case SimdArch::AVX2:   cpu_name = "AVX2 (8-way)";    break;
+            case SimdArch::AVX512:
+                cpu_name = "AVX512 (16-way)";
+                break;
+            case SimdArch::AVX2:
+                cpu_name = "AVX2 (8-way)";
+                break;
             case SimdArch::SSE:
-            default:               cpu_name = "SSE4.1 (4-way)";  break;
+            default:
+                cpu_name = "SSE4.1 (4-way)";
+                break;
         }
         const auto* dev = GPUEngine::get_instance().get_active_device();
-        std::string gpu_name = dev ? (dev->device_name + " [" + std::to_string(dev->compute_units) + " CUs]") : "OpenCL GPU";
+        std::string gpu_name =
+            dev ? (dev->device_name + " [" + std::to_string(dev->compute_units) + " CUs]") : "OpenCL GPU";
         arch_name_ = "Híbrido Cooperativo (GPU: " + gpu_name + " + CPU: " + cpu_name + ")";
     } else if (cfg_.use_gpu) {
         processor_ = std::make_unique<GPUBatchProcessor>(cfg_);
@@ -44,10 +51,16 @@ ExecutionPipeline::ExecutionPipeline(const AppConfig& cfg, const OptimizedMnemon
         processor_ = make_simd_processor(cfg_, opt_, arch);
 
         switch (arch) {
-            case SimdArch::AVX512: arch_name_ = "AVX512 (16-way)"; break;
-            case SimdArch::AVX2:   arch_name_ = "AVX2 (8-way)";    break;
+            case SimdArch::AVX512:
+                arch_name_ = "AVX512 (16-way)";
+                break;
+            case SimdArch::AVX2:
+                arch_name_ = "AVX2 (8-way)";
+                break;
             case SimdArch::SSE:
-            default:               arch_name_ = "SSE4.1 (4-way)";  break;
+            default:
+                arch_name_ = "SSE4.1 (4-way)";
+                break;
         }
     }
 }
@@ -57,12 +70,11 @@ static const secp256k1_context* get_shared_secp256k1_context() {
     static const secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     return ctx;
 }
-} // namespace
+}  // namespace
 
 ExecutionPipeline::~ExecutionPipeline() = default;
 
-std::unique_ptr<PipelineThreadContext>
-ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) {
+std::unique_ptr<PipelineThreadContext> ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) {
     auto ctx = std::make_unique<PipelineThreadContext>();
     ctx->thread_idx = thread_idx;
     ctx->ctx = get_shared_secp256k1_context();
@@ -76,13 +88,14 @@ ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) 
     }
 
     std::string salt = "mnemonic";
-    if (!cfg_.passphrase.empty()) salt += cfg_.passphrase;
+    if (!cfg_.passphrase.empty())
+        salt += cfg_.passphrase;
     ctx->salt_len = std::min(salt.size(), sizeof(ctx->salt_buf));
     std::memcpy(ctx->salt_buf, salt.data(), ctx->salt_len);
 
     uint8_t s_buf[128] = {};
     std::memcpy(s_buf, salt.data(), ctx->salt_len);
-    s_buf[ctx->salt_len]     = 0;
+    s_buf[ctx->salt_len] = 0;
     s_buf[ctx->salt_len + 1] = 0;
     s_buf[ctx->salt_len + 2] = 0;
     s_buf[ctx->salt_len + 3] = 1;
@@ -95,7 +108,8 @@ ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) 
     }
     ctx->salt_block64[15] = static_cast<uint64_t>(128 + ctx->salt_len + 4) * 8;
     precompute_kw_salt(ctx->salt_block64, ctx->kw_salt);
-    pbkdf2_simd_detail::precompute_kw_salt_tables(ctx->kw_salt, ctx->kw_salt_sse, ctx->kw_salt_avx2, ctx->kw_salt_avx512);
+    pbkdf2_simd_detail::precompute_kw_salt_tables(ctx->kw_salt, ctx->kw_salt_sse, ctx->kw_salt_avx2,
+                                                  ctx->kw_salt_avx512);
 
     if (opt_.slice0_static_len > 0) {
         for (size_t b = 0; b < 16; ++b) {
@@ -108,12 +122,8 @@ ExecutionPipeline::create_thread_context(size_t thread_idx, size_t num_threads) 
     return ctx;
 }
 
-void ExecutionPipeline::process(PipelineThreadContext& ctx,
-                                std::atomic<bool>& found,
-                                std::atomic<uint64_t>& tested,
-                                std::atomic<uint64_t>& valid,
-                                std::mutex& mutex,
-                                bool& success,
+void ExecutionPipeline::process(PipelineThreadContext& ctx, std::atomic<bool>& found, std::atomic<uint64_t>& tested,
+                                std::atomic<uint64_t>& valid, std::mutex& mutex, bool& success,
                                 std::vector<uint16_t>& result) {
     if (cfg_.use_hybrid) {
         if (ctx.thread_idx == 0) {
@@ -126,12 +136,8 @@ void ExecutionPipeline::process(PipelineThreadContext& ctx,
     }
 }
 
-void ExecutionPipeline::flush(PipelineThreadContext& ctx,
-                              std::atomic<bool>& found,
-                              std::atomic<uint64_t>& tested,
-                              std::atomic<uint64_t>& valid,
-                              std::mutex& mutex,
-                              bool& success,
+void ExecutionPipeline::flush(PipelineThreadContext& ctx, std::atomic<bool>& found, std::atomic<uint64_t>& tested,
+                              std::atomic<uint64_t>& valid, std::mutex& mutex, bool& success,
                               std::vector<uint16_t>& result) {
     if (cfg_.use_hybrid) {
         if (ctx.thread_idx == 0) {
@@ -148,14 +154,18 @@ void ExecutionPipeline::verify_and_print_result(const std::vector<uint16_t>& mne
     const auto* ctx = get_shared_secp256k1_context();
     const char* pp = cfg_.passphrase.empty() ? nullptr : cfg_.passphrase.data();
     auto mnemonic_span = std::span<const uint16_t>(mnemonic);
-    const std::string addr = (cfg_.coin == CoinTarget::BTC)
-        ? Bip39Deriver::derive_btc_address(ctx, mnemonic, cfg_.wordlist, pp, cfg_.passphrase.size(), cfg_.pbkdf2_rounds, cfg_.separator)
-        : Bip39Deriver::derive_eth_address(*ctx, mnemonic_span, cfg_.wordlist, pp, cfg_.passphrase.size(), cfg_.pbkdf2_rounds, cfg_.separator);
+    const std::string addr =
+        (cfg_.coin == CoinTarget::BTC)
+            ? Bip39Deriver::derive_btc_address(ctx, mnemonic, cfg_.wordlist, pp, cfg_.passphrase.size(),
+                                               cfg_.pbkdf2_rounds, cfg_.separator)
+            : Bip39Deriver::derive_eth_address(*ctx, mnemonic_span, cfg_.wordlist, pp, cfg_.passphrase.size(),
+                                               cfg_.pbkdf2_rounds, cfg_.separator);
 
     std::string mnem_str;
     for (size_t i = 0; i < mnemonic.size(); ++i) {
         mnem_str += cfg_.wordlist[mnemonic[i]];
-        if (i + 1 < mnemonic.size()) mnem_str += cfg_.separator;
+        if (i + 1 < mnemonic.size())
+            mnem_str += cfg_.separator;
     }
 
     std::println("\n[!] CHAVE ENCONTRADA!");
@@ -168,4 +178,4 @@ void ExecutionPipeline::verify_and_print_result(const std::vector<uint16_t>& mne
     std::println();
 }
 
-} // namespace cryptowords
+}  // namespace cryptowords

@@ -1,11 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
+#include <format>
 #include <print>
 #include <string>
 #include <string_view>
-#include <format>
-#include <algorithm>
-#include <cstdint>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -32,7 +32,8 @@ inline std::string format_grouped_digits(std::string_view s) {
 }
 
 inline std::string format_num(double val) {
-    if (val < 0.0) return "0";
+    if (val < 0.0)
+        return "0";
     if (val >= 1e19) {
         return std::format("{:.3e}", val);
     }
@@ -41,7 +42,8 @@ inline std::string format_num(double val) {
 
 template <unsigned char N>
 inline std::string format_num(const UInt<N>& val) {
-    if (val.eqz()) return "0";
+    if (val.eqz())
+        return "0";
     return format_grouped_digits(val.to_string());
 }
 
@@ -52,7 +54,8 @@ inline size_t visible_length(std::string_view s) {
         if (s[i] == '\033') {
             in_escape = true;
         } else if (in_escape) {
-            if ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z')) in_escape = false;
+            if ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z'))
+                in_escape = false;
         } else {
             // Conta codepoints UTF-8 (ignora bytes de continuação 10xxxxxx)
             unsigned char c = static_cast<unsigned char>(s[i]);
@@ -123,7 +126,8 @@ inline std::string format_speed(double keys_per_sec) {
 }
 
 inline std::string format_eta(double seconds) {
-    if (seconds < 0 || seconds > 86400 * 365) return "--:--";
+    if (seconds < 0 || seconds > 86400 * 365)
+        return "--:--";
     int total = static_cast<int>(seconds);
     int s = total % 60;
     int m = (total / 60) % 60;
@@ -134,4 +138,4 @@ inline std::string format_eta(double seconds) {
     return std::format("{:02d}:{:02d}", m, s);
 }
 
-} // namespace cryptowords::ui
+}  // namespace cryptowords::ui

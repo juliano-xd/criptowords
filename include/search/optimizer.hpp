@@ -3,6 +3,6 @@
 #include "plan.hpp"
 
 class SearchOptimizer {
-public:
+   public:
     static OptimizedMnemonics build_plan(const AppConfig& cfg);
 };

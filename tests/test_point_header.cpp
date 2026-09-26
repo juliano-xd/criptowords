@@ -1,10 +1,11 @@
-#include <iostream>
+#include <secp256k1.h>
+
 #include <cassert>
 #include <cstring>
+#include <iostream>
 #include <random>
-#include <secp256k1.h>
-#include "include/crypto/secp256k1_point.hpp"
 
+#include "include/crypto/secp256k1_point.hpp"
 
 int main() {
     auto* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
@@ -15,7 +16,8 @@ int main() {
 
     for (int t = 0; t < TEST_COUNT; ++t) {
         uint8_t seckey[32];
-        for (int i = 0; i < 32; ++i) seckey[i] = static_cast<uint8_t>(rng());
+        for (int i = 0; i < 32; ++i)
+            seckey[i] = static_cast<uint8_t>(rng());
         seckey[0] &= 0x7F;
 
         // Ground truth via libsecp256k1

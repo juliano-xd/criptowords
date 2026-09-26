@@ -1,15 +1,16 @@
 #pragma once
-#include "../search/context.hpp"
-#include "../search/plan.hpp"
-#include "../search/processor.hpp"
-#include "../crypto/bip39.hpp"
-#include "gpu_engine.hpp"
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <print>
 #include <thread>
-#include <condition_variable>
+
+#include "../crypto/bip39.hpp"
+#include "../search/context.hpp"
+#include "../search/plan.hpp"
+#include "../search/processor.hpp"
+#include "gpu_engine.hpp"
 
 namespace cryptowords {
 
@@ -39,7 +40,7 @@ class GpuVerificationPool {
     uint64_t job_id_ = 0;
     bool stop_ = false;
 
-public:
+   public:
     static GpuVerificationPool& get_instance() {
         static GpuVerificationPool pool;
         return pool;
@@ -56,33 +57,37 @@ public:
                     Job job;
                     {
                         std::unique_lock<std::mutex> lock(mu_);
-                        cv_work_.wait(lock, [this, last_id]() {
-                            return stop_ || job_id_ > last_id;
-                        });
-                        if (stop_) return;
+                        cv_work_.wait(lock, [this, last_id]() { return stop_ || job_id_ > last_id; });
+                        if (stop_)
+                            return;
                         last_id = job_id_;
                         job = current_job_;
                     }
 
                     const size_t start_b = w * job.chunk;
-                    const size_t end_b   = std::min(start_b + job.chunk, job.total_keys);
+                    const size_t end_b = std::min(start_b + job.chunk, job.total_keys);
 
                     if (start_b < end_b) {
                         for (size_t b = start_b; b < end_b; ++b) {
-                            if (job.found->load(std::memory_order_relaxed)) break;
+                            if (job.found->load(std::memory_order_relaxed))
+                                break;
 
                             std::array<u8, 64> seed64;
                             std::memcpy(seed64.data(), job.base_seed_ptr + b * 64, 64);
-                            bool is_match = (job.coin == CoinTarget::BTC)
-                                ? Bip39Deriver::check_btc_target_from_seed(job.ctx, job.base_seed_ptr + b * 64, job.decoded_target, job.target_fast_hash)
-                                : Bip39Deriver::check_eth_target_from_seed(*job.ctx, seed64, job.decoded_target, job.target_fast_hash);
+                            bool is_match =
+                                (job.coin == CoinTarget::BTC)
+                                    ? Bip39Deriver::check_btc_target_from_seed(job.ctx, job.base_seed_ptr + b * 64,
+                                                                               job.decoded_target, job.target_fast_hash)
+                                    : Bip39Deriver::check_eth_target_from_seed(*job.ctx, seed64, job.decoded_target,
+                                                                               job.target_fast_hash);
 
                             if (is_match) {
                                 bool expected = false;
                                 if (job.found->compare_exchange_strong(expected, true)) {
                                     std::lock_guard<std::mutex> lock(*job.result_mutex);
                                     *job.success = true;
-                                    job.result_mnemonic->assign(job.base_mnem_ptr + b * 24, job.base_mnem_ptr + b * 24 + job.mlen);
+                                    job.result_mnemonic->assign(job.base_mnem_ptr + b * 24,
+                                                                job.base_mnem_ptr + b * 24 + job.mlen);
                                 }
                                 break;
                             }
@@ -107,24 +112,28 @@ public:
         }
         cv_work_.notify_all();
         for (auto& t : workers_) {
-            if (t.joinable()) t.join();
+            if (t.joinable())
+                t.join();
         }
     }
 
-    void verify(const uint8_t* base_seed_ptr, const uint16_t* base_mnem_ptr, size_t mlen,
-                const secp256k1_context* ctx, const uint8_t* decoded_target, uint64_t target_fast_hash,
-                CoinTarget coin, std::atomic<bool>& found, std::mutex& result_mutex,
-                bool& success, std::vector<uint16_t>& result_mnemonic, size_t total_keys) {
-        if (total_keys == 0) return;
+    void verify(const uint8_t* base_seed_ptr, const uint16_t* base_mnem_ptr, size_t mlen, const secp256k1_context* ctx,
+                const uint8_t* decoded_target, uint64_t target_fast_hash, CoinTarget coin, std::atomic<bool>& found,
+                std::mutex& result_mutex, bool& success, std::vector<uint16_t>& result_mnemonic, size_t total_keys) {
+        if (total_keys == 0)
+            return;
         const size_t num_w = workers_.size();
         if (total_keys <= 2048 || num_w <= 1) {
             for (size_t b = 0; b < total_keys; ++b) {
-                if (found.load(std::memory_order_relaxed)) break;
+                if (found.load(std::memory_order_relaxed))
+                    break;
                 std::array<u8, 64> seed64;
                 std::memcpy(seed64.data(), base_seed_ptr + b * 64, 64);
-                bool is_match = (coin == CoinTarget::BTC)
-                    ? Bip39Deriver::check_btc_target_from_seed(ctx, base_seed_ptr + b * 64, decoded_target, target_fast_hash)
-                    : Bip39Deriver::check_eth_target_from_seed(*ctx, seed64, decoded_target, target_fast_hash);
+                bool is_match =
+                    (coin == CoinTarget::BTC)
+                        ? Bip39Deriver::check_btc_target_from_seed(ctx, base_seed_ptr + b * 64, decoded_target,
+                                                                   target_fast_hash)
+                        : Bip39Deriver::check_eth_target_from_seed(*ctx, seed64, decoded_target, target_fast_hash);
                 if (is_match) {
                     bool expected = false;
                     if (found.compare_exchange_strong(expected, true)) {
@@ -156,9 +165,7 @@ public:
         job_id_++;
         cv_work_.notify_all();
 
-        cv_done_.wait(lock, [this]() {
-            return active_workers_ == 0;
-        });
+        cv_done_.wait(lock, [this]() { return active_workers_ == 0; });
     }
 };
 
@@ -166,21 +173,22 @@ class GPUBatchProcessor : public IBatchProcessor {
     size_t batch_capacity_ = 4096;
     size_t slot_size_ = 256;
 
-public:
+   public:
     explicit GPUBatchProcessor(const AppConfig& cfg) {
         size_t opt_batch = GPUEngine::get_instance().get_optimal_batch_size();
         batch_capacity_ = (cfg.gpu_batch > 0) ? cfg.gpu_batch : opt_batch;
-        if (batch_capacity_ < 512) batch_capacity_ = 512;
+        if (batch_capacity_ < 512)
+            batch_capacity_ = 512;
         size_t wg = GPUEngine::get_instance().get_local_work_size();
-        if (wg == 0) wg = 64;
+        if (wg == 0)
+            wg = 64;
         batch_capacity_ = ((batch_capacity_ + wg - 1) / wg) * wg;
 
         slot_size_ = GPUEngine::get_instance().get_slot_size();
         if (slot_size_ == 0) {
-            bool is_cjk = (cfg.language == "ja" || cfg.language == "japanese" ||
-                           cfg.language == "ko" || cfg.language == "korean" ||
-                           cfg.language.starts_with("zh") || cfg.language.starts_with("chinese") ||
-                           cfg.separator == "\xE3\x80\x80");
+            bool is_cjk = (cfg.language == "ja" || cfg.language == "japanese" || cfg.language == "ko" ||
+                           cfg.language == "korean" || cfg.language.starts_with("zh") ||
+                           cfg.language.starts_with("chinese") || cfg.separator == "\xE3\x80\x80");
             slot_size_ = (is_cjk || cfg.mnemonics.size() >= 21) ? 512 : (cfg.mnemonics.size() > 12 ? 256 : 128);
         }
 
@@ -200,10 +208,10 @@ public:
     static constexpr size_t NUM_SLOTS = 3;
 
     struct GPUSlotData {
-        std::vector<uint16_t> mnem_batch; // [batch_capacity_ * 24]
-        std::vector<uint8_t> pw_batch;    // [batch_capacity_ * slot_size_]
-        std::vector<uint32_t> pw_lens;    // [batch_capacity_]
-        std::vector<uint8_t> seed_out;    // [batch_capacity_ * 64]
+        std::vector<uint16_t> mnem_batch;  // [batch_capacity_ * 24]
+        std::vector<uint8_t> pw_batch;     // [batch_capacity_ * slot_size_]
+        std::vector<uint32_t> pw_lens;     // [batch_capacity_]
+        std::vector<uint8_t> seed_out;     // [batch_capacity_ * 64]
         size_t current_count = 0;
         bool in_flight = false;
     };
@@ -215,11 +223,13 @@ public:
 
     thread_local static GPUContext gpu_ctx;
 
-    void reap_and_verify_slot(size_t slot, PipelineThreadContext &ctx, const AppConfig& cfg, const OptimizedMnemonics& opt,
-                              std::atomic<bool>& found, std::atomic<uint64_t>& tested_count, std::atomic<uint64_t>& valid_count,
+    void reap_and_verify_slot(size_t slot, PipelineThreadContext& ctx, const AppConfig& cfg,
+                              const OptimizedMnemonics& opt, std::atomic<bool>& found,
+                              std::atomic<uint64_t>& tested_count, std::atomic<uint64_t>& valid_count,
                               std::mutex& result_mutex, bool& success, std::vector<uint16_t>& result_mnemonic) {
         auto& s_data = gpu_ctx.slots[slot];
-        if (!s_data.in_flight || s_data.current_count == 0) return;
+        if (!s_data.in_flight || s_data.current_count == 0)
+            return;
 
         GPUEngine& engine = GPUEngine::get_instance();
         bool ok = engine.wait_batch(slot);
@@ -238,11 +248,9 @@ public:
 
         const size_t total_keys = s_data.current_count;
 
-        GpuVerificationPool::get_instance().verify(
-            base_seed_ptr, base_mnem_ptr, mlen, ctx.ctx,
-            ctx.decoded_target, opt.target_fast_hash64,
-            cfg.coin, found, result_mutex, success,
-            result_mnemonic, total_keys);
+        GpuVerificationPool::get_instance().verify(base_seed_ptr, base_mnem_ptr, mlen, ctx.ctx, ctx.decoded_target,
+                                                   opt.target_fast_hash64, cfg.coin, found, result_mutex, success,
+                                                   result_mnemonic, total_keys);
 
         tested_count.fetch_add(s_data.current_count, std::memory_order_relaxed);
         // Só podemos contar como "checksum OK" as chaves que passaram pelo filtro
@@ -255,12 +263,13 @@ public:
         s_data.current_count = 0;
     }
 
-public:
+   public:
     void enqueue_and_process(PipelineThreadContext& ctx, const AppConfig& cfg, const OptimizedMnemonics& opt,
-                             std::atomic<bool>& found, std::atomic<uint64_t>& tested_count, std::atomic<uint64_t>& valid_count,
-                             std::mutex& result_mutex, bool& success, std::vector<uint16_t>& result_mnemonic) override {
-
-        if (found.load(std::memory_order_relaxed)) return;
+                             std::atomic<bool>& found, std::atomic<uint64_t>& tested_count,
+                             std::atomic<uint64_t>& valid_count, std::mutex& result_mutex, bool& success,
+                             std::vector<uint16_t>& result_mnemonic) override {
+        if (found.load(std::memory_order_relaxed))
+            return;
 
         size_t mlen = opt.base_mnemonic.size();
 
@@ -272,16 +281,21 @@ public:
                 uint16_t base_word = ctx.current_ids[mlen - 1];
                 for (size_t x = 0; x < num_last_words; ++x) {
                     uint16_t syn = base_word | x;
-                    if (!opt.allowed_last_words[syn]) continue;
+                    if (!opt.allowed_last_words[syn])
+                        continue;
                     ctx.current_ids[mlen - 1] = syn;
-                    if (cryptowords::Bip39Deriver::verify_checksum(std::span<const uint16_t>(ctx.current_ids.data(), mlen))) {
+                    if (cryptowords::Bip39Deriver::verify_checksum(
+                            std::span<const uint16_t>(ctx.current_ids.data(), mlen))) {
                         found_valid = true;
                         break;
                     }
                 }
-                if (!found_valid) return;
+                if (!found_valid)
+                    return;
             } else {
-                if (!cryptowords::Bip39Deriver::verify_checksum(std::span<const uint16_t>(ctx.current_ids.data(), mlen))) return;
+                if (!cryptowords::Bip39Deriver::verify_checksum(
+                        std::span<const uint16_t>(ctx.current_ids.data(), mlen)))
+                    return;
             }
         }
 
@@ -295,8 +309,8 @@ public:
             cur_data.seed_out.resize(batch_capacity_ * 64);
             if (opt.prefix_words > 0 && !opt.prefix_str.empty()) {
                 for (size_t k = 0; k < batch_capacity_; ++k) {
-                    std::memcpy(cur_data.pw_batch.data() + k * slot_size_,
-                                opt.prefix_str.data(), opt.prefix_str.size());
+                    std::memcpy(cur_data.pw_batch.data() + k * slot_size_, opt.prefix_str.data(),
+                                opt.prefix_str.size());
                 }
             }
         }
@@ -333,7 +347,8 @@ public:
         if (cur_data.current_count >= batch_capacity_) {
             GPUEngine& engine = GPUEngine::get_instance();
             // 1. Enfileira o lote atual na GPU de forma assíncrona (com cópia DMA encadeada)
-            engine.enqueue_batch_async(cur_slot, cur_data.pw_batch, cur_data.pw_lens, static_cast<uint32_t>(cur_data.current_count), cur_data.seed_out.data());
+            engine.enqueue_batch_async(cur_slot, cur_data.pw_batch, cur_data.pw_lens,
+                                       static_cast<uint32_t>(cur_data.current_count), cur_data.seed_out.data());
             cur_data.in_flight = true;
 
             // 2. Alterna para o próximo slot (Triple-Buffering)
@@ -342,7 +357,8 @@ public:
 
             // 3. Se o próximo slot já estava executando na GPU, colhe e verifica seus alvos agora para liberá-lo!
             if (gpu_ctx.slots[next_slot].in_flight) {
-                reap_and_verify_slot(next_slot, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                reap_and_verify_slot(next_slot, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success,
+                                     result_mnemonic);
             }
         }
     }
@@ -350,7 +366,6 @@ public:
     void flush(PipelineThreadContext& ctx, const AppConfig& cfg, const OptimizedMnemonics& opt,
                std::atomic<bool>& found, std::atomic<uint64_t>& tested_count, std::atomic<uint64_t>& valid_count,
                std::mutex& result_mutex, bool& success, std::vector<uint16_t>& result_mnemonic) override {
-
         size_t cur_slot = gpu_ctx.active_slot;
         auto& cur_data = gpu_ctx.slots[cur_slot];
 
@@ -359,20 +374,21 @@ public:
             cur_data.current_count = 0;
         } else if (cur_data.current_count > 0) {
             GPUEngine& engine = GPUEngine::get_instance();
-            engine.enqueue_batch_async(cur_slot, cur_data.pw_batch, cur_data.pw_lens, static_cast<uint32_t>(cur_data.current_count), cur_data.seed_out.data());
+            engine.enqueue_batch_async(cur_slot, cur_data.pw_batch, cur_data.pw_lens,
+                                       static_cast<uint32_t>(cur_data.current_count), cur_data.seed_out.data());
             cur_data.in_flight = true;
         }
 
         // Colhe todos os slots em voo
         for (size_t s = 0; s < NUM_SLOTS; ++s) {
             if (gpu_ctx.slots[s].in_flight) {
-                reap_and_verify_slot(s, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success, result_mnemonic);
+                reap_and_verify_slot(s, ctx, cfg, opt, found, tested_count, valid_count, result_mutex, success,
+                                     result_mnemonic);
             }
         }
     }
-
 };
 
 inline thread_local GPUBatchProcessor::GPUContext GPUBatchProcessor::gpu_ctx;
 
-} // namespace cryptowords
+}  // namespace cryptowords

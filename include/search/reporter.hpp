@@ -3,6 +3,6 @@
 #include "plan.hpp"
 
 class SearchReporter {
-public:
+   public:
     static void print_plan(const OptimizedMnemonics& opt, const AppConfig& cfg);
 };

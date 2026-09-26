@@ -1,15 +1,17 @@
 #pragma once
 
+#include <endian.h>
+#include <immintrin.h>
+
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cassert>
 #include <charconv>
 #include <concepts>
 #include <cstddef>
-#include <endian.h>
-#include <iterator>
 #include <format>
-#include <immintrin.h>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -17,36 +19,26 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <cassert>
 #include <vector>
 
 #include "Division.hpp"
 #include "Multiplication.hpp"
 
-using u8  = unsigned char;
+using u8 = unsigned char;
 using u16 = unsigned short;
 using u32 = unsigned int;
 using u64 = unsigned long long;
 using u128 = unsigned __int128;
 
 #define FORCE_INLINE inline __attribute__((always_inline))
-#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-enum class Backend : bool {
-    Scalar = false,
-    SIMD   = true
-};
+enum class Backend : bool { Scalar = false, SIMD = true };
 
-enum class Endianness : int {
-    little = __ORDER_LITTLE_ENDIAN__,
-    big    = __ORDER_BIG_ENDIAN__
-};
+enum class Endianness : int { little = __ORDER_LITTLE_ENDIAN__, big = __ORDER_BIG_ENDIAN__ };
 
-enum class BitOrder : int {
-    LSB = 0,
-    MSB = 1
-};
+enum class BitOrder : int { LSB = 0, MSB = 1 };
 
 FORCE_INLINE constexpr BitOrder to_bit_order(Endianness e) noexcept {
     return (e == Endianness::big) ? BitOrder::MSB : BitOrder::LSB;
@@ -60,7 +52,7 @@ template <u8 N>
 class alignas(64) UInt {
     static_assert(N > 0 && N <= 255, "Lane count must be in [1, 255]");
 
-private:
+   private:
     Backend mode_ = Backend::Scalar;
     Endianness endian_ = static_cast<Endianness>(__BYTE_ORDER__);
 
@@ -82,12 +74,11 @@ private:
         bits.fill(0);
 
         for (std::size_t i = 0; i < M; ++i) {
-            const std::size_t bit_offset = (order == BitOrder::LSB)
-                ? i * W
-                : CAPACITY - ((i + 1) * W);
+            const std::size_t bit_offset = (order == BitOrder::LSB) ? i * W : CAPACITY - ((i + 1) * W);
 
             const std::size_t limb = bit_offset >> 6;
-            if (limb >= N) continue;
+            if (limb >= N)
+                continue;
             const unsigned shift = static_cast<unsigned>(bit_offset & 63);
             const u64 value = static_cast<u64>(values[i]);
 
@@ -110,8 +101,7 @@ private:
         }
     }
 
-public:
-
+   public:
     std::array<u64, N> bits{};
 
     constexpr UInt() noexcept = default;
@@ -139,24 +129,22 @@ public:
     explicit operator u64() const {
         if constexpr (N > 1) {
             for (u8 i = 1; i < N; ++i) {
-                if (bits[i] != 0) throw std::overflow_error("UInt overflows u64");
+                if (bits[i] != 0)
+                    throw std::overflow_error("UInt overflows u64");
             }
         }
         return bits[0];
     }
 
-    explicit operator bool() const noexcept {
-        return !this->eqz();
-    }
+    explicit operator bool() const noexcept { return !this->eqz(); }
 
-    explicit operator std::string() const {
-        return this->to_string();
-    }
+    explicit operator std::string() const { return this->to_string(); }
 
     UInt(std::initializer_list<u64> il) {
         bits.fill(0);
         u8 count = static_cast<u8>(il.size());
-        if (count > N) throw std::out_of_range("Initializer list too long");
+        if (count > N)
+            throw std::out_of_range("Initializer list too long");
         u8 i = 0;
         for (u64 v : il) {
             bits[i++] = v;
@@ -166,19 +154,23 @@ public:
     UInt(std::initializer_list<u64> il, Endianness endian) : endian_(endian) {
         bits.fill(0);
         u8 count = static_cast<u8>(il.size());
-        if (count > N) throw std::out_of_range("Initializer list too long");
+        if (count > N)
+            throw std::out_of_range("Initializer list too long");
         if (endian == Endianness::little) {
             u8 i = 0;
-            for (u64 v : il) bits[i++] = v;
+            for (u64 v : il)
+                bits[i++] = v;
         } else {
             u8 i = 0;
-            for (u64 v : il) bits[N - count + i++] = v;
+            for (u64 v : il)
+                bits[N - count + i++] = v;
         }
     }
 
     explicit UInt(const u8* ptr, size_t len, BitOrder order = BitOrder::LSB) noexcept {
         bits.fill(0);
-        if (ptr == nullptr || len == 0) return;
+        if (ptr == nullptr || len == 0)
+            return;
         if (order == BitOrder::LSB) {
             const size_t full_words = std::min(len >> 3, static_cast<size_t>(N));
             for (size_t w = 0; w < full_words; ++w) {
@@ -194,7 +186,7 @@ public:
             }
         } else {
             if (len == N * 8) {
-                #pragma GCC unroll 8
+#pragma GCC unroll 8
                 for (size_t w = 0; w < N; ++w) {
                     u64 v;
                     std::memcpy(&v, ptr + (w << 3), 8);
@@ -216,19 +208,19 @@ public:
         endian_ = endian;
     }
 
-    template<typename InputIt>
+    template <typename InputIt>
         requires std::input_or_output_iterator<InputIt>
     explicit UInt(InputIt first, InputIt last, BitOrder order = BitOrder::LSB) {
         bits.fill(0);
         std::vector<u8> bytes(first, last);
-        if (bytes.empty()) return;
+        if (bytes.empty())
+            return;
         *this = UInt<N>(bytes.data(), bytes.size(), order);
     }
 
-    template<typename InputIt>
+    template <typename InputIt>
         requires std::input_or_output_iterator<InputIt>
-    explicit UInt(InputIt first, InputIt last, Endianness endian)
-        : UInt(first, last, to_bit_order(endian)) {
+    explicit UInt(InputIt first, InputIt last, Endianness endian) : UInt(first, last, to_bit_order(endian)) {
         endian_ = endian;
     }
 
@@ -260,7 +252,7 @@ public:
     }
 
     template <std::convertible_to<u64>... Args>
-        requires (sizeof...(Args) > 1 && sizeof...(Args) <= N)
+        requires(sizeof...(Args) > 1 && sizeof...(Args) <= N)
     constexpr explicit UInt(Args... args) noexcept {
         bits.fill(0);
         u8 idx = 0;
@@ -277,8 +269,7 @@ public:
     }
 
     template <std::unsigned_integral T, std::size_t M>
-    explicit UInt(const T (&values)[M], Endianness endian) noexcept
-        : UInt(values, to_bit_order(endian)) {
+    explicit UInt(const T (&values)[M], Endianness endian) noexcept : UInt(values, to_bit_order(endian)) {
         endian_ = endian;
     }
 
@@ -292,20 +283,24 @@ public:
     }
 
     template <std::unsigned_integral T, std::size_t M>
-    explicit UInt(const std::array<T, M>& values, Endianness endian) noexcept
-        : UInt(values, to_bit_order(endian)) {
+    explicit UInt(const std::array<T, M>& values, Endianness endian) noexcept : UInt(values, to_bit_order(endian)) {
         endian_ = endian;
     }
 
     constexpr explicit UInt(std::string_view sv) {
-        if (sv.empty()) return;
-        if (sv.front() == '-') throw std::invalid_argument("Negative values not supported");
-        if (sv.front() == '+') sv.remove_prefix(1);
+        if (sv.empty())
+            return;
+        if (sv.front() == '-')
+            throw std::invalid_argument("Negative values not supported");
+        if (sv.front() == '+')
+            sv.remove_prefix(1);
 
         if (sv.starts_with("0x") || sv.starts_with("0X")) {
             sv.remove_prefix(2);
-            if (sv.empty()) return;
-            if (sv.size() > (N * 16)) throw std::out_of_range("Hex string too long");
+            if (sv.empty())
+                return;
+            if (sv.size() > (N * 16))
+                throw std::out_of_range("Hex string too long");
 
             size_t len = sv.size();
             for (u8 i = 0; i < N && len > 0; ++i) {
@@ -313,7 +308,8 @@ public:
                 const size_t start = len - chunk_sz;
                 u64 chunk_val = 0;
                 auto res = std::from_chars(sv.data() + start, sv.data() + start + chunk_sz, chunk_val, 16);
-                if (res.ec != std::errc{}) throw std::invalid_argument("Invalid hex character");
+                if (res.ec != std::errc{})
+                    throw std::invalid_argument("Invalid hex character");
                 bits[i] = chunk_val;
                 len -= chunk_sz;
             }
@@ -321,10 +317,12 @@ public:
             constexpr u64 CHUNK_POW = 1'000'000'000'000'000'000ull;
             constexpr int CHUNK_SIZE = 18;
             size_t remaining = sv.size() % CHUNK_SIZE;
-            if (remaining == 0 && !sv.empty()) remaining = CHUNK_SIZE;
+            if (remaining == 0 && !sv.empty())
+                remaining = CHUNK_SIZE;
             u64 chunk_val = 0;
             auto res = std::from_chars(sv.data(), sv.data() + remaining, chunk_val, 10);
-            if (res.ec != std::errc{}) throw std::invalid_argument("Invalid decimal character");
+            if (res.ec != std::errc{})
+                throw std::invalid_argument("Invalid decimal character");
             bits[0] = chunk_val;
             for (size_t i = remaining; i < sv.size(); i += CHUNK_SIZE) {
                 std::from_chars(sv.data() + i, sv.data() + i + CHUNK_SIZE, chunk_val, 10);
@@ -346,7 +344,8 @@ public:
     [[nodiscard]] Endianness endianness() const noexcept { return endian_; }
 
     void to_bytes(u8* ptr, size_t len, BitOrder order = BitOrder::LSB) const noexcept {
-        if (ptr == nullptr || len == 0) return;
+        if (ptr == nullptr || len == 0)
+            return;
         if (order == BitOrder::LSB) {
             const size_t full_words = std::min(len >> 3, static_cast<size_t>(N));
             for (size_t w = 0; w < full_words; ++w) {
@@ -361,7 +360,7 @@ public:
             }
         } else {
             if (len == N * 8) {
-                #pragma GCC unroll 8
+#pragma GCC unroll 8
                 for (size_t w = 0; w < N; ++w) {
                     u64 v = __builtin_bswap64(bits[N - 1 - w]);
                     std::memcpy(ptr + (w << 3), &v, 8);
@@ -446,7 +445,8 @@ public:
         return UInt<N>(val, Endianness::little);
     }
 
-    [[nodiscard]] static constexpr UInt<N> from_bytes(const u8* ptr, size_t len, Endianness endian = Endianness::little) noexcept {
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const u8* ptr, size_t len,
+                                                      Endianness endian = Endianness::little) noexcept {
         return UInt<N>(ptr, len, endian);
     }
 
@@ -455,7 +455,8 @@ public:
     }
 
     template <std::size_t M>
-    [[nodiscard]] static constexpr UInt<N> from_bytes(const std::array<u8, M>& arr, Endianness endian = Endianness::little) noexcept {
+    [[nodiscard]] static constexpr UInt<N> from_bytes(const std::array<u8, M>& arr,
+                                                      Endianness endian = Endianness::little) noexcept {
         return UInt<N>(arr, endian);
     }
 
@@ -465,7 +466,7 @@ public:
     }
 
     [[nodiscard]] bool is_scalar() const noexcept { return mode_ == Backend::Scalar; }
-    [[nodiscard]] bool is_simd()   const noexcept { return mode_ == Backend::SIMD; }
+    [[nodiscard]] bool is_simd() const noexcept { return mode_ == Backend::SIMD; }
 
     template <u8 M>
     [[nodiscard]] UInt<M> truncate() const noexcept {
@@ -479,7 +480,8 @@ public:
 
     [[nodiscard]] u8 num_limbs() const noexcept {
         for (u8 i = N; i-- > 0;) {
-            if (bits[i] != 0) return i + 1;
+            if (bits[i] != 0)
+                return i + 1;
         }
         return 0;
     }
@@ -507,7 +509,8 @@ public:
     [[nodiscard]] FORCE_INLINE constexpr bool operator==(const UInt& other) const noexcept {
         if consteval {
             for (u8 i = 0; i < N; ++i) {
-                if (bits[i] != other.bits[i]) return false;
+                if (bits[i] != other.bits[i])
+                    return false;
             }
             return true;
         } else {
@@ -516,7 +519,8 @@ public:
             for (; i + 8 <= N; i += 8) {
                 __m512i a = _mm512_loadu_si512(reinterpret_cast<const void*>(bits.data() + i));
                 __m512i b = _mm512_loadu_si512(reinterpret_cast<const void*>(other.bits.data() + i));
-                if (_mm512_cmpeq_epi64_mask(a, b) != 0xFF) return false;
+                if (_mm512_cmpeq_epi64_mask(a, b) != 0xFF)
+                    return false;
             }
 #endif
 #if defined(__AVX2__)
@@ -524,18 +528,21 @@ public:
                 __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bits.data() + i));
                 __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(other.bits.data() + i));
                 __m256i x = _mm256_xor_si256(a, b);
-                if (!_mm256_testz_si256(x, x)) return false;
+                if (!_mm256_testz_si256(x, x))
+                    return false;
             }
 #elif defined(__SSE2__)
             for (; i + 2 <= N; i += 2) {
                 __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bits.data() + i));
                 __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(other.bits.data() + i));
                 __m128i eq = _mm_cmpeq_epi32(a, b);
-                if (_mm_movemask_epi8(eq) != 0xFFFF) return false;
+                if (_mm_movemask_epi8(eq) != 0xFFFF)
+                    return false;
             }
 #endif
             for (; i < N; ++i) {
-                if (bits[i] != other.bits[i]) return false;
+                if (bits[i] != other.bits[i])
+                    return false;
             }
             return true;
         }
@@ -573,7 +580,8 @@ public:
                 _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_add_epi64(a, b));
             }
 #endif
-            for (; i < N; ++i) bits[i] += other.bits[i];
+            for (; i < N; ++i)
+                bits[i] += other.bits[i];
         } else {
             if consteval {
                 u64 carry = 0;
@@ -594,11 +602,9 @@ public:
                         .set offset, offset+8
                     .endr
                 )"
-                    : "+m"(bits)
-                    : [dst] "r"(bits.data()), [src] "r"(other.bits.data()),
-                      [count] "n"(N - 1), "m"(other.bits)
-                    : "rax", "cc"
-                );
+                             : "+m"(bits)
+                             : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+                             : "rax", "cc");
             }
         }
         return *this;
@@ -671,7 +677,8 @@ public:
                 _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_sub_epi64(a, b));
             }
 #endif
-            for (; i < N; ++i) bits[i] -= other.bits[i];
+            for (; i < N; ++i)
+                bits[i] -= other.bits[i];
         } else {
             if consteval {
                 u64 borrow = 0;
@@ -692,11 +699,9 @@ public:
                         .set offset, offset+8
                     .endr
                 )"
-                    : "+m"(bits)
-                    : [dst] "r"(bits.data()), [src] "r"(other.bits.data()),
-                      [count] "n"(N - 1), "m"(other.bits)
-                    : "rax", "cc"
-                );
+                             : "+m"(bits)
+                             : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+                             : "rax", "cc");
             }
         }
         return *this;
@@ -707,7 +712,8 @@ public:
         bits.fill(0);
         for (u8 i = 0; i < N; ++i) {
             const u64 y = self_copy.bits[i];
-            if (y == 0) continue;
+            if (y == 0)
+                continue;
             u128 carry = 0;
             for (u8 j = 0; j < N - i; ++j) {
                 u128 temp = static_cast<u128>(other.bits[j]) * y + bits[i + j] + carry;
@@ -737,7 +743,8 @@ public:
                 u64 a0 = bits[0], a1 = bits[1], a2 = bits[2];
                 u64 b0 = other.bits[0], b1 = other.bits[1], b2 = other.bits[2];
                 u64 r0, r1, r2;
-                __asm__ volatile(R"(
+                __asm__ volatile(
+                    R"(
                     movq   %[b0], %%rdx
                     mulxq  %[a0], %[r0], %[r1]
                     xorl   %k[r2], %k[r2]
@@ -759,13 +766,14 @@ public:
                     addq   %%r10, %[r2]
                 )"
                     : [r0] "=&r"(r0), [r1] "=&r"(r1), [r2] "=&r"(r2)
-                    : [a0] "rm"(a0), [a1] "rm"(a1), [a2] "rm"(a2),
-                      [b0] "rm"(b0), [b1] "rm"(b1), [b2] "rm"(b2)
-                    : "rdx", "r9", "r10", "r11", "rcx", "cc"
-                );
-                bits[0] = r0; bits[1] = r1; bits[2] = r2;
+                    : [a0] "rm"(a0), [a1] "rm"(a1), [a2] "rm"(a2), [b0] "rm"(b0), [b1] "rm"(b1), [b2] "rm"(b2)
+                    : "rdx", "r9", "r10", "r11", "rcx", "cc");
+                bits[0] = r0;
+                bits[1] = r1;
+                bits[2] = r2;
             } else if constexpr (N == 4) {
-                __asm__ volatile(R"(
+                __asm__ volatile(
+                    R"(
                     xorl   %%r9d, %%r9d
                     xorl   %%eax, %%eax
                     xorl   %%r10d, %%r10d
@@ -808,10 +816,8 @@ public:
                     movq   %%r8,  %[a3]
                 )"
                     : [a0] "+m"(bits[0]), [a1] "+m"(bits[1]), [a2] "+m"(bits[2]), [a3] "+m"(bits[3])
-                    : [b0] "m"(other.bits[0]), [b1] "m"(other.bits[1]),
-                      [b2] "m"(other.bits[2]), [b3] "m"(other.bits[3])
-                    : "rax", "rcx", "rdx", "rsi", "r8", "r9", "r10", "cc"
-                );
+                    : [b0] "m"(other.bits[0]), [b1] "m"(other.bits[1]), [b2] "m"(other.bits[2]), [b3] "m"(other.bits[3])
+                    : "rax", "rcx", "rdx", "rsi", "r8", "r9", "r10", "cc");
             } else if constexpr (N == 8) {
                 if (this == &other) {
                     Multiplication::square_schoolbook_truncated_fixed<8>(p_res, &bits[0]);
@@ -842,7 +848,8 @@ public:
 
     FORCE_INLINE UInt& operator*=(const UInt& other) noexcept {
         if (mode_ == Backend::SIMD) {
-            for (u8 i = 0; i < N; ++i) bits[i] *= other.bits[i];
+            for (u8 i = 0; i < N; ++i)
+                bits[i] *= other.bits[i];
         } else {
             if consteval {
                 return mul_consteval(other);
@@ -857,34 +864,46 @@ public:
             UInt<N> q{};
             UInt<N> r{};
             for (u8 i = 0; i < N; ++i) {
-                if (v.bits[i] == 0) throw std::domain_error("Division by zero");
+                if (v.bits[i] == 0)
+                    throw std::domain_error("Division by zero");
                 q.bits[i] = bits[i] / v.bits[i];
                 r.bits[i] = bits[i] % v.bits[i];
             }
             return {q, r};
         }
 
-        if (v.eqz()) throw std::domain_error("Division by zero");
+        if (v.eqz())
+            throw std::domain_error("Division by zero");
 
         if consteval {
-            if (*this < v) return {UInt<N>(0), *this};
+            if (*this < v)
+                return {UInt<N>(0), *this};
             UInt<N> q(0);
             UInt<N> r(0);
             for (int i = N * 64 - 1; i >= 0; --i) {
                 r <<= 1;
-                if ((bits[i / 64] >> (i % 64)) & 1) r.bits[0] |= 1;
-                if (r >= v) { r -= v; q.bits[i / 64] |= (1ULL << (i % 64)); }
+                if ((bits[i / 64] >> (i % 64)) & 1)
+                    r.bits[0] |= 1;
+                if (r >= v) {
+                    r -= v;
+                    q.bits[i / 64] |= (1ULL << (i % 64));
+                }
             }
             return {q, r};
         }
 
-        if (*this < v) return {UInt<N>(0), *this};
-        if (*this == v) return {UInt<N>(1), UInt<N>(0)};
+        if (*this < v)
+            return {UInt<N>(0), *this};
+        if (*this == v)
+            return {UInt<N>(1), UInt<N>(0)};
 
         if constexpr (N > 1) {
             bool single_limb = true;
             for (u8 i = 1; i < N; ++i) {
-                if (v.bits[i] != 0) { single_limb = false; break; }
+                if (v.bits[i] != 0) {
+                    single_limb = false;
+                    break;
+                }
             }
             if (single_limb) {
                 auto [q, r_u64] = divmod(v.bits[0]);
@@ -897,13 +916,15 @@ public:
         if constexpr (N <= 16) {
             Division::DivisionFixed<N>::div(q.bits.data(), r.bits.data(), bits.data(), v.bits.data());
         } else {
-            Division::div_knuth_impl<N>(q.bits.data(), r.bits.data(), bits.data(), num_limbs(), v.bits.data(), v.num_limbs());
+            Division::div_knuth_impl<N>(q.bits.data(), r.bits.data(), bits.data(), num_limbs(), v.bits.data(),
+                                        v.num_limbs());
         }
         return {q, r};
     }
 
     [[nodiscard]] std::pair<UInt<N>, u64> divmod(u64 v) const {
-        if (v == 0) throw std::domain_error("Division by zero");
+        if (v == 0)
+            throw std::domain_error("Division by zero");
         if (mode_ == Backend::SIMD) {
             UInt<N> q{};
             for (u8 i = 0; i < N; ++i) {
@@ -924,10 +945,12 @@ public:
     }
 
     FORCE_INLINE UInt& operator/=(const UInt& other) {
-        if (other.eqz()) throw std::domain_error("Division by zero");
+        if (other.eqz())
+            throw std::domain_error("Division by zero");
         if (mode_ == Backend::SIMD) {
             for (u8 i = 0; i < N; ++i) {
-                if (other.bits[i] == 0) throw std::domain_error("Division by zero");
+                if (other.bits[i] == 0)
+                    throw std::domain_error("Division by zero");
                 bits[i] /= other.bits[i];
             }
         } else {
@@ -937,10 +960,12 @@ public:
     }
 
     FORCE_INLINE constexpr UInt& operator%=(const UInt& other) {
-        if (other.eqz()) throw std::domain_error("Division by zero");
+        if (other.eqz())
+            throw std::domain_error("Division by zero");
         if (mode_ == Backend::SIMD) {
             for (u8 i = 0; i < N; ++i) {
-                if (other.bits[i] == 0) throw std::domain_error("Division by zero");
+                if (other.bits[i] == 0)
+                    throw std::domain_error("Division by zero");
                 bits[i] %= other.bits[i];
             }
         } else {
@@ -972,14 +997,19 @@ public:
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_slli_epi64(v, n));
                 }
 #endif
-                for (; i < N; ++i) bits[i] <<= n;
+                for (; i < N; ++i)
+                    bits[i] <<= n;
             } else {
-                if (n >= N * 64) { bits.fill(0ULL); return *this; }
+                if (n >= N * 64) {
+                    bits.fill(0ULL);
+                    return *this;
+                }
                 const u16 block_shift = n >> 6;
                 const u16 bit_shift = n & 63;
                 if (bit_shift == 0) {
                     if (block_shift > 0) {
-                        for (int i = N - 1; i >= (int)block_shift; --i) bits[i] = bits[i - block_shift];
+                        for (int i = N - 1; i >= (int)block_shift; --i)
+                            bits[i] = bits[i - block_shift];
                         std::fill_n(bits.begin(), block_shift, 0ULL);
                     }
                 } else {
@@ -1018,14 +1048,19 @@ public:
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_srli_epi64(v, n));
                 }
 #endif
-                for (; i < N; ++i) bits[i] >>= n;
+                for (; i < N; ++i)
+                    bits[i] >>= n;
             } else {
-                if (n >= N * 64) { bits.fill(0ULL); return *this; }
+                if (n >= N * 64) {
+                    bits.fill(0ULL);
+                    return *this;
+                }
                 const u16 block_shift = n >> 6;
                 const u16 bit_shift = n & 63;
                 if (bit_shift == 0) {
                     if (block_shift > 0) {
-                        for (size_t i = 0; i < N - block_shift; ++i) bits[i] = bits[i + block_shift];
+                        for (size_t i = 0; i < N - block_shift; ++i)
+                            bits[i] = bits[i + block_shift];
                         std::fill_n(bits.begin() + N - block_shift, block_shift, 0ULL);
                     }
                 } else {
@@ -1063,7 +1098,8 @@ public:
             _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_and_si128(a, b));
         }
 #endif
-        for (; i < N; ++i) bits[i] &= other.bits[i];
+        for (; i < N; ++i)
+            bits[i] &= other.bits[i];
         return *this;
     }
 
@@ -1089,7 +1125,8 @@ public:
             _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_or_si128(a, b));
         }
 #endif
-        for (; i < N; ++i) bits[i] |= other.bits[i];
+        for (; i < N; ++i)
+            bits[i] |= other.bits[i];
         return *this;
     }
 
@@ -1115,57 +1152,74 @@ public:
             _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_xor_si128(a, b));
         }
 #endif
-        for (; i < N; ++i) bits[i] ^= other.bits[i];
+        for (; i < N; ++i)
+            bits[i] ^= other.bits[i];
         return *this;
     }
 
     [[nodiscard]] FORCE_INLINE constexpr UInt operator~() const noexcept {
         UInt res = *this;
-        for (u8 i = 0; i < N; ++i) res.bits[i] = ~res.bits[i];
+        for (u8 i = 0; i < N; ++i)
+            res.bits[i] = ~res.bits[i];
         return res;
     }
 
     FORCE_INLINE UInt& operator++() noexcept { return *this += UInt(1); }
     FORCE_INLINE UInt& operator--() noexcept { return *this -= UInt(1); }
-    FORCE_INLINE UInt operator++(int) noexcept { UInt t = *this; ++*this; return t; }
-    FORCE_INLINE UInt operator--(int) noexcept { UInt t = *this; --*this; return t; }
+    FORCE_INLINE UInt operator++(int) noexcept {
+        UInt t = *this;
+        ++*this;
+        return t;
+    }
+    FORCE_INLINE UInt operator--(int) noexcept {
+        UInt t = *this;
+        --*this;
+        return t;
+    }
 
     [[nodiscard]] FORCE_INLINE bool bt(const u16 index) const noexcept {
-        if (UNLIKELY(index >= N * 64)) return false;
+        if (UNLIKELY(index >= N * 64))
+            return false;
         return (bits[index / 64] >> (index % 64)) & 1;
     }
 
     FORCE_INLINE void bts(const u16 index) noexcept {
-        if (LIKELY(index < N * 64)) bits[index / 64] |= (1ULL << (index % 64));
+        if (LIKELY(index < N * 64))
+            bits[index / 64] |= (1ULL << (index % 64));
     }
 
     [[nodiscard]] FORCE_INLINE constexpr bool eqz() const noexcept {
         if consteval {
             u64 acc = 0;
-            for (u8 i = 0; i < N; ++i) acc |= bits[i];
+            for (u8 i = 0; i < N; ++i)
+                acc |= bits[i];
             return acc == 0;
         } else {
             size_t i = 0;
 #if defined(__AVX512F__)
             for (; i + 8 <= N; i += 8) {
                 __m512i v = _mm512_loadu_si512(reinterpret_cast<const void*>(bits.data() + i));
-                if (_mm512_test_epi64_mask(v, v) != 0) return false;
+                if (_mm512_test_epi64_mask(v, v) != 0)
+                    return false;
             }
 #endif
 #if defined(__AVX2__)
             for (; i + 4 <= N; i += 4) {
                 __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bits.data() + i));
-                if (!_mm256_testz_si256(v, v)) return false;
+                if (!_mm256_testz_si256(v, v))
+                    return false;
             }
 #elif defined(__SSE2__)
             for (; i + 2 <= N; i += 2) {
                 __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bits.data() + i));
                 __m128i zero = _mm_setzero_si128();
-                if (_mm_movemask_epi8(_mm_cmpeq_epi32(v, zero)) != 0xFFFF) return false;
+                if (_mm_movemask_epi8(_mm_cmpeq_epi32(v, zero)) != 0xFFFF)
+                    return false;
             }
 #endif
             u64 acc = 0;
-            for (; i < N; ++i) acc |= bits[i];
+            for (; i < N; ++i)
+                acc |= bits[i];
             return acc == 0;
         }
     }
@@ -1215,10 +1269,12 @@ public:
         if constexpr (N == 1) {
             bits[0] = std::rotl(bits[0], static_cast<int>(n));
         } else if (mode_ == Backend::SIMD) {
-            for (u8 i = 0; i < N; ++i) bits[i] = std::rotl(bits[i], static_cast<int>(n));
+            for (u8 i = 0; i < N; ++i)
+                bits[i] = std::rotl(bits[i], static_cast<int>(n));
         } else {
             const u16 r = n % static_cast<u16>(N * 64);
-            if (r == 0) [[unlikely]] return *this;
+            if (r == 0) [[unlikely]]
+                return *this;
             const u8 limb_shift = static_cast<u8>(r >> 6);
             const u8 bit_shift = static_cast<u8>(r & 63);
             UInt tmp{};
@@ -1244,7 +1300,8 @@ public:
         if constexpr (N == 1) {
             bits[0] = std::rotl(bits[0], static_cast<int>(shift.bits[0] & 63));
         } else if (mode_ == Backend::SIMD) {
-            for (u8 i = 0; i < N; ++i) bits[i] = std::rotl(bits[i], static_cast<int>(shift.bits[i] & 63));
+            for (u8 i = 0; i < N; ++i)
+                bits[i] = std::rotl(bits[i], static_cast<int>(shift.bits[i] & 63));
         } else {
             constexpr u16 W = static_cast<u16>(N * 64);
             u16 r = 0;
@@ -1256,12 +1313,14 @@ public:
                     const u64 current = shift.bits[i];
                     for (int bit = 63; bit >= 0; --bit) {
                         rem = (rem << 1) | ((current >> bit) & 1);
-                        if (rem >= W) rem -= W;
+                        if (rem >= W)
+                            rem -= W;
                     }
                 }
                 r = static_cast<u16>(rem);
             }
-            if (r != 0) *this = rotl(r);
+            if (r != 0)
+                *this = rotl(r);
         }
         return *this;
     }
@@ -1270,10 +1329,12 @@ public:
         if constexpr (N == 1) {
             bits[0] = std::rotr(bits[0], static_cast<int>(n));
         } else if (mode_ == Backend::SIMD) {
-            for (u8 i = 0; i < N; ++i) bits[i] = std::rotr(bits[i], static_cast<int>(n));
+            for (u8 i = 0; i < N; ++i)
+                bits[i] = std::rotr(bits[i], static_cast<int>(n));
         } else {
             const u16 r = n % static_cast<u16>(N * 64);
-            if (r == 0) [[unlikely]] return *this;
+            if (r == 0) [[unlikely]]
+                return *this;
             const u8 limb_shift = static_cast<u8>(r >> 6);
             const u8 bit_shift = static_cast<u8>(r & 63);
             UInt tmp{};
@@ -1299,7 +1360,8 @@ public:
         if constexpr (N == 1) {
             bits[0] = std::rotr(bits[0], static_cast<int>(shift.bits[0] & 63));
         } else if (mode_ == Backend::SIMD) {
-            for (u8 i = 0; i < N; ++i) bits[i] = std::rotr(bits[i], static_cast<int>(shift.bits[i] & 63));
+            for (u8 i = 0; i < N; ++i)
+                bits[i] = std::rotr(bits[i], static_cast<int>(shift.bits[i] & 63));
         } else {
             constexpr u16 W = static_cast<u16>(N * 64);
             u16 r = 0;
@@ -1311,23 +1373,29 @@ public:
                     const u64 current = shift.bits[i];
                     for (int bit = 63; bit >= 0; --bit) {
                         rem = (rem << 1) | ((current >> bit) & 1);
-                        if (rem >= W) rem -= W;
+                        if (rem >= W)
+                            rem -= W;
                     }
                 }
                 r = static_cast<u16>(rem);
             }
-            if (r != 0) *this = rotr(r);
+            if (r != 0)
+                *this = rotr(r);
         }
         return *this;
     }
 
     [[nodiscard]] std::string to_hex_string() const {
-        if (eqz()) return "0x0";
+        if (eqz())
+            return "0x0";
         UInt<N> temp(*this);
         temp.set_endianness(Endianness::little);
         int msb_limb = N - 1;
         for (int i = N - 1; i >= 0; --i) {
-            if (temp.bits[i] != 0) { msb_limb = i; break; }
+            if (temp.bits[i] != 0) {
+                msb_limb = i;
+                break;
+            }
         }
         std::string res;
         res.reserve(2 + static_cast<size_t>(msb_limb + 1) * 16);
@@ -1340,7 +1408,8 @@ public:
     }
 
     [[nodiscard]] std::string to_string() const {
-        if (eqz()) return "0";
+        if (eqz())
+            return "0";
         UInt<N> temp(*this);
         temp.set_mode(Backend::Scalar);
         temp.set_endianness(Endianness::little);
@@ -1362,7 +1431,8 @@ public:
     [[nodiscard]] static UInt<N> random(const u64 seed) noexcept {
         UInt<N> number;
         u64 state = (seed != 0) ? seed : (0xCAFEBABEULL + N);
-        for (u64& block : number.bits) block = number.rand(state);
+        for (u64& block : number.bits)
+            block = number.rand(state);
         return number;
     }
 
@@ -1371,9 +1441,7 @@ public:
         UInt r2{};
     };
 
-    void to_mont(UInt& x, const UInt& p, const MontgomeryCtx& ctx) {
-        mul_mod_mont(x, ctx.r2, p, ctx);
-    }
+    void to_mont(UInt& x, const UInt& p, const MontgomeryCtx& ctx) { mul_mod_mont(x, ctx.r2, p, ctx); }
 
     void from_mont(UInt& x, const UInt& p, const MontgomeryCtx& ctx) {
         UInt one = 1;
@@ -1389,7 +1457,8 @@ public:
             ybuf[i] = y.bits[i];
         }
         Multiplication::mul_montgomery_cios<N>(t, xbuf, ybuf, p.bits.data(), ctx.p_inv.bits[0], 64 * N);
-        for (u8 i = 0; i < N; ++i) x.bits[i] = t[i];
+        for (u8 i = 0; i < N; ++i)
+            x.bits[i] = t[i];
     }
 
     MontgomeryCtx montgomery_precompute(const UInt& p) {
@@ -1409,7 +1478,8 @@ public:
             u64 qq[2 * N + 4]{};
             u64 rr[N]{};
             Division::div_knuth_impl<2 * N + 4>(qq, rr, big, 2 * N + 1, p.bits.data(), n_v);
-            for (u8 i = 0; i < N; ++i) ctx.r2.bits[i] = rr[i];
+            for (u8 i = 0; i < N; ++i)
+                ctx.r2.bits[i] = rr[i];
         }
         return ctx;
     }
@@ -1418,7 +1488,8 @@ public:
         UInt base = *this % p;
         UInt result = 1;
         UInt exp = p;
-        --exp; --exp;
+        --exp;
+        --exp;
         const bool mont = (p.bits[0] & 1) != 0 && p.bits[N - 1] != 0;
         MontgomeryCtx ctx;
         if (mont) {
@@ -1428,16 +1499,21 @@ public:
         }
         while (!exp.eqz()) {
             if (exp.bt(0)) {
-                if (mont) mul_mod_mont(result, base, p, ctx);
-                else mul_mod(result, base, p);
+                if (mont)
+                    mul_mod_mont(result, base, p, ctx);
+                else
+                    mul_mod(result, base, p);
             }
             exp >>= 1;
             if (!exp.eqz()) {
-                if (mont) mul_mod_mont(base, base, p, ctx);
-                else mul_mod(base, base, p);
+                if (mont)
+                    mul_mod_mont(base, base, p, ctx);
+                else
+                    mul_mod(base, base, p);
             }
         }
-        if (mont) from_mont(result, p, ctx);
+        if (mont)
+            from_mont(result, p, ctx);
         return *this = result;
     }
 
@@ -1458,44 +1534,68 @@ public:
             u64 rr[N];
             Division::div_knuth_impl<2 * N + 4>(qq, rr, prod, 2 * N, p.bits.data(), n_v);
             x.bits.fill(0);
-            for (int i = 0; i < n_v; ++i) x.bits[i] = rr[i];
+            for (int i = 0; i < n_v; ++i)
+                x.bits[i] = rr[i];
         }
     }
 };
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator+(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs += rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator+(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs += rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator-(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs -= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator-(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs -= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator*(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs *= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator*(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs *= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator/(UInt<N> lhs, const UInt<N>& rhs) { return lhs /= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator/(UInt<N> lhs, const UInt<N>& rhs) {
+    return lhs /= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator%(UInt<N> lhs, const UInt<N>& rhs) { return lhs %= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator%(UInt<N> lhs, const UInt<N>& rhs) {
+    return lhs %= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator&(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs &= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator&(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs &= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator|(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs |= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator|(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs |= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator^(UInt<N> lhs, const UInt<N>& rhs) noexcept { return lhs ^= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator^(UInt<N> lhs, const UInt<N>& rhs) noexcept {
+    return lhs ^= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator<<(UInt<N> lhs, u16 rhs) noexcept { return lhs <<= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator<<(UInt<N> lhs, u16 rhs) noexcept {
+    return lhs <<= rhs;
+}
 
 template <u8 N>
-[[nodiscard]] FORCE_INLINE UInt<N> operator>>(UInt<N> lhs, u16 rhs) noexcept { return lhs >>= rhs; }
+[[nodiscard]] FORCE_INLINE UInt<N> operator>>(UInt<N> lhs, u16 rhs) noexcept {
+    return lhs >>= rhs;
+}
 
 template <u8 N>
 [[nodiscard]] FORCE_INLINE constexpr bool operator==(const UInt<N>& lhs, u64 rhs) noexcept {
-    return N == 1 ? lhs.bits[0] == rhs : (lhs.bits[0] == rhs && (N <= 1 || std::ranges::all_of(lhs.bits.begin() + 1, lhs.bits.end(), [](u64 v) { return v == 0; })));
+    return N == 1
+             ? lhs.bits[0] == rhs
+             : (lhs.bits[0] == rhs &&
+                (N <= 1 || std::ranges::all_of(lhs.bits.begin() + 1, lhs.bits.end(), [](u64 v) { return v == 0; })));
 }
 
 template <u8 N>
@@ -1516,7 +1616,8 @@ template <u8 N>
 template <u8 N>
 [[nodiscard]] FORCE_INLINE constexpr bool operator<(const UInt<N>& lhs, u64 rhs) noexcept {
     for (u8 i = 1; i < N; ++i) {
-        if (lhs.bits[i] != 0) return false;
+        if (lhs.bits[i] != 0)
+            return false;
     }
     return lhs.bits[0] < rhs;
 }
@@ -1524,7 +1625,8 @@ template <u8 N>
 template <u8 N>
 [[nodiscard]] FORCE_INLINE constexpr bool operator>(const UInt<N>& lhs, u64 rhs) noexcept {
     for (u8 i = 1; i < N; ++i) {
-        if (lhs.bits[i] != 0) return true;
+        if (lhs.bits[i] != 0)
+            return true;
     }
     return lhs.bits[0] > rhs;
 }
@@ -1650,10 +1752,22 @@ template <u8 N>
 }
 
 namespace UIntLiteral {
-    [[nodiscard]] inline constexpr UInt<1> operator""_u1(unsigned long long v) noexcept { return UInt<1>(v); }
-    [[nodiscard]] inline constexpr UInt<2> operator""_u2(unsigned long long v) noexcept { return UInt<2>(v); }
-    [[nodiscard]] inline constexpr UInt<4> operator""_u4(unsigned long long v) noexcept { return UInt<4>(v); }
-    [[nodiscard]] inline constexpr UInt<8> operator""_u8(unsigned long long v) noexcept { return UInt<8>(v); }
-    [[nodiscard]] inline constexpr UInt<16> operator""_u16(unsigned long long v) noexcept { return UInt<16>(v); }
-    [[nodiscard]] inline constexpr UInt<32> operator""_u32(unsigned long long v) noexcept { return UInt<32>(v); }
+[[nodiscard]] inline constexpr UInt<1> operator""_u1(unsigned long long v) noexcept {
+    return UInt<1>(v);
 }
+[[nodiscard]] inline constexpr UInt<2> operator""_u2(unsigned long long v) noexcept {
+    return UInt<2>(v);
+}
+[[nodiscard]] inline constexpr UInt<4> operator""_u4(unsigned long long v) noexcept {
+    return UInt<4>(v);
+}
+[[nodiscard]] inline constexpr UInt<8> operator""_u8(unsigned long long v) noexcept {
+    return UInt<8>(v);
+}
+[[nodiscard]] inline constexpr UInt<16> operator""_u16(unsigned long long v) noexcept {
+    return UInt<16>(v);
+}
+[[nodiscard]] inline constexpr UInt<32> operator""_u32(unsigned long long v) noexcept {
+    return UInt<32>(v);
+}
+}  // namespace UIntLiteral

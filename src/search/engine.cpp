@@ -1,16 +1,15 @@
 #include "../../include/search/engine.hpp"
-#include "../../include/cli/ui.hpp"
-#include "../../include/hardware/host_probe.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <deque>
-#include <fstream>
 #include <print>
 #include <thread>
-#include <unordered_set>
 #include <vector>
-#include <algorithm>
+
+#include "../../include/cli/ui.hpp"
+#include "../../include/hardware/host_probe.hpp"
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -20,193 +19,207 @@
 using namespace cryptowords::ui;
 
 namespace cryptowords {
-    namespace {
+namespace {
 
-        void monitor_progress(const SearchState& state, [[maybe_unused]] size_t num_threads,
-                              std::chrono::steady_clock::time_point start,
-                              double total_comb, double math_comb) {
-            struct Sample {
-                std::chrono::steady_clock::time_point time;
-                uint64_t count;
-            };
+void monitor_progress(const SearchState& state, [[maybe_unused]] size_t num_threads,
+                      std::chrono::steady_clock::time_point start, double total_comb, double math_comb) {
+    struct Sample {
+        std::chrono::steady_clock::time_point time;
+        uint64_t count;
+    };
 
-            std::deque<Sample> history;
-            history.push_back({start, 0});
-            double smoothed_spd = 0.0;
+    std::deque<Sample> history;
+    history.push_back({start, 0});
+    double smoothed_spd = 0.0;
 
-            const double prune_ratio = (total_comb > 0 && math_comb > total_comb) ? (math_comb / total_comb) : 1.0;
+    const double prune_ratio = (total_comb > 0 && math_comb > total_comb) ? (math_comb / total_comb) : 1.0;
 
-            while (!state.found.load(std::memory_order_relaxed) && !state.all_done.load(std::memory_order_relaxed)) {
-                for (int s = 0; s < 4; ++s) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                    if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
-                }
-                if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed)) break;
+    while (!state.found.load(std::memory_order_relaxed) && !state.all_done.load(std::memory_order_relaxed)) {
+        for (int s = 0; s < 4; ++s) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed))
+                break;
+        }
+        if (state.found.load(std::memory_order_relaxed) || state.all_done.load(std::memory_order_relaxed))
+            break;
 
-                const auto now     = std::chrono::steady_clock::now();
-                const double elap  = std::chrono::duration<double>(now - start).count();
-                const uint64_t cur = state.tested_count.load(std::memory_order_relaxed);
+        const auto now = std::chrono::steady_clock::now();
+        const double elap = std::chrono::duration<double>(now - start).count();
+        const uint64_t cur = state.tested_count.load(std::memory_order_relaxed);
 
-                // Janela deslizante de ~1.2s para estabilidade máxima contra batches e jitter
-                history.push_back({now, cur});
-                while (history.size() > 2) {
-                    const double age = std::chrono::duration<double>(now - history.front().time).count();
-                    if (age > 1.2) {
-                        history.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-
-                const double window_dt = std::chrono::duration<double>(now - history.front().time).count();
-                const uint64_t window_dn = (cur >= history.front().count) ? (cur - history.front().count) : 0;
-                const double raw_window_spd = (window_dt > 0.02) ? (static_cast<double>(window_dn) / window_dt) : 0.0;
-
-                // Suavização EMA (Exponential Moving Average)
-                if (smoothed_spd <= 0.0) {
-                    smoothed_spd = raw_window_spd;
-                } else if (raw_window_spd > 0.0) {
-                    constexpr double alpha = 0.25;
-                    smoothed_spd = alpha * raw_window_spd + (1.0 - alpha) * smoothed_spd;
-                } else {
-                    smoothed_spd *= 0.8;
-                    if (smoothed_spd < 0.1) smoothed_spd = 0.0;
-                }
-
-                const double pbkdf2_spd = smoothed_spd;
-                const double eff_spd    = pbkdf2_spd * prune_ratio;
-
-                const double pct = (total_comb > 0)
-                    ? std::clamp((static_cast<double>(cur) / total_comb) * 100.0, 0.0, 100.0)
-                    : 0.0;
-
-                constexpr int BAR_WIDTH = 20;
-                const int filled = std::clamp(static_cast<int>(pct / 5.0), 0, BAR_WIDTH);
-
-                std::string bar;
-                for (int i = 0; i < filled; ++i) bar += "█";
-                std::string empty;
-                for (int i = filled; i < BAR_WIDTH; ++i) empty += "░";
-
-                const double eta_sec = (pbkdf2_spd > 0.1 && cur < total_comb)
-                    ? (total_comb - cur) / pbkdf2_spd
-                    : (cur >= total_comb ? 0.0 : -1.0);
-
-                std::string eta_str = format_eta(eta_sec);
-                std::string elap_str = format_eta(elap);
-
-                if (prune_ratio > 1.05) {
-                    std::string eff_spd_str = format_speed(eff_spd);
-                    std::string pbk_spd_str = format_speed(pbkdf2_spd);
-                    std::string cur_space_str = format_num(std::min(static_cast<double>(cur) * prune_ratio, math_comb));
-                    std::string tot_space_str = format_num(math_comb);
-
-                    std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;36m%-11s\033[0m \033[90m(PBKDF2: %s)\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
-                                 bar.c_str(), empty.c_str(),
-                                 pct,
-                                 eff_spd_str.c_str(),
-                                 pbk_spd_str.c_str(),
-                                 eta_str.c_str(),
-                                 cur_space_str.c_str(), tot_space_str.c_str(),
-                                 elap_str.c_str());
-                } else {
-                    std::string spd_str = format_speed(pbkdf2_spd);
-                    std::string cur_str = format_num(static_cast<double>(cur));
-                    std::string tot_str = format_num(total_comb);
-
-                    std::fprintf(stderr, "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;32m%-11s\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
-                                 bar.c_str(), empty.c_str(),
-                                 pct,
-                                 spd_str.c_str(),
-                                 eta_str.c_str(),
-                                 cur_str.c_str(), tot_str.c_str(),
-                                 elap_str.c_str());
-                }
-                std::fflush(stderr);
+        // Janela deslizante de ~1.2s para estabilidade máxima contra batches e jitter
+        history.push_back({now, cur});
+        while (history.size() > 2) {
+            const double age = std::chrono::duration<double>(now - history.front().time).count();
+            if (age > 1.2) {
+                history.pop_front();
+            } else {
+                break;
             }
-            std::fprintf(stderr, "\r\033[2K");
-            std::fflush(stderr);
         }
-    } // namespace
 
-        void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx, size_t num_threads, SearchState& state) {
-#if defined(__linux__)
-        static const auto cpu_ids = hardware::HostProbe::get_physical_cpu_ids();
-        if (!cpu_ids.empty() && pipeline.config().pin_cores) {
-            int target_cpu = cpu_ids[thread_idx % cpu_ids.size()];
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            CPU_SET(target_cpu, &cpuset);
-            pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+        const double window_dt = std::chrono::duration<double>(now - history.front().time).count();
+        const uint64_t window_dn = (cur >= history.front().count) ? (cur - history.front().count) : 0;
+        const double raw_window_spd = (window_dt > 0.02) ? (static_cast<double>(window_dn) / window_dt) : 0.0;
+
+        // Suavização EMA (Exponential Moving Average)
+        if (smoothed_spd <= 0.0) {
+            smoothed_spd = raw_window_spd;
+        } else if (raw_window_spd > 0.0) {
+            constexpr double alpha = 0.25;
+            smoothed_spd = alpha * raw_window_spd + (1.0 - alpha) * smoothed_spd;
+        } else {
+            smoothed_spd *= 0.8;
+            if (smoothed_spd < 0.1)
+                smoothed_spd = 0.0;
         }
+
+        const double pbkdf2_spd = smoothed_spd;
+        const double eff_spd = pbkdf2_spd * prune_ratio;
+
+        const double pct =
+            (total_comb > 0) ? std::clamp((static_cast<double>(cur) / total_comb) * 100.0, 0.0, 100.0) : 0.0;
+
+        constexpr int BAR_WIDTH = 20;
+        const int filled = std::clamp(static_cast<int>(pct / 5.0), 0, BAR_WIDTH);
+
+        std::string bar;
+        for (int i = 0; i < filled; ++i)
+            bar += "█";
+        std::string empty;
+        for (int i = filled; i < BAR_WIDTH; ++i)
+            empty += "░";
+
+        const double eta_sec =
+            (pbkdf2_spd > 0.1 && cur < total_comb) ? (total_comb - cur) / pbkdf2_spd : (cur >= total_comb ? 0.0 : -1.0);
+
+        std::string eta_str = format_eta(eta_sec);
+        std::string elap_str = format_eta(elap);
+
+        if (prune_ratio > 1.05) {
+            std::string eff_spd_str = format_speed(eff_spd);
+            std::string pbk_spd_str = format_speed(pbkdf2_spd);
+            std::string cur_space_str = format_num(std::min(static_cast<double>(cur) * prune_ratio, math_comb));
+            std::string tot_space_str = format_num(math_comb);
+
+            std::fprintf(stderr,
+                         "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;36m%-11s\033[0m "
+                         "\033[90m(PBKDF2: %s)\033[0m │ \033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
+                         bar.c_str(), empty.c_str(), pct, eff_spd_str.c_str(), pbk_spd_str.c_str(), eta_str.c_str(),
+                         cur_space_str.c_str(), tot_space_str.c_str(), elap_str.c_str());
+        } else {
+            std::string spd_str = format_speed(pbkdf2_spd);
+            std::string cur_str = format_num(static_cast<double>(cur));
+            std::string tot_str = format_num(total_comb);
+
+            std::fprintf(stderr,
+                         "\r\033[2K  [\033[36m%s\033[90m%s\033[0m] \033[1;37m%5.1f%%\033[0m │ \033[1;32m%-11s\033[0m │ "
+                         "\033[33mETA: %-5s\033[0m │ \033[90m%s/%s (%s)\033[0m",
+                         bar.c_str(), empty.c_str(), pct, spd_str.c_str(), eta_str.c_str(), cur_str.c_str(),
+                         tot_str.c_str(), elap_str.c_str());
+        }
+        std::fflush(stderr);
+    }
+    std::fprintf(stderr, "\r\033[2K");
+    std::fflush(stderr);
+}
+}  // namespace
+
+void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx, size_t num_threads, SearchState& state) {
+#if defined(__linux__)
+    static const auto cpu_ids = hardware::HostProbe::get_physical_cpu_ids();
+    if (!cpu_ids.empty() && pipeline.config().pin_cores) {
+        int target_cpu = cpu_ids[thread_idx % cpu_ids.size()];
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(target_cpu, &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    }
 #endif
 
-        auto ctx = pipeline.create_thread_context(thread_idx, num_threads);
-        if (!ctx) return;
+    auto ctx = pipeline.create_thread_context(thread_idx, num_threads);
+    if (!ctx)
+        return;
 
-        while (!state.found.load(std::memory_order_relaxed) && !ctx->is_done) {
-            pipeline.process(*ctx, state.found, state.tested_count, state.valid_count, state.result_mutex, state.success, state.result_mnemonic);
-            pipeline.advance(*ctx);
-        }
-
-        pipeline.flush(*ctx, state.found, state.tested_count, state.valid_count, state.result_mutex, state.success, state.result_mnemonic);
+    while (!state.found.load(std::memory_order_relaxed) && !ctx->is_done) {
+        pipeline.process(*ctx, state.found, state.tested_count, state.valid_count, state.result_mutex, state.success,
+                         state.result_mnemonic);
+        pipeline.advance(*ctx);
     }
 
-    void BruteForceEngine::run(ExecutionPipeline& pipeline, size_t num_threads) {
-        const double total = pipeline.total_combinations();
-        const double math_total = pipeline.math_combinations();
-        if (pipeline.config().use_gpu && !pipeline.config().use_hybrid) {
-            num_threads = 1;
-        } else if (total < num_threads * 128) {
-            num_threads = 1;
-        }
+    pipeline.flush(*ctx, state.found, state.tested_count, state.valid_count, state.result_mutex, state.success,
+                   state.result_mnemonic);
+}
 
-        std::string pin_str = pipeline.config().pin_cores ? "Ativo (Pinning Físico)" : "Desativado";
-        std::println("Iniciando busca SIMD (Motor: \033[1;36m{}\033[0m │ Threads: \033[1;37m{}\033[0m │ Afinidade: {})\n",
-                     pipeline.architecture_name(), num_threads, pin_str);
-
-        const auto start = std::chrono::steady_clock::now();
-        SearchState state;
-
-        std::vector<std::thread> workers;
-        workers.reserve(num_threads);
-        for (size_t i = 0; i < num_threads; ++i) {
-            workers.emplace_back(&BruteForceEngine::worker, std::ref(pipeline), i, num_threads, std::ref(state));
-        }
-
-        std::thread progress(monitor_progress, std::cref(state), num_threads, start, total, math_total);
-
-        for (auto& t : workers) t.join();
-        state.all_done.store(true, std::memory_order_relaxed);
-        progress.join();
-        std::print("\n");
-
-        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start);
-        const double total_sec = elapsed.count();
-        const uint64_t total_tested = state.tested_count.load();
-        const double avg_spd = (total_sec > 0) ? (static_cast<double>(total_tested) / total_sec) : 0.0;
-        const double prune_ratio = (total > 0 && math_total > total) ? (math_total / total) : 1.0;
-        const double eff_avg_spd = avg_spd * prune_ratio;
-
-        print_box_top("ESTATÍSTICAS DA BUSCA", DEFAULT_INNER_WIDTH);
-        print_box_line(std::format("Tempo decorrido   : \033[1;37m{:.4f} segundos\033[0m ({})", total_sec, format_eta(total_sec)), DEFAULT_INNER_WIDTH);
-        if (prune_ratio > 1.05) {
-            print_box_line(std::format("Velocidade Efetiva: \033[1;36m{}\033[0m (Varredura do Espaço com Poda)", format_speed(eff_avg_spd)), DEFAULT_INNER_WIDTH);
-            print_box_line(std::format("Taxa PBKDF2 Silício: \033[1;32m{}\033[0m (Cálculo Pesado 2048 HMAC-SHA512)", format_speed(avg_spd)), DEFAULT_INNER_WIDTH);
-            print_box_line(std::format("Espaço Varrido    : {} combinações [Poda Analítica: {:>5.1f}x]",
-                                       format_num(static_cast<double>(total_tested) * prune_ratio), prune_ratio), DEFAULT_INNER_WIDTH);
-            print_box_line(std::format("Chaves PBKDF2 OK  : {} sementes derivadas", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
-        } else {
-            print_box_line(std::format("Velocidade média  : \033[1;32m{}\033[0m", format_speed(avg_spd)), DEFAULT_INNER_WIDTH);
-            print_box_line(std::format("Total testado     : {} chaves", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
-        }
-        print_box_line(std::format("Checksums OK      : {} chaves válidas", format_num(static_cast<double>(state.valid_count.load()))), DEFAULT_INNER_WIDTH);
-        print_box_bottom(DEFAULT_INNER_WIDTH);
-
-        if (state.success) {
-            pipeline.verify_and_print_result(state.result_mnemonic);
-        } else {
-            std::println("\n[!] Busca finalizada. Chave não encontrada.\n");
-        }
+void BruteForceEngine::run(ExecutionPipeline& pipeline, size_t num_threads) {
+    const double total = pipeline.total_combinations();
+    const double math_total = pipeline.math_combinations();
+    if (pipeline.config().use_gpu && !pipeline.config().use_hybrid) {
+        num_threads = 1;
+    } else if (total < num_threads * 128) {
+        num_threads = 1;
     }
-} // namespace cryptowords
+
+    std::string pin_str = pipeline.config().pin_cores ? "Ativo (Pinning Físico)" : "Desativado";
+    std::println("Iniciando busca SIMD (Motor: \033[1;36m{}\033[0m │ Threads: \033[1;37m{}\033[0m │ Afinidade: {})\n",
+                 pipeline.architecture_name(), num_threads, pin_str);
+
+    const auto start = std::chrono::steady_clock::now();
+    SearchState state;
+
+    std::vector<std::thread> workers;
+    workers.reserve(num_threads);
+    for (size_t i = 0; i < num_threads; ++i) {
+        workers.emplace_back(&BruteForceEngine::worker, std::ref(pipeline), i, num_threads, std::ref(state));
+    }
+
+    std::thread progress(monitor_progress, std::cref(state), num_threads, start, total, math_total);
+
+    for (auto& t : workers)
+        t.join();
+    state.all_done.store(true, std::memory_order_relaxed);
+    progress.join();
+    std::print("\n");
+
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start);
+    const double total_sec = elapsed.count();
+    const uint64_t total_tested = state.tested_count.load();
+    const double avg_spd = (total_sec > 0) ? (static_cast<double>(total_tested) / total_sec) : 0.0;
+    const double prune_ratio = (total > 0 && math_total > total) ? (math_total / total) : 1.0;
+    const double eff_avg_spd = avg_spd * prune_ratio;
+
+    print_box_top("ESTATÍSTICAS DA BUSCA", DEFAULT_INNER_WIDTH);
+    print_box_line(
+        std::format("Tempo decorrido   : \033[1;37m{:.4f} segundos\033[0m ({})", total_sec, format_eta(total_sec)),
+        DEFAULT_INNER_WIDTH);
+    if (prune_ratio > 1.05) {
+        print_box_line(std::format("Velocidade Efetiva: \033[1;36m{}\033[0m (Varredura do Espaço com Poda)",
+                                   format_speed(eff_avg_spd)),
+                       DEFAULT_INNER_WIDTH);
+        print_box_line(std::format("Taxa PBKDF2 Silício: \033[1;32m{}\033[0m (Cálculo Pesado 2048 HMAC-SHA512)",
+                                   format_speed(avg_spd)),
+                       DEFAULT_INNER_WIDTH);
+        print_box_line(std::format("Espaço Varrido    : {} combinações [Poda Analítica: {:>5.1f}x]",
+                                   format_num(static_cast<double>(total_tested) * prune_ratio), prune_ratio),
+                       DEFAULT_INNER_WIDTH);
+        print_box_line(
+            std::format("Chaves PBKDF2 OK  : {} sementes derivadas", format_num(static_cast<double>(total_tested))),
+            DEFAULT_INNER_WIDTH);
+    } else {
+        print_box_line(std::format("Velocidade média  : \033[1;32m{}\033[0m", format_speed(avg_spd)),
+                       DEFAULT_INNER_WIDTH);
+        print_box_line(std::format("Total testado     : {} chaves", format_num(static_cast<double>(total_tested))),
+                       DEFAULT_INNER_WIDTH);
+    }
+    print_box_line(
+        std::format("Checksums OK      : {} chaves válidas", format_num(static_cast<double>(state.valid_count.load()))),
+        DEFAULT_INNER_WIDTH);
+    print_box_bottom(DEFAULT_INNER_WIDTH);
+
+    if (state.success) {
+        pipeline.verify_and_print_result(state.result_mnemonic);
+    } else {
+        std::println("\n[!] Busca finalizada. Chave não encontrada.\n");
+    }
+}
+}  // namespace cryptowords

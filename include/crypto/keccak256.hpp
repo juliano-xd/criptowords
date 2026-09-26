@@ -1,19 +1,19 @@
 #pragma once
-#include <cstdint>
-#include <cstddef>
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
 namespace crypto {
 
 class Keccak256 {
-  public:
+   public:
     Keccak256();
     void reset();
     void update(const void* data, size_t len);
     void finalize(uint8_t out[32]);
     static void hash(const void* data, size_t len, uint8_t out[32]);
 
-  private:
+   private:
     uint64_t A_[25];
     uint8_t buf_[136];
     size_t buf_len_;
@@ -24,4 +24,4 @@ class Keccak256 {
     static inline uint64_t rotl64(uint64_t x, int n);
 };
 
-} // namespace crypto
+}  // namespace crypto

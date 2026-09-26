@@ -1,11 +1,12 @@
 #include "../../include/gpu/gpu_info.hpp"
-#include "../../include/cli/ui.hpp"
 
-#include <vector>
-#include <string>
-#include <print>
 #include <algorithm>
 #include <format>
+#include <print>
+#include <string>
+#include <vector>
+
+#include "../../include/cli/ui.hpp"
 
 using namespace cryptowords::ui;
 
@@ -15,10 +16,12 @@ namespace gpu {
 static std::string get_string_param(cl_device_id device, cl_device_info param) {
     size_t size = 0;
     clGetDeviceInfo(device, param, 0, nullptr, &size);
-    if (size == 0) return "";
+    if (size == 0)
+        return "";
     std::string result(size, '\0');
     clGetDeviceInfo(device, param, size, result.data(), nullptr);
-    while (!result.empty() && (result.back() == '\0' || result.back() == ' ' || result.back() == '\n' || result.back() == '\r')) {
+    while (!result.empty() &&
+           (result.back() == '\0' || result.back() == ' ' || result.back() == '\n' || result.back() == '\r')) {
         result.pop_back();
     }
     return result;
@@ -27,16 +30,18 @@ static std::string get_string_param(cl_device_id device, cl_device_info param) {
 static std::string get_platform_string(cl_platform_id platform, cl_platform_info param) {
     size_t size = 0;
     clGetPlatformInfo(platform, param, 0, nullptr, &size);
-    if (size == 0) return "";
+    if (size == 0)
+        return "";
     std::string result(size, '\0');
     clGetPlatformInfo(platform, param, size, result.data(), nullptr);
-    while (!result.empty() && (result.back() == '\0' || result.back() == ' ' || result.back() == '\n' || result.back() == '\r')) {
+    while (!result.empty() &&
+           (result.back() == '\0' || result.back() == ' ' || result.back() == '\n' || result.back() == '\r')) {
         result.pop_back();
     }
     return result;
 }
 
-template<typename T>
+template <typename T>
 static T get_num_param(cl_device_id device, cl_device_info param) {
     T value = 0;
     clGetDeviceInfo(device, param, sizeof(T), &value, nullptr);
@@ -63,7 +68,8 @@ std::vector<DiscoveredDevice> enumerate_devices() {
 
         cl_uint num_devices = 0;
         err = clGetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, 0, nullptr, &num_devices);
-        if (err != CL_SUCCESS || num_devices == 0) continue;
+        if (err != CL_SUCCESS || num_devices == 0)
+            continue;
 
         std::vector<cl_device_id> devices(num_devices);
         clGetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, num_devices, devices.data(), nullptr);
@@ -91,16 +97,17 @@ std::vector<DiscoveredDevice> enumerate_devices() {
             dev.clock_freq = get_num_param<cl_uint>(dev_id, CL_DEVICE_MAX_CLOCK_FREQUENCY);
 
             std::string d_upper = dev.device_name;
-            for (char& c : d_upper) c = static_cast<char>(std::toupper(c));
+            for (char& c : d_upper)
+                c = static_cast<char>(std::toupper(c));
 
             std::string p_upper = p_name;
-            for (char& c : p_upper) c = static_cast<char>(std::toupper(c));
+            for (char& c : p_upper)
+                c = static_cast<char>(std::toupper(c));
 
-            bool is_cpu_emulator = (dev.device_type & CL_DEVICE_TYPE_CPU) != 0 ||
-                                   d_upper.find("POCL") != std::string::npos ||
-                                   d_upper.find("CPU") != std::string::npos ||
-                                   p_upper.find("PORTABLE COMPUTING") != std::string::npos ||
-                                   p_upper.find("POCL") != std::string::npos;
+            bool is_cpu_emulator =
+                (dev.device_type & CL_DEVICE_TYPE_CPU) != 0 || d_upper.find("POCL") != std::string::npos ||
+                d_upper.find("CPU") != std::string::npos || p_upper.find("PORTABLE COMPUTING") != std::string::npos ||
+                p_upper.find("POCL") != std::string::npos;
 
             if (dev.device_type & CL_DEVICE_TYPE_GPU && !is_cpu_emulator) {
                 dev.type_str = "GPU (Dedicada/Integrada)";
@@ -109,21 +116,16 @@ std::vector<DiscoveredDevice> enumerate_devices() {
                 dev.score += static_cast<int>(dev.global_mem / (1024 * 1024 * 512)) * 50;
                 dev.score += static_cast<int>(dev.clock_freq / 20);
 
-                if (d_upper.find("RTX") != std::string::npos ||
-                    d_upper.find("GTX") != std::string::npos ||
-                    d_upper.find("TESLA") != std::string::npos ||
-                    d_upper.find("A100") != std::string::npos ||
-                    d_upper.find("H100") != std::string::npos ||
-                    d_upper.find("RADEON") != std::string::npos ||
-                    d_upper.find("RX") != std::string::npos ||
-                    d_upper.find("GFX") != std::string::npos ||
+                if (d_upper.find("RTX") != std::string::npos || d_upper.find("GTX") != std::string::npos ||
+                    d_upper.find("TESLA") != std::string::npos || d_upper.find("A100") != std::string::npos ||
+                    d_upper.find("H100") != std::string::npos || d_upper.find("RADEON") != std::string::npos ||
+                    d_upper.find("RX") != std::string::npos || d_upper.find("GFX") != std::string::npos ||
                     d_upper.find("ARC") != std::string::npos) {
                     dev.score += 50000;
                 }
 
                 if (p_upper.find("ACCELERATED PARALLEL PROCESSING") != std::string::npos ||
-                    p_upper.find("NVIDIA") != std::string::npos ||
-                    p_upper.find("CUDA") != std::string::npos) {
+                    p_upper.find("NVIDIA") != std::string::npos || p_upper.find("CUDA") != std::string::npos) {
                     dev.score += 20000;
                 }
             } else if (dev.device_type & CL_DEVICE_TYPE_ACCELERATOR) {
@@ -155,7 +157,8 @@ std::vector<DiscoveredDevice> enumerate_devices() {
 
 std::optional<DiscoveredDevice> select_device(int req_platform, int req_device) {
     auto devices = enumerate_devices();
-    if (devices.empty()) return std::nullopt;
+    if (devices.empty())
+        return std::nullopt;
 
     if (req_platform >= 0 && req_device >= 0) {
         for (const auto& d : devices) {
@@ -175,13 +178,15 @@ std::optional<DiscoveredDevice> select_device(int req_platform, int req_device) 
                 }
             }
         }
-        if (best_on_plat) return *best_on_plat;
+        if (best_on_plat)
+            return *best_on_plat;
         return std::nullopt;
     }
 
     // Auto: retorna o recomendado
     for (const auto& d : devices) {
-        if (d.is_recommended) return d;
+        if (d.is_recommended)
+            return d;
     }
     return devices.front();
 }
@@ -192,7 +197,8 @@ void print_device_list() {
     print_box_top("DISPOSITIVOS OPENCL DETECTADOS NO SISTEMA", DEFAULT_INNER_WIDTH);
     if (devices.empty()) {
         print_box_line("  [!] Nenhuma plataforma ou dispositivo OpenCL encontrado no sistema.", DEFAULT_INNER_WIDTH);
-        print_box_line("  Certifique-se de ter drivers de GPU (NVIDIA/AMD/Mesa/Intel) instalados.", DEFAULT_INNER_WIDTH);
+        print_box_line("  Certifique-se de ter drivers de GPU (NVIDIA/AMD/Mesa/Intel) instalados.",
+                       DEFAULT_INNER_WIDTH);
         print_box_bottom(DEFAULT_INNER_WIDTH);
         return;
     }
@@ -204,8 +210,8 @@ void print_device_list() {
                                          d.platform_idx, d.device_idx, d.platform_name, d.device_name, badge);
         print_box_line(header, DEFAULT_INNER_WIDTH);
 
-        std::string info1 = std::format("   ├─ Tipo: {:<20} │ CUs/SMs: {:<3} │ Clock: {:<4} MHz",
-                                        d.type_str, d.compute_units, d.clock_freq);
+        std::string info1 = std::format("   ├─ Tipo: {:<20} │ CUs/SMs: {:<3} │ Clock: {:<4} MHz", d.type_str,
+                                        d.compute_units, d.clock_freq);
         print_box_line(info1, DEFAULT_INNER_WIDTH);
 
         std::string info2 = std::format("   └─ VRAM: {:<5} MB (Max Alloc: {:<4} MB) │ WorkGroup: {:<4} threads",
@@ -228,12 +234,12 @@ void print_device_capabilities(const DiscoveredDevice& d) {
     std::string l2 = std::format("Plataforma   : {} (Versão: {})", d.platform_name, d.version);
     print_box_line(l2, DEFAULT_INNER_WIDTH);
 
-    std::string l3 = std::format("Paralelismo  : {} Compute Units (CUs) │ Max WorkGroup: {} threads",
-                                 d.compute_units, d.max_work_group);
+    std::string l3 = std::format("Paralelismo  : {} Compute Units (CUs) │ Max WorkGroup: {} threads", d.compute_units,
+                                 d.max_work_group);
     print_box_line(l3, DEFAULT_INNER_WIDTH);
 
-    std::string l4 = std::format("Memória VRAM : {} MB Global │ {} MB Alocação Máxima",
-                                 d.global_mem / (1024 * 1024), d.max_alloc / (1024 * 1024));
+    std::string l4 = std::format("Memória VRAM : {} MB Global │ {} MB Alocação Máxima", d.global_mem / (1024 * 1024),
+                                 d.max_alloc / (1024 * 1024));
     print_box_line(l4, DEFAULT_INNER_WIDTH);
 
     size_t local_sz = (d.max_work_group >= 64) ? 64 : d.max_work_group;
@@ -245,11 +251,12 @@ void print_device_capabilities(const DiscoveredDevice& d) {
     }
     batch = ((batch + 63) / 64) * 64;
 
-    std::string l5 = std::format("Orquestração : Lotes dinâmicos de \033[1;33m{} chaves simultâneas\033[0m por pulso OpenCL",
-                                 format_num(static_cast<double>(batch)));
+    std::string l5 =
+        std::format("Orquestração : Lotes dinâmicos de \033[1;33m{} chaves simultâneas\033[0m por pulso OpenCL",
+                    format_num(static_cast<double>(batch)));
     print_box_line(l5, DEFAULT_INNER_WIDTH);
     print_box_bottom(DEFAULT_INNER_WIDTH);
 }
 
-} // namespace gpu
-} // namespace cryptowords
+}  // namespace gpu
+}  // namespace cryptowords

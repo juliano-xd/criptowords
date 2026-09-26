@@ -1,19 +1,21 @@
 #include "../../include/cli/validator.hpp"
-#include "../../include/cli/wordlist.hpp"
-#include "../../include/crypto/bip39.hpp"
+
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <map>
 #include <ranges>
 #include <string>
 #include <thread>
-#include <map>
 #include <unordered_map>
-#include <format>
 
-static std::expected<std::map<size_t, std::vector<std::string>>, std::string>
-parse_constraint_map(std::string_view input) {
+#include "../../include/cli/wordlist.hpp"
+#include "../../include/crypto/bip39.hpp"
+
+static std::expected<std::map<size_t, std::vector<std::string>>, std::string> parse_constraint_map(
+    std::string_view input) {
     std::map<size_t, std::vector<std::string>> result;
     for (const auto group : std::views::split(input, ',')) {
         std::string_view g(group);
@@ -42,20 +44,19 @@ parse_constraint_map(std::string_view input) {
 std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions& raw) {
     AppConfig cfg;
 
-    cfg.list_gpus     = raw.list_gpus;
+    cfg.list_gpus = raw.list_gpus;
     cfg.run_benchmark = raw.run_benchmark;
-    cfg.profile_gpu   = raw.profile_gpu;
-    cfg.gpu_platform  = raw.gpu_platform;
-    cfg.gpu_device    = raw.gpu_device;
-    cfg.gpu_batch     = raw.gpu_batch;
+    cfg.profile_gpu = raw.profile_gpu;
+    cfg.gpu_platform = raw.gpu_platform;
+    cfg.gpu_device = raw.gpu_device;
+    cfg.gpu_batch = raw.gpu_batch;
     cfg.probe_hardware = raw.probe_hardware;
-    cfg.pin_cores     = raw.pin_cores;
-    cfg.num_threads   = raw.num_threads;
+    cfg.pin_cores = raw.pin_cores;
+    cfg.num_threads = raw.num_threads;
 
     if (raw.list_gpus || raw.run_benchmark || raw.probe_hardware) {
         return cfg;
     }
-
 
     size_t raw_size = raw.size;
     std::string raw_lang = raw.lang;
@@ -69,7 +70,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     cfg.use_gpu = raw.use_gpu;
     cfg.use_cpu = raw.use_cpu;
     cfg.use_hybrid = raw.use_hybrid;
-    if (cfg.use_hybrid) cfg.use_gpu = true;
+    if (cfg.use_hybrid)
+        cfg.use_gpu = true;
     cfg.only_valids = !raw.invalid_too;
     cfg.distinct = raw.distinct;
     cfg.target = raw.target;
@@ -77,14 +79,16 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     cfg.probe_hardware = raw.probe_hardware;
     cfg.pin_cores = raw.pin_cores;
 
-
     std::vector<std::string> tokenized_strategies;
     for (const auto& item : raw.strategies) {
         for (const auto part : std::views::split(item, '+')) {
             std::string s(part.begin(), part.end());
-            while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
-            while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
-            if (!s.empty()) tokenized_strategies.push_back(std::move(s));
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+                s.erase(s.begin());
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
+                s.pop_back();
+            if (!s.empty())
+                tokenized_strategies.push_back(std::move(s));
         }
     }
     if (tokenized_strategies.empty()) {
@@ -95,15 +99,20 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     for (auto& s : tokenized_strategies) {
         std::ranges::transform(s, s.begin(), [](unsigned char c) { return std::tolower(c); });
         if (s == "default") {
-            if (!cfg.has_strategy(SearchStrategy::Default)) cfg.strategies.push_back(SearchStrategy::Default);
+            if (!cfg.has_strategy(SearchStrategy::Default))
+                cfg.strategies.push_back(SearchStrategy::Default);
         } else if (s == "hamming" || s == "hamming-gradient" || s == "hamming_gradient") {
-            if (!cfg.has_strategy(SearchStrategy::HammingGradient)) cfg.strategies.push_back(SearchStrategy::HammingGradient);
+            if (!cfg.has_strategy(SearchStrategy::HammingGradient))
+                cfg.strategies.push_back(SearchStrategy::HammingGradient);
         } else if (s == "frequency") {
-            if (!cfg.has_strategy(SearchStrategy::Frequency)) cfg.strategies.push_back(SearchStrategy::Frequency);
+            if (!cfg.has_strategy(SearchStrategy::Frequency))
+                cfg.strategies.push_back(SearchStrategy::Frequency);
         } else if (s == "typo") {
-            if (!cfg.has_strategy(SearchStrategy::Typo)) cfg.strategies.push_back(SearchStrategy::Typo);
+            if (!cfg.has_strategy(SearchStrategy::Typo))
+                cfg.strategies.push_back(SearchStrategy::Typo);
         } else {
-            return std::unexpected(std::format("Estratégia de busca inválida: '{}'. Opções válidas: default, hamming, frequency, typo", s));
+            return std::unexpected(std::format(
+                "Estratégia de busca inválida: '{}'. Opções válidas: default, hamming, frequency, typo", s));
         }
     }
     if (cfg.strategies.empty()) {
@@ -114,9 +123,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
     // O --help promete o intervalo 1-3; sem esta checagem qualquer valor era
     // aceito silenciosamente (ex.: --max-distance 0 ou 99).
     if (cfg.max_distance < 1 || cfg.max_distance > 3) {
-        return std::unexpected(std::format(
-            "Valor inválido para --max-distance: {}. O intervalo suportado é 1-3.",
-            cfg.max_distance));
+        return std::unexpected(
+            std::format("Valor inválido para --max-distance: {}. O intervalo suportado é 1-3.", cfg.max_distance));
     }
 
     cfg.mnemonics.resize(raw_size, AppConfig::UNKNOWN_WORD);
@@ -151,13 +159,13 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
         }
 
         for (char& c : cleaned_mnemonics) {
-            if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+            if (c == '\t' || c == '\n' || c == '\r')
+                c = ' ';
         }
 
-        auto words_view =
-            cleaned_mnemonics | std::views::split(' ') |
-            std::views::filter([](auto r) { return !r.empty(); }) |
-            std::views::transform([](auto r) { return std::string(r.begin(), r.end()); });
+        auto words_view = cleaned_mnemonics | std::views::split(' ') |
+                          std::views::filter([](auto r) { return !r.empty(); }) |
+                          std::views::transform([](auto r) { return std::string(r.begin(), r.end()); });
 
         std::vector<std::string> temp_mnemonic;
         for (auto&& w : words_view) {
@@ -172,7 +180,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
                 cfg.unknows = raw_size;
             } else {
                 return std::unexpected(
-                    std::format("Tamanho incorreto. --size é {}, mas você forneceu {} palavras (use '?' para posições desconhecidas).",
+                    std::format("Tamanho incorreto. --size é {}, mas você forneceu {} palavras (use '?' para posições "
+                                "desconhecidas).",
                                 raw_size, temp_mnemonic.size()));
             }
         }
@@ -186,8 +195,7 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
                     it = word_to_id.find(nfc_w);
                 }
                 if (it == word_to_id.end()) {
-                    return std::unexpected(
-                        std::format("A palavra '{}' não existe na wordlist '{}'.", w, raw_lang));
+                    return std::unexpected(std::format("A palavra '{}' não existe na wordlist '{}'.", w, raw_lang));
                 }
                 cfg.mnemonics[i] = it->second;
                 cfg.unknows--;
@@ -207,8 +215,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
 
         if (std::holds_alternative<uint16_t>(cfg.mnemonics[pos]) &&
             std::get<uint16_t>(cfg.mnemonics[pos]) != AppConfig::UNKNOWN_WORD) {
-            return std::unexpected(std::format(
-                "A posição {} já está preenchida pela mnemonic base. Não use --allow nela.", pos));
+            return std::unexpected(
+                std::format("A posição {} já está preenchida pela mnemonic base. Não use --allow nela.", pos));
         }
 
         std::vector<uint16_t> translated_allows;
@@ -264,7 +272,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
 
     if (cfg.use_gpu) {
         if (cfg.pbkdf2_rounds != 2048) {
-            return std::unexpected(std::format("Aceleração por GPU exige '--rounds 2048' (padrão BIP39), mas {} foi solicitado.", cfg.pbkdf2_rounds));
+            return std::unexpected(std::format(
+                "Aceleração por GPU exige '--rounds 2048' (padrão BIP39), mas {} foi solicitado.", cfg.pbkdf2_rounds));
         }
         if (cfg.use_hybrid) {
             cfg.num_threads = raw.num_threads;
@@ -275,7 +284,8 @@ std::expected<AppConfig, std::string> ConfigValidator::validate(const RawOptions
             } else if (raw.num_threads == 1) {
                 cfg.num_threads = 1;
             } else {
-                cfg.num_threads = 0; // 0 = AUTO. HardwareAdvisor decidirá entre GPU pura (dGPU) ou Híbrido Cooperativo (iGPU + CPU)
+                cfg.num_threads =
+                    0;  // 0 = AUTO. HardwareAdvisor decidirá entre GPU pura (dGPU) ou Híbrido Cooperativo (iGPU + CPU)
             }
         }
     } else {

@@ -8,15 +8,15 @@
 // um namespace — incluí-los aqui corrompe a stdlib (ex.: "'abs' has not been
 // declared in '::'") e esconde as intrínsecas do compilador.
 #if defined(__SHA__)
-# include <immintrin.h>
-# if defined(__GNUC__)
-#  include <stdint.h>
-#  include <x86intrin.h>
-# endif
-# if defined(_MSC_VER)
-#  define WIN32_LEAN_AND_MEAN
-#  include <Windows.h>
-# endif
+#include <immintrin.h>
+#if defined(__GNUC__)
+#include <stdint.h>
+#include <x86intrin.h>
+#endif
+#if defined(_MSC_VER)
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 #endif
 
 #ifndef FORCE_INLINE
@@ -34,10 +34,9 @@ namespace cryptowords::detail {
 inline void set_11bits(uint8_t* buf, size_t bit_offset, uint16_t val) {
     val &= 0x7FF;
     size_t byte_pos = bit_offset / 8;
-    size_t bit_pos  = bit_offset % 8;
+    size_t bit_pos = bit_offset % 8;
 
-    uint32_t current = (static_cast<uint32_t>(buf[byte_pos]) << 16) |
-                       (static_cast<uint32_t>(buf[byte_pos + 1]) << 8) |
+    uint32_t current = (static_cast<uint32_t>(buf[byte_pos]) << 16) | (static_cast<uint32_t>(buf[byte_pos + 1]) << 8) |
                        (static_cast<uint32_t>(buf[byte_pos + 2]));
 
     uint32_t shift = 24 - 11 - bit_pos;
@@ -45,7 +44,7 @@ inline void set_11bits(uint8_t* buf, size_t bit_offset, uint16_t val) {
 
     current = (current & ~mask) | (static_cast<uint32_t>(val) << shift);
 
-    buf[byte_pos]     = static_cast<uint8_t>((current >> 16) & 0xFF);
+    buf[byte_pos] = static_cast<uint8_t>((current >> 16) & 0xFF);
     buf[byte_pos + 1] = static_cast<uint8_t>((current >> 8) & 0xFF);
     buf[byte_pos + 2] = static_cast<uint8_t>(current & 0xFF);
 }
@@ -66,8 +65,7 @@ typedef UINT8 uint8_t;
 
 /* Process multiple blocks. The caller is responsible for setting the initial */
 /*  state, and the caller is responsible for padding the final block.        */
-inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t length)
-{
+inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t length) {
     __m128i STATE0, STATE1;
     __m128i MSG, TMP;
     __m128i MSG0, MSG1, MSG2, MSG3;
@@ -75,23 +73,21 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
     const __m128i MASK = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
 
     /* Load initial values */
-    TMP = _mm_loadu_si128((const __m128i*) &state[0]);
-    STATE1 = _mm_loadu_si128((const __m128i*) &state[4]);
-
+    TMP = _mm_loadu_si128((const __m128i*)&state[0]);
+    STATE1 = _mm_loadu_si128((const __m128i*)&state[4]);
 
     TMP = _mm_shuffle_epi32(TMP, 0xB1);          /* CDAB */
     STATE1 = _mm_shuffle_epi32(STATE1, 0x1B);    /* EFGH */
     STATE0 = _mm_alignr_epi8(TMP, STATE1, 8);    /* ABEF */
     STATE1 = _mm_blend_epi16(STATE1, TMP, 0xF0); /* CDGH */
 
-    while (length >= 64)
-    {
+    while (length >= 64) {
         /* Save current state */
         ABEF_SAVE = STATE0;
         CDGH_SAVE = STATE1;
 
         /* Rounds 0-3 */
-        MSG = _mm_loadu_si128((const __m128i*) (data+0));
+        MSG = _mm_loadu_si128((const __m128i*)(data + 0));
         MSG0 = _mm_shuffle_epi8(MSG, MASK);
         MSG = _mm_add_epi32(MSG0, _mm_set_epi64x(0xE9B5DBA5B5C0FBCFULL, 0x71374491428A2F98ULL));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
@@ -99,7 +95,7 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
         STATE0 = _mm_sha256rnds2_epu32(STATE0, STATE1, MSG);
 
         /* Rounds 4-7 */
-        MSG1 = _mm_loadu_si128((const __m128i*) (data+16));
+        MSG1 = _mm_loadu_si128((const __m128i*)(data + 16));
         MSG1 = _mm_shuffle_epi8(MSG1, MASK);
         MSG = _mm_add_epi32(MSG1, _mm_set_epi64x(0xAB1C5ED5923F82A4ULL, 0x59F111F13956C25BULL));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
@@ -108,7 +104,7 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
         MSG0 = _mm_sha256msg1_epu32(MSG0, MSG1);
 
         /* Rounds 8-11 */
-        MSG2 = _mm_loadu_si128((const __m128i*) (data+32));
+        MSG2 = _mm_loadu_si128((const __m128i*)(data + 32));
         MSG2 = _mm_shuffle_epi8(MSG2, MASK);
         MSG = _mm_add_epi32(MSG2, _mm_set_epi64x(0x550C7DC3243185BEULL, 0x12835B01D807AA98ULL));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
@@ -117,7 +113,7 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
         MSG1 = _mm_sha256msg1_epu32(MSG1, MSG2);
 
         /* Rounds 12-15 */
-        MSG3 = _mm_loadu_si128((const __m128i*) (data+48));
+        MSG3 = _mm_loadu_si128((const __m128i*)(data + 48));
         MSG3 = _mm_shuffle_epi8(MSG3, MASK);
         MSG = _mm_add_epi32(MSG3, _mm_set_epi64x(0xC19BF1749BDC06A7ULL, 0x80DEB1FE72BE5D74ULL));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
@@ -159,7 +155,7 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
         MSG1 = _mm_sha256msg1_epu32(MSG1, MSG2);
 
         /* Rounds 28-31 */
-        MSG = _mm_add_epi32(MSG3, _mm_set_epi64x(0x1429296706CA6351ULL,  0xD5A79147C6E00BF3ULL));
+        MSG = _mm_add_epi32(MSG3, _mm_set_epi64x(0x1429296706CA6351ULL, 0xD5A79147C6E00BF3ULL));
         STATE1 = _mm_sha256rnds2_epu32(STATE1, STATE0, MSG);
         TMP = _mm_alignr_epi8(MSG3, MSG2, 4);
         MSG0 = _mm_add_epi32(MSG0, TMP);
@@ -256,19 +252,14 @@ inline void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t
     STATE1 = _mm_alignr_epi8(STATE1, TMP, 8);    /* ABEF */
 
     /* Save state */
-    _mm_storeu_si128((__m128i*) &state[0], STATE0);
-    _mm_storeu_si128((__m128i*) &state[4], STATE1);
+    _mm_storeu_si128((__m128i*)&state[0], STATE0);
+    _mm_storeu_si128((__m128i*)&state[4], STATE1);
 }
-
 
 /* Specialized SHA-NI for BIP-39 with Mid-State Caching (OTM-18):
    MSG0, MSG2, MSG3 are invariant; only MSG1 changes per candidate */
-FORCE_INLINE uint8_t sha256_bip39_msg1_variable_shani_reg(
-    __m128i STATE0_r3, __m128i STATE1_r3,
-    __m128i MSG0, __m128i MSG2, __m128i MSG3,
-    __m128i ABEF_SAVE,
-    __m128i MSG1)
-{
+FORCE_INLINE uint8_t sha256_bip39_msg1_variable_shani_reg(__m128i STATE0_r3, __m128i STATE1_r3, __m128i MSG0,
+                                                          __m128i MSG2, __m128i MSG3, __m128i ABEF_SAVE, __m128i MSG1) {
     __m128i STATE0 = STATE0_r3;
     __m128i STATE1 = STATE1_r3;
     __m128i MSG, TMP;
@@ -416,28 +407,19 @@ FORCE_INLINE uint8_t sha256_bip39_msg1_variable_shani_reg(
     return static_cast<uint8_t>(_mm_extract_epi8(STATE0, 15));
 }
 
-FORCE_INLINE uint8_t sha256_bip39_msg1_variable_shani(
-    __m128i STATE0_r3, __m128i STATE1_r3,
-    __m128i MSG0, __m128i MSG2, __m128i MSG3,
-    __m128i ABEF_SAVE,
-    const uint8_t* data16)
-{
+FORCE_INLINE uint8_t sha256_bip39_msg1_variable_shani(__m128i STATE0_r3, __m128i STATE1_r3, __m128i MSG0, __m128i MSG2,
+                                                      __m128i MSG3, __m128i ABEF_SAVE, const uint8_t* data16) {
     const __m128i MASK = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
-    __m128i MSG1 = _mm_loadu_si128((const __m128i*) data16);
+    __m128i MSG1 = _mm_loadu_si128((const __m128i*)data16);
     MSG1 = _mm_shuffle_epi8(MSG1, MASK);
-    return sha256_bip39_msg1_variable_shani_reg(
-        STATE0_r3, STATE1_r3, MSG0, MSG2, MSG3, ABEF_SAVE, MSG1);
+    return sha256_bip39_msg1_variable_shani_reg(STATE0_r3, STATE1_r3, MSG0, MSG2, MSG3, ABEF_SAVE, MSG1);
 }
 
 /* Specialized 2-Way Interleaved SHA-NI for BIP-39 (OTM-37):
    Hides 4-cycle execution latency by dual-dispatching 2 candidates simultaneously */
-FORCE_INLINE void sha256_bip39_msg1_variable_shani_x2(
-    __m128i STATE0_r3, __m128i STATE1_r3,
-    __m128i MSG0, __m128i MSG2, __m128i MSG3,
-    __m128i ABEF_SAVE,
-    __m128i MSG1_A, __m128i MSG1_B,
-    uint8_t& out_a, uint8_t& out_b)
-{
+FORCE_INLINE void sha256_bip39_msg1_variable_shani_x2(__m128i STATE0_r3, __m128i STATE1_r3, __m128i MSG0, __m128i MSG2,
+                                                      __m128i MSG3, __m128i ABEF_SAVE, __m128i MSG1_A, __m128i MSG1_B,
+                                                      uint8_t& out_a, uint8_t& out_b) {
     __m128i STATE0_A = STATE0_r3;
     __m128i STATE1_A = STATE1_r3;
     __m128i STATE0_B = STATE0_r3;
@@ -709,11 +691,8 @@ FORCE_INLINE void sha256_bip39_msg1_variable_shani_x2(
 /* Specialized 2-Way Interleaved SHA-NI for BIP-39 where MSG0 is variable (OTM-37 / OTM-38):
    Used for 12-word mnemonics where word 10 falls entirely in MSG0 (bytes 0..15).
    MSG1, MSG2, MSG3 are invariant. */
-FORCE_INLINE void sha256_bip39_msg0_variable_shani_x2(
-    __m128i MSG1, __m128i MSG2, __m128i MSG3,
-    __m128i MSG0_A, __m128i MSG0_B,
-    uint8_t& out_a, uint8_t& out_b)
-{
+FORCE_INLINE void sha256_bip39_msg0_variable_shani_x2(__m128i MSG1, __m128i MSG2, __m128i MSG3, __m128i MSG0_A,
+                                                      __m128i MSG0_B, uint8_t& out_a, uint8_t& out_b) {
     const __m128i ABEF_SAVE = _mm_set_epi32(0x6a09e667, 0xbb67ae85, 0x510e527f, 0x9b05688c);
     const __m128i INIT_CDGH = _mm_set_epi32(0x3c6ef372, 0xa54ff53a, 0x1f83d9ab, 0x5be0cd19);
 
@@ -993,23 +972,18 @@ FORCE_INLINE void sha256_bip39_msg0_variable_shani_x2(
     out_b = static_cast<uint8_t>(_mm_extract_epi8(STATE0_B, 15));
 }
 
-FORCE_INLINE uint8_t sha256_bip39_msg0_variable_shani_reg(
-    __m128i MSG1, __m128i MSG2, __m128i MSG3,
-    __m128i MSG0)
-{
+FORCE_INLINE uint8_t sha256_bip39_msg0_variable_shani_reg(__m128i MSG1, __m128i MSG2, __m128i MSG3, __m128i MSG0) {
     uint8_t out_a, out_b;
     sha256_bip39_msg0_variable_shani_x2(MSG1, MSG2, MSG3, MSG0, MSG0, out_a, out_b);
     return out_a;
 }
 
 FORCE_INLINE uint8_t sha256_bip39_first_byte_shani(const uint8_t block64[64]) {
-    uint32_t state[8] = {
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-    };
+    uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     sha256_process_x86(state, block64, 64);
     return static_cast<uint8_t>(state[0] >> 24);
 }
 #endif
 
-} // namespace cryptowords::detail
+}  // namespace cryptowords::detail

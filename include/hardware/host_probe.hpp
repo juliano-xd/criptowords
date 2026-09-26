@@ -1,10 +1,10 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
-#include <cstdint>
-#include <cstddef>
-#include <optional>
 
 namespace cryptowords {
 namespace hardware {
@@ -18,14 +18,14 @@ struct CpuCacheInfo {
     uint32_t l1d_instances = 0;
     uint32_t l2_instances = 0;
     uint32_t l3_instances = 0;
-    uint32_t cache_line_size = 64;   // Linha de cache padrão em bytes (64 bytes x86_64)
-    uint32_t l1d_ways = 0;           // Associatividade L1d (vias)
-    uint32_t l1i_ways = 0;           // Associatividade L1i (vias)
-    uint32_t l2_ways = 0;            // Associatividade L2 (vias)
-    uint32_t l3_ways = 0;            // Associatividade L3 (vias)
-    uint32_t l1d_sets = 0;           // Número de conjuntos L1d
-    uint32_t l2_sets = 0;            // Número de conjuntos L2
-    uint32_t l3_sets = 0;            // Número de conjuntos L3
+    uint32_t cache_line_size = 64;  // Linha de cache padrão em bytes (64 bytes x86_64)
+    uint32_t l1d_ways = 0;          // Associatividade L1d (vias)
+    uint32_t l1i_ways = 0;          // Associatividade L1i (vias)
+    uint32_t l2_ways = 0;           // Associatividade L2 (vias)
+    uint32_t l3_ways = 0;           // Associatividade L3 (vias)
+    uint32_t l1d_sets = 0;          // Número de conjuntos L1d
+    uint32_t l2_sets = 0;           // Número de conjuntos L2
+    uint32_t l3_sets = 0;           // Número de conjuntos L3
 };
 
 struct CpuTopology {
@@ -45,8 +45,8 @@ struct CpuTopology {
 
     // Classificação de Silício & CPPC (Collaborative Processor Performance Control)
     bool cppc_active = false;
-    std::vector<uint32_t> core_highest_perf;    // Pontuação de silício por CPU lógica
-    std::vector<int> golden_cores_ranking;      // IDs ordenados por maior desempenho
+    std::vector<uint32_t> core_highest_perf;  // Pontuação de silício por CPU lógica
+    std::vector<int> golden_cores_ranking;    // IDs ordenados por maior desempenho
 };
 
 // Extensões essenciais de instruções detectadas via CPUID
@@ -103,7 +103,6 @@ struct CpuInfo {
     std::string thp_status;
 };
 
-
 struct MemoryInfo {
     uint64_t total_ram_bytes = 0;
     uint64_t available_ram_bytes = 0;
@@ -111,13 +110,7 @@ struct MemoryInfo {
     bool hugepages_available = false;
 };
 
-enum class GpuCategory {
-    DiscreteHighEnd,
-    DiscreteMidRange,
-    DiscreteEntry,
-    Integrated,
-    UnknownAccelerator
-};
+enum class GpuCategory { DiscreteHighEnd, DiscreteMidRange, DiscreteEntry, Integrated, UnknownAccelerator };
 
 struct HostGpuDevice {
     int platform_idx = 0;
@@ -149,7 +142,7 @@ struct HostProfile {
 };
 
 class HostProbe {
-public:
+   public:
     static CpuInfo probe_cpu();
     static MemoryInfo probe_memory();
     static std::vector<HostGpuDevice> probe_gpus();
@@ -157,5 +150,5 @@ public:
     static std::vector<int> get_physical_cpu_ids();
 };
 
-} // namespace hardware
-} // namespace cryptowords
+}  // namespace hardware
+}  // namespace cryptowords

@@ -1,13 +1,13 @@
-#include <iostream>
-#include <iomanip>
-#include <sstream>
-#include <vector>
-#include <string>
-#include <cstring>
-#include <chrono>
-#include <random>
-#include <cassert>
 #include <bit>
+#include <cassert>
+#include <chrono>
+#include <cstring>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "../include/crypto/sha512.hpp"
 
@@ -20,9 +20,9 @@ using Clock = std::chrono::high_resolution_clock;
 // Usada para comparar permanentemente contra a versão oficial crypto::SHA512 (UInt SIMD)
 // =========================================================================
 class SHA512_Baseline {
-public:
+   public:
     static constexpr size_t DIGEST_SIZE = 64;
-    static constexpr size_t BLOCK_SIZE  = 128;
+    static constexpr size_t BLOCK_SIZE = 128;
 
     SHA512_Baseline() noexcept { reset(); }
 
@@ -36,7 +36,7 @@ public:
         h_[6] = 0x1f83d9abfb41bd6bULL;
         h_[7] = 0x5be0cd19137e2179ULL;
         total_len_ = 0;
-        buf_len_   = 0;
+        buf_len_ = 0;
     }
 
     void process_block(const uint8_t block[BLOCK_SIZE]) noexcept {
@@ -60,10 +60,9 @@ public:
             0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
             0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
             0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
-            0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
-        };
+            0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL};
 
-        auto Ch  = [](uint64_t x, uint64_t y, uint64_t z) noexcept { return z ^ (x & (y ^ z)); };
+        auto Ch = [](uint64_t x, uint64_t y, uint64_t z) noexcept { return z ^ (x & (y ^ z)); };
         auto Maj = [](uint64_t x, uint64_t y, uint64_t z) noexcept { return (x & y) | (z & (x | y)); };
         auto BSig0 = [](uint64_t x) noexcept { return std::rotr(x, 28) ^ std::rotr(x, 34) ^ std::rotr(x, 39); };
         auto BSig1 = [](uint64_t x) noexcept { return std::rotr(x, 14) ^ std::rotr(x, 18) ^ std::rotr(x, 41); };
@@ -71,7 +70,7 @@ public:
         auto SSig1 = [](uint64_t x) noexcept { return std::rotr(x, 19) ^ std::rotr(x, 61) ^ (x >> 6); };
 
         uint64_t W[16];
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             uint64_t v;
             std::memcpy(&v, block + i * 8, 8);
@@ -81,31 +80,50 @@ public:
         uint64_t a = h_[0], b = h_[1], c = h_[2], d = h_[3];
         uint64_t e = h_[4], f = h_[5], g = h_[6], h = h_[7];
 
-        #pragma GCC unroll 16
+#pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             const uint64_t t1 = h + BSig1(e) + Ch(e, f, g) + K512[i] + W[i];
             const uint64_t t2 = BSig0(a) + Maj(a, b, c);
-            h = g; g = f; f = e; e = d + t1;
-            d = c; c = b; b = a; a = t1 + t2;
+            h = g;
+            g = f;
+            f = e;
+            e = d + t1;
+            d = c;
+            c = b;
+            b = a;
+            a = t1 + t2;
         }
 
         for (int r = 1; r < 5; ++r) {
-            #pragma GCC unroll 16
+#pragma GCC unroll 16
             for (int i = 0; i < 16; ++i) {
                 W[i] += SSig0(W[(i + 1) & 15]) + W[(i + 9) & 15] + SSig1(W[(i + 14) & 15]);
                 const uint64_t t1 = h + BSig1(e) + Ch(e, f, g) + K512[r * 16 + i] + W[i];
                 const uint64_t t2 = BSig0(a) + Maj(a, b, c);
-                h = g; g = f; f = e; e = d + t1;
-                d = c; c = b; b = a; a = t1 + t2;
+                h = g;
+                g = f;
+                f = e;
+                e = d + t1;
+                d = c;
+                c = b;
+                b = a;
+                a = t1 + t2;
             }
         }
 
-        h_[0] += a; h_[1] += b; h_[2] += c; h_[3] += d;
-        h_[4] += e; h_[5] += f; h_[6] += g; h_[7] += h;
+        h_[0] += a;
+        h_[1] += b;
+        h_[2] += c;
+        h_[3] += d;
+        h_[4] += e;
+        h_[5] += f;
+        h_[6] += g;
+        h_[7] += h;
     }
 
     void update(const void* data, size_t len) noexcept {
-        if (len == 0) return;
+        if (len == 0)
+            return;
         const auto* p = static_cast<const uint8_t*>(data);
         total_len_ += len;
 
@@ -162,11 +180,11 @@ public:
         ctx.finalize(out);
     }
 
-private:
+   private:
     uint64_t h_[8];
-    uint8_t  buf_[BLOCK_SIZE];
+    uint8_t buf_[BLOCK_SIZE];
     uint64_t total_len_ = 0;
-    size_t   buf_len_   = 0;
+    size_t buf_len_ = 0;
 };
 
 std::string to_hex(const uint8_t* data, size_t len) {
@@ -182,7 +200,7 @@ void print_banner(const std::string& title) {
     std::cout << "======================================================================\n";
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     print_banner("BATERIA 1: VETORES OFICIAIS NIST FIPS 180-4");
@@ -196,29 +214,24 @@ int main() {
         size_t repeat_count = 0;
     };
 
-    std::vector<TestCase> nist_vectors = {
-        {
-            "NIST Vector 1: Mensagem Vazia (0 bytes)", "",
-            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
-            false, 0
-        },
-        {
-            "NIST Vector 2: String 'abc'", "abc",
-            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
-            false, 0
-        },
-        {
-            "NIST Vector 3: String de 112 bytes (fronteira exata de padding)",
-            "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
-            "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909",
-            false, 0
-        },
-        {
-            "NIST Vector 4: 1.000.000 de 'a's (Multi-bloco massivo)", "",
-            "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b",
-            true, 1000000
-        }
-    };
+    std::vector<TestCase> nist_vectors = {{"NIST Vector 1: Mensagem Vazia (0 bytes)", "",
+                                           "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d8"
+                                           "5f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+                                           false, 0},
+                                          {"NIST Vector 2: String 'abc'", "abc",
+                                           "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274"
+                                           "fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+                                           false, 0},
+                                          {"NIST Vector 3: String de 112 bytes (fronteira exata de padding)",
+                                           "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjkl"
+                                           "mnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+                                           "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e490"
+                                           "0f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909",
+                                           false, 0},
+                                          {"NIST Vector 4: 1.000.000 de 'a's (Multi-bloco massivo)", "",
+                                           "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877"
+                                           "ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b",
+                                           true, 1000000}};
 
     int nist_fails = 0;
     for (const auto& tc : nist_vectors) {
@@ -243,7 +256,7 @@ int main() {
             crypto::SHA512::hash(tc.input.data(), tc.input.size(), out_current);
         }
 
-        std::string hex_base    = to_hex(out_base, 64);
+        std::string hex_base = to_hex(out_base, 64);
         std::string hex_current = to_hex(out_current, 64);
 
         if (hex_base != tc.expected_hex) {
@@ -259,20 +272,21 @@ int main() {
             std::cout << "         Digest: " << hex_current.substr(0, 32) << "...\n";
         }
     }
-    if (nist_fails > 0) return 1;
+    if (nist_fails > 0)
+        return 1;
 
     print_banner("BATERIA 2: TESTES DIFERENCIAIS FUZZING (10.000+ MENSAGENS ALEATÓRIAS)");
     std::cout << "  Executando 10.000 amostras com tamanhos dinâmicos e de fronteira crítica...\n";
 
     std::mt19937_64 rng(0x1337BEEFCAFEULL);
-    std::vector<size_t> boundary_sizes = {
-        0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 65, 111, 112, 113,
-        127, 128, 129, 239, 240, 255, 256, 257, 511, 512, 1023, 1024, 4096, 65536
-    };
+    std::vector<size_t> boundary_sizes = {0,   1,   2,   3,   7,   8,   15,   16,   31,   32,
+                                          63,  64,  65,  111, 112, 113, 127,  128,  129,  239,
+                                          240, 255, 256, 257, 511, 512, 1023, 1024, 4096, 65536};
 
     for (size_t sz : boundary_sizes) {
         std::vector<uint8_t> buf(sz);
-        for (size_t i = 0; i < sz; ++i) buf[i] = static_cast<uint8_t>(rng());
+        for (size_t i = 0; i < sz; ++i)
+            buf[i] = static_cast<uint8_t>(rng());
         uint8_t out_base[64], out_current[64];
         SHA512_Baseline::hash(buf.data(), buf.size(), out_base);
         crypto::SHA512::hash(buf.data(), buf.size(), out_current);
@@ -288,7 +302,8 @@ int main() {
     for (size_t iter = 0; iter < FUZZ_ITERS; ++iter) {
         size_t sz = len_dist(rng);
         std::vector<uint8_t> buf(sz);
-        for (size_t i = 0; i < sz; ++i) buf[i] = static_cast<uint8_t>(rng());
+        for (size_t i = 0; i < sz; ++i)
+            buf[i] = static_cast<uint8_t>(rng());
         uint8_t out_base[64], out_current[64];
         SHA512_Baseline::hash(buf.data(), buf.size(), out_base);
         crypto::SHA512::hash(buf.data(), buf.size(), out_current);
@@ -302,7 +317,8 @@ int main() {
     print_banner("BATERIA 3: TESTES DE STREAMING / ATUALIZAÇÃO FRACIONADA");
     {
         std::vector<uint8_t> test_stream(12345);
-        for (size_t i = 0; i < test_stream.size(); ++i) test_stream[i] = static_cast<uint8_t>(i ^ 0xA5);
+        for (size_t i = 0; i < test_stream.size(); ++i)
+            test_stream[i] = static_cast<uint8_t>(i ^ 0xA5);
 
         uint8_t one_shot[64];
         crypto::SHA512::hash(test_stream.data(), test_stream.size(), one_shot);
@@ -337,18 +353,23 @@ int main() {
     std::cout << "  [Atual]     = crypto::SHA512 otimizado (feed-forward direto, sem UInt spill)\n";
     std::cout << "  [2x-Interl] = 2 hashes independentes alternados (ILP máximo via OOO)\n\n";
 
-    struct BenchPayload { std::string label; size_t size; size_t iters; };
-    std::vector<BenchPayload> payloads = {
-        {"64B   (PBKDF2 inner/outer block)",   64,    500000},
-        {"128B  (1 Bloco completo SHA-512)",   128,   400000},
-        {"1KB   (8 Blocos de compressão)",    1024,   100000},
-        {"64KB  (512 Blocos de compressão)", 65536,     2000},
-        {"1MB   (8192 Blocos massivos)",    1048576,     150}
+    struct BenchPayload {
+        std::string label;
+        size_t size;
+        size_t iters;
     };
+    std::vector<BenchPayload> payloads = {{"64B   (PBKDF2 inner/outer block)", 64, 500000},
+                                          {"128B  (1 Bloco completo SHA-512)", 128, 400000},
+                                          {"1KB   (8 Blocos de compressão)", 1024, 100000},
+                                          {"64KB  (512 Blocos de compressão)", 65536, 2000},
+                                          {"1MB   (8192 Blocos massivos)", 1048576, 150}};
 
-    std::cout << "  +-----------------------------------+----------------+----------------+----------------+----------+\n";
-    std::cout << "  | Carga / Tamanho                   | Baseline (MB/s)| Atual    (MB/s)| 2x-Interl(MB/s)| vs Base  |\n";
-    std::cout << "  +-----------------------------------+----------------+----------------+----------------+----------+\n";
+    std::cout
+        << "  +-----------------------------------+----------------+----------------+----------------+----------+\n";
+    std::cout
+        << "  | Carga / Tamanho                   | Baseline (MB/s)| Atual    (MB/s)| 2x-Interl(MB/s)| vs Base  |\n";
+    std::cout
+        << "  +-----------------------------------+----------------+----------------+----------------+----------+\n";
 
     for (const auto& bp : payloads) {
         std::vector<uint8_t> dataA(bp.size, 0x5A);
@@ -381,23 +402,26 @@ int main() {
         double mb_ilv = (double(2 * half * bp.size) / (1024.0 * 1024.0)) / sec_ilv;
 
         double sp_curr = mb_curr / mb_base;
-        double sp_ilv  = mb_ilv  / mb_base;
+        double sp_ilv = mb_ilv / mb_base;
 
         auto fmt_sp = [](double sp) -> std::string {
             std::ostringstream ss;
-            if (sp >= 1.0) ss << "+" << std::fixed << std::setprecision(1) << ((sp-1.0)*100.0) << "%";
-            else           ss << "-" << std::fixed << std::setprecision(1) << ((1.0-sp)*100.0) << "%";
+            if (sp >= 1.0)
+                ss << "+" << std::fixed << std::setprecision(1) << ((sp - 1.0) * 100.0) << "%";
+            else
+                ss << "-" << std::fixed << std::setprecision(1) << ((1.0 - sp) * 100.0) << "%";
             return ss.str();
         };
 
-        (void)sp_curr; // coluna variação da coluna "atual" removida para simplificar
-        std::cout << "  | " << std::left  << std::setw(33) << bp.label
-                  << " | " << std::right << std::setw(12) << std::fixed << std::setprecision(2) << mb_base << " MB/s"
+        (void)sp_curr;  // coluna variação da coluna "atual" removida para simplificar
+        std::cout << "  | " << std::left << std::setw(33) << bp.label << " | " << std::right << std::setw(12)
+                  << std::fixed << std::setprecision(2) << mb_base << " MB/s"
                   << " | " << std::right << std::setw(12) << std::fixed << std::setprecision(2) << mb_curr << " MB/s"
-                  << " | " << std::right << std::setw(12) << std::fixed << std::setprecision(2) << mb_ilv  << " MB/s"
-                  << " | " << std::right << std::setw(8)  << fmt_sp(sp_ilv) << " |\n";
+                  << " | " << std::right << std::setw(12) << std::fixed << std::setprecision(2) << mb_ilv << " MB/s"
+                  << " | " << std::right << std::setw(8) << fmt_sp(sp_ilv) << " |\n";
     }
-    std::cout << "  +-----------------------------------+----------------+----------------+----------------+----------+\n\n";
+    std::cout
+        << "  +-----------------------------------+----------------+----------------+----------------+----------+\n\n";
     std::cout << "  'vs Base' = throughput 2x-Interl vs Baseline (medida do ganho real de ILP).\n\n";
 
     std::cout << "======================================================================\n";

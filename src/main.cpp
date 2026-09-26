@@ -1,31 +1,30 @@
-#include "../include/config.hpp"
+#include <cstdint>
+#include <cstring>
+#include <span>
+#include <variant>
+
+#include "../include/benchmark/benchmark_runner.hpp"
 #include "../include/cli/parser.hpp"
+#include "../include/cli/ui.hpp"
 #include "../include/cli/validator.hpp"
+#include "../include/config.hpp"
+#include "../include/crypto/bip39.hpp"
+#include "../include/crypto/secp256k1_point.hpp"
+#include "../include/gpu/gpu_engine.hpp"
+#include "../include/gpu/gpu_info.hpp"
+#include "../include/hardware/hardware_advisor.hpp"
+#include "../include/hardware/host_probe.hpp"
 #include "../include/search/engine.hpp"
 #include "../include/search/optimizer.hpp"
 #include "../include/search/pipeline.hpp"
 #include "../include/search/reporter.hpp"
-#include "../include/crypto/bip39.hpp"
-#include "../include/gpu/gpu_engine.hpp"
-#include "../include/gpu/gpu_info.hpp"
-#include "../include/hardware/host_probe.hpp"
-#include "../include/hardware/hardware_advisor.hpp"
-#include "../include/benchmark/benchmark_runner.hpp"
-#include "../include/crypto/secp256k1_point.hpp"
-#include "../include/cli/ui.hpp"
-
-#include <cstdint>
-#include <span>
-#include <variant>
-#include <cstring>
 
 using namespace cryptowords::ui;
 using namespace std;
 
 static bool is_fully_known(const AppConfig& cfg) {
     for (const auto& w : cfg.mnemonics) {
-        if (!holds_alternative<uint16_t>(w) ||
-            get<uint16_t>(w) == AppConfig::UNKNOWN_WORD) {
+        if (!holds_alternative<uint16_t>(w) || get<uint16_t>(w) == AppConfig::UNKNOWN_WORD) {
             return false;
         }
     }
@@ -33,9 +32,11 @@ static bool is_fully_known(const AppConfig& cfg) {
 }
 
 static bool run_derivation_mode(const AppConfig& cfg) {
-    vector<uint16_t> ids; ids.reserve(cfg.mnemonics.size());
+    vector<uint16_t> ids;
+    ids.reserve(cfg.mnemonics.size());
 
-    for (const auto& w : cfg.mnemonics) ids.push_back(get<uint16_t>(w));
+    for (const auto& w : cfg.mnemonics)
+        ids.push_back(get<uint16_t>(w));
 
     if (cfg.only_valids && !cryptowords::Bip39Deriver::verify_checksum(ids)) {
         println(stderr, "\n[✗] FALHA: A frase semente fornecida possui um Checksum inválido!");
@@ -43,13 +44,16 @@ static bool run_derivation_mode(const AppConfig& cfg) {
         return false;
     }
 
-    static const secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    static const secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     const char* pp = cfg.passphrase.empty() ? nullptr : cfg.passphrase.c_str();
 
     std::span<const uint16_t> ids_span(ids);
-    const string addr = (cfg.coin == CoinTarget::BTC)
-        ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator)
-        : cryptowords::Bip39Deriver::derive_eth_address(*ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator);
+    const string addr =
+        (cfg.coin == CoinTarget::BTC)
+            ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(),
+                                                            cfg.pbkdf2_rounds, cfg.separator)
+            : cryptowords::Bip39Deriver::derive_eth_address(*ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(),
+                                                            cfg.pbkdf2_rounds, cfg.separator);
 
     println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");
     println("  • Moeda           : {}", (cfg.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)"));
@@ -65,7 +69,8 @@ static bool run_derivation_mode(const AppConfig& cfg) {
 int main(int argc, char* argv[]) {
     auto raw = CLIParser::parse(argc, argv);
     if (!raw) {
-        if (raw.error() == "HELP") return 0;
+        if (raw.error() == "HELP")
+            return 0;
         println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO");
         println(stderr, "    Motivo: {}", raw.error());
         println(stderr, "\nUse '--help' para ver os exemplos de uso.");
@@ -85,7 +90,8 @@ int main(int argc, char* argv[]) {
     crypto::warmup_secp256k1_table();
 
     // Sondagem de hardware do host e análise de auto-tuning (GPU sob demanda)
-    const bool need_gpu_probe = cfg.use_gpu || cfg.use_hybrid || cfg.list_gpus || cfg.run_benchmark || cfg.probe_hardware;
+    const bool need_gpu_probe =
+        cfg.use_gpu || cfg.use_hybrid || cfg.list_gpus || cfg.run_benchmark || cfg.probe_hardware;
     const auto host_profile = cryptowords::hardware::HostProbe::probe_all(need_gpu_probe);
     const auto tuning_strat = cryptowords::hardware::HardwareAdvisor::analyze(cfg, host_profile);
 
@@ -121,7 +127,7 @@ int main(int argc, char* argv[]) {
         size_t salt_len = salt.size();
         uint8_t s_buf[128] = {};
         memcpy(s_buf, salt.data(), salt_len);
-        s_buf[salt_len]     = 0;
+        s_buf[salt_len] = 0;
         s_buf[salt_len + 1] = 0;
         s_buf[salt_len + 2] = 0;
         s_buf[salt_len + 3] = 1;
@@ -134,7 +140,8 @@ int main(int argc, char* argv[]) {
         }
         salt_block64[15] = static_cast<uint64_t>(128 + salt_len + 4) * 8;
 
-        if (!cryptowords::GPUEngine::get_instance().init(cfg.gpu_platform, cfg.gpu_device, cfg.gpu_batch, salt_block64, false, slot_size)) {
+        if (!cryptowords::GPUEngine::get_instance().init(cfg.gpu_platform, cfg.gpu_device, cfg.gpu_batch, salt_block64,
+                                                         false, slot_size)) {
             println(stderr, "\n[✗] FALHA NA INICIALIZAÇÃO DA GPU");
             println(stderr, "    Motivo: Não foi possível inicializar o dispositivo ou compilar os kernels OpenCL.");
             return 1;

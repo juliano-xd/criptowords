@@ -1,26 +1,27 @@
 #include "../../include/crypto/hmac_sha512.hpp"
-#include "../../include/crypto/pbkdf2_simd.hpp"
+
+#include <immintrin.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <immintrin.h>
+
+#include "../../include/crypto/pbkdf2_simd.hpp"
 
 namespace crypto {
 
-
-
-void pbkdf2_hmac_sha512(const char* password, size_t password_len,
-                        const uint8_t* salt, size_t salt_len,
-                        int iterations, uint8_t* out, size_t out_len) {
+void pbkdf2_hmac_sha512(const char* password, size_t password_len, const uint8_t* salt, size_t salt_len, int iterations,
+                        uint8_t* out, size_t out_len) {
     static constexpr size_t HASH_LEN = 64;
 
-    if (salt_len > 252) salt_len = 252;
+    if (salt_len > 252)
+        salt_len = 252;
     const size_t u1_msg_len = salt_len + 4;
 
     uint8_t salt_and_be4[256];
-    if (salt_len != 0) std::memcpy(salt_and_be4, salt, salt_len);
+    if (salt_len != 0)
+        std::memcpy(salt_and_be4, salt, salt_len);
     salt_and_be4[salt_len + 0] = 0;
     salt_and_be4[salt_len + 1] = 0;
     salt_and_be4[salt_len + 2] = 0;
@@ -42,7 +43,7 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
 
     alignas(64) uint64_t T_words[8];
     alignas(64) uint64_t U_words[8];
-    #pragma GCC unroll 8
+#pragma GCC unroll 8
     for (int i = 0; i < 8; ++i) {
         uint64_t v = pbkdf2_simd_detail::load_be64(U.data() + i * 8);
         T_words[i] = v;
@@ -56,12 +57,14 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
 
     alignas(64) uint64_t W[16];
     for (int it = 1; it < iterations; ++it) {
-        #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) W[i] = U_words[i];
+#pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i)
+            W[i] = U_words[i];
         SHA512::compress_padded_block64(in_iv, W, U_words);
 
-        #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) W[i] = U_words[i];
+#pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i)
+            W[i] = U_words[i];
         SHA512::compress_padded_block64(out_iv, W, U_words);
 
 #if defined(__AVX2__)
@@ -70,8 +73,9 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
         t0 = _mm256_xor_si256(t0, u0);
         t1 = _mm256_xor_si256(t1, u1);
 #else
-        #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) T_words[i] ^= U_words[i];
+#pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i)
+            T_words[i] ^= U_words[i];
 #endif
     }
 
@@ -88,4 +92,4 @@ void pbkdf2_hmac_sha512(const char* password, size_t password_len,
     std::memcpy(out, T_out, std::min<size_t>(HASH_LEN, out_len));
 }
 
-} // namespace crypto
+}  // namespace crypto

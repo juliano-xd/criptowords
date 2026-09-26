@@ -1,12 +1,12 @@
 #include "../../include/hardware/host_probe.hpp"
 
-#include <fstream>
-#include <sstream>
 #include <algorithm>
-#include <set>
-#include <thread>
-#include <cstring>
 #include <cctype>
+#include <cstring>
+#include <fstream>
+#include <set>
+#include <sstream>
+#include <thread>
 #include <unordered_set>
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -14,10 +14,10 @@
 #endif
 
 #if defined(__linux__)
-#include <unistd.h>
-#include <sys/sysinfo.h>
 #include <dirent.h>
 #include <sched.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
 #endif
 
 #ifdef CRYPTOWORDS_HAVE_GPU
@@ -38,7 +38,8 @@ static std::string trim(std::string s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\n' || s.front() == '\r')) {
         s.erase(s.begin());
     }
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\n' || s.back() == '\r' || s.back() == '\0')) {
+    while (!s.empty() &&
+           (s.back() == ' ' || s.back() == '\t' || s.back() == '\n' || s.back() == '\r' || s.back() == '\0')) {
         s.pop_back();
     }
     return s;
@@ -49,9 +50,12 @@ static size_t parse_size_str(const std::string& str) {
     char unit = '\0';
     std::stringstream ss(str);
     ss >> val >> unit;
-    if (unit == 'K' || unit == 'k') val *= 1024;
-    else if (unit == 'M' || unit == 'm') val *= 1024 * 1024;
-    else if (unit == 'G' || unit == 'g') val *= 1024 * 1024 * 1024;
+    if (unit == 'K' || unit == 'k')
+        val *= 1024;
+    else if (unit == 'M' || unit == 'm')
+        val *= 1024 * 1024;
+    else if (unit == 'G' || unit == 'g')
+        val *= 1024 * 1024 * 1024;
     return val;
 }
 
@@ -84,27 +88,28 @@ CpuInfo HostProbe::probe_cpu() {
         info.raw_model = (base_family == 0x06 || base_family == 0x0F) ? ((ext_model << 4) | base_model) : base_model;
 
         // ECX flags
-        info.caps.sse41     = (ecx & (1u << 19)) != 0;
-        info.caps.sse42     = (ecx & (1u << 20)) != 0;
-        info.caps.movbe     = (ecx & (1u << 22)) != 0;
-        info.caps.popcnt    = (ecx & (1u << 23)) != 0;
-        info.caps.aes_ni    = (ecx & (1u << 25)) != 0;
-        info.caps.avx       = (ecx & (1u << 28)) != 0;
+        info.caps.sse41 = (ecx & (1u << 19)) != 0;
+        info.caps.sse42 = (ecx & (1u << 20)) != 0;
+        info.caps.movbe = (ecx & (1u << 22)) != 0;
+        info.caps.popcnt = (ecx & (1u << 23)) != 0;
+        info.caps.aes_ni = (ecx & (1u << 25)) != 0;
+        info.caps.avx = (ecx & (1u << 28)) != 0;
     }
 
     // Leaf 7, Subleaf 0: AVX2, AVX-512, SHA-NI, BMI
     if (max_leaf >= 7) {
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
-        info.caps.bmi1      = (ebx & (1u << 3)) != 0;
-        info.caps.avx2      = (ebx & (1u << 5)) != 0;
-        info.caps.bmi2      = (ebx & (1u << 8)) != 0;
-        info.caps.avx512f   = (ebx & (1u << 16)) != 0;
-        info.caps.adx       = (ebx & (1u << 19)) != 0;
-        info.caps.sha_ni    = (ebx & (1u << 29)) != 0;
-        info.caps.avx512bw  = (ebx & (1u << 30)) != 0;
-        info.caps.avx512vl  = (ebx & (1u << 31)) != 0;
+        info.caps.bmi1 = (ebx & (1u << 3)) != 0;
+        info.caps.avx2 = (ebx & (1u << 5)) != 0;
+        info.caps.bmi2 = (ebx & (1u << 8)) != 0;
+        info.caps.avx512f = (ebx & (1u << 16)) != 0;
+        info.caps.adx = (ebx & (1u << 19)) != 0;
+        info.caps.sha_ni = (ebx & (1u << 29)) != 0;
+        info.caps.avx512bw = (ebx & (1u << 30)) != 0;
+        info.caps.avx512vl = (ebx & (1u << 31)) != 0;
 
-        if ((edx & (1u << 15)) != 0) info.topology.is_hybrid = true;
+        if ((edx & (1u << 15)) != 0)
+            info.topology.is_hybrid = true;
 
         // Leaf 7, Subleaf 1: Intel SHA-512
         __cpuid_count(7, 1, eax, ebx, ecx, edx);
@@ -113,12 +118,14 @@ CpuInfo HostProbe::probe_cpu() {
 
     if (max_leaf >= 0x1A) {
         __cpuid(0x1A, eax, ebx, ecx, edx);
-        if (((eax >> 24) & 0xFF) != 0) info.topology.is_hybrid = true;
+        if (((eax >> 24) & 0xFF) != 0)
+            info.topology.is_hybrid = true;
     }
 
     if (max_leaf >= 0x24) {
         __cpuid_count(0x24, 0, eax, ebx, ecx, edx);
-        if ((ebx & 0xFF) > 0) info.caps.avx10 = true;
+        if ((ebx & 0xFF) > 0)
+            info.caps.avx10 = true;
     }
 
     // Extended Leaves 0x80000000+
@@ -141,14 +148,14 @@ CpuInfo HostProbe::probe_cpu() {
 
     if (max_ext_leaf >= 0x80000007) {
         __cpuid(0x80000007, eax, ebx, ecx, edx);
-        info.caps.cpb_boost     = (edx & (1u << 9)) != 0;
+        info.caps.cpb_boost = (edx & (1u << 9)) != 0;
     }
 
     if (max_ext_leaf >= 0x80000008) {
         __cpuid(0x80000008, eax, ebx, ecx, edx);
         info.physical_addr_bits = eax & 0xFF;
-        info.virtual_addr_bits  = (eax >> 8) & 0xFF;
-        info.caps.clzero        = (ebx & (1u << 0)) != 0;
+        info.virtual_addr_bits = (eax >> 8) & 0xFF;
+        info.caps.clzero = (ebx & (1u << 0)) != 0;
     }
 #endif
 
@@ -158,23 +165,34 @@ CpuInfo HostProbe::probe_cpu() {
 
     // Identificação de família / microarquitetura
     std::string b_upper = info.brand_string;
-    for (char& c : b_upper) c = static_cast<char>(std::toupper(c));
+    for (char& c : b_upper)
+        c = static_cast<char>(std::toupper(c));
 
-    if (b_upper.find("7520U") != std::string::npos || b_upper.find("7320U") != std::string::npos || b_upper.find("MENDOCINO") != std::string::npos) {
+    if (b_upper.find("7520U") != std::string::npos || b_upper.find("7320U") != std::string::npos ||
+        b_upper.find("MENDOCINO") != std::string::npos) {
         info.microarch_family = "AMD Zen 2 (Mendocino APU, 6nm)";
-    } else if (b_upper.find("9950X") != std::string::npos || b_upper.find("9900X") != std::string::npos || (b_upper.find("ZEN 5") != std::string::npos && b_upper.find("RYZEN 5") == std::string::npos)) {
+    } else if (b_upper.find("9950X") != std::string::npos || b_upper.find("9900X") != std::string::npos ||
+               (b_upper.find("ZEN 5") != std::string::npos && b_upper.find("RYZEN 5") == std::string::npos)) {
         info.microarch_family = "AMD Zen 5 (AVX-512 Nativo Dual-Issue, 4nm)";
-    } else if (b_upper.find("7950X") != std::string::npos || b_upper.find("7900X") != std::string::npos || b_upper.find("7800X3D") != std::string::npos || (b_upper.find("ZEN 4") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
+    } else if (b_upper.find("7950X") != std::string::npos || b_upper.find("7900X") != std::string::npos ||
+               b_upper.find("7800X3D") != std::string::npos ||
+               (b_upper.find("ZEN 4") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
         info.microarch_family = "AMD Zen 4 (AVX-512 Fused, 5nm)";
-    } else if (b_upper.find("5950X") != std::string::npos || b_upper.find("5900X") != std::string::npos || b_upper.find("5800X") != std::string::npos || b_upper.find("5600X") != std::string::npos || (b_upper.find("ZEN 3") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
+    } else if (b_upper.find("5950X") != std::string::npos || b_upper.find("5900X") != std::string::npos ||
+               b_upper.find("5800X") != std::string::npos || b_upper.find("5600X") != std::string::npos ||
+               (b_upper.find("ZEN 3") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
         info.microarch_family = "AMD Zen 3 (Monolithic 8-Core CCX, 7nm)";
-    } else if (b_upper.find("3950X") != std::string::npos || b_upper.find("3900X") != std::string::npos || b_upper.find("3800X") != std::string::npos || b_upper.find("3700X") != std::string::npos || b_upper.find("3600") != std::string::npos || (b_upper.find("ZEN 2") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
+    } else if (b_upper.find("3950X") != std::string::npos || b_upper.find("3900X") != std::string::npos ||
+               b_upper.find("3800X") != std::string::npos || b_upper.find("3700X") != std::string::npos ||
+               b_upper.find("3600") != std::string::npos ||
+               (b_upper.find("ZEN 2") != std::string::npos && b_upper.find("RYZEN") == std::string::npos)) {
         info.microarch_family = "AMD Zen 2 (Matisse / Renoir, 7nm)";
     } else if (b_upper.find("THREADRIPPER") != std::string::npos) {
         info.microarch_family = "AMD Ryzen Threadripper High-Core Workstation";
     } else if (b_upper.find("EPYC") != std::string::npos) {
         info.microarch_family = "AMD EPYC Server Enterprise Cluster";
-    } else if (b_upper.find("RAPTOR LAKE") != std::string::npos || b_upper.find("14900") != std::string::npos || b_upper.find("13900") != std::string::npos) {
+    } else if (b_upper.find("RAPTOR LAKE") != std::string::npos || b_upper.find("14900") != std::string::npos ||
+               b_upper.find("13900") != std::string::npos) {
         info.microarch_family = "Intel Raptor Lake (Hybrid P/E Cores, Intel 7)";
     } else if (b_upper.find("ALDER LAKE") != std::string::npos || b_upper.find("12900") != std::string::npos) {
         info.microarch_family = "Intel Alder Lake (Golden Cove, Intel 7)";
@@ -199,7 +217,8 @@ CpuInfo HostProbe::probe_cpu() {
     for (int cpu_idx = 0; cpu_idx < 1024; ++cpu_idx) {
         std::string core_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/topology/core_id";
         std::ifstream f_core(core_path);
-        if (!f_core.is_open()) break;
+        if (!f_core.is_open())
+            break;
 
         int core_id = -1;
         f_core >> core_id;
@@ -207,7 +226,8 @@ CpuInfo HostProbe::probe_cpu() {
         info.topology.physical_core_ids.push_back(core_id);
         logical_count++;
 
-        std::string pkg_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/topology/physical_package_id";
+        std::string pkg_path =
+            "/sys/devices/system/cpu/cpu" + std::to_string(cpu_idx) + "/topology/physical_package_id";
         std::ifstream f_pkg(pkg_path);
         if (f_pkg.is_open()) {
             int pkg_id = -1;
@@ -231,7 +251,8 @@ CpuInfo HostProbe::probe_cpu() {
     for (int idx = 0; idx < 10; ++idx) {
         std::string base = "/sys/devices/system/cpu/cpu0/cache/index" + std::to_string(idx) + "/";
         std::ifstream f_level(base + "level");
-        if (!f_level.is_open()) break;
+        if (!f_level.is_open())
+            break;
 
         int level = 0;
         f_level >> level;
@@ -248,17 +269,20 @@ CpuInfo HostProbe::probe_cpu() {
         if (f_linesz.is_open()) {
             uint32_t lsz = 64;
             f_linesz >> lsz;
-            if (lsz > 0) info.cache.cache_line_size = lsz;
+            if (lsz > 0)
+                info.cache.cache_line_size = lsz;
         }
         // Ways of associativity
         uint32_t ways = 0;
         std::ifstream f_ways(base + "ways_of_associativity");
-        if (f_ways.is_open()) f_ways >> ways;
+        if (f_ways.is_open())
+            f_ways >> ways;
 
         // Number of sets
         uint32_t sets = 0;
         std::ifstream f_sets(base + "number_of_sets");
-        if (f_sets.is_open()) f_sets >> sets;
+        if (f_sets.is_open())
+            f_sets >> sets;
 
         if (level == 1) {
             if (type == "Data") {
@@ -288,8 +312,10 @@ CpuInfo HostProbe::probe_cpu() {
     for (int n = 0; n < 256; ++n) {
         std::string n_path = "/sys/devices/system/node/node" + std::to_string(n);
         std::ifstream f_n(n_path);
-        if (access(n_path.c_str(), F_OK) == 0) numa_count++;
-        else break;
+        if (access(n_path.c_str(), F_OK) == 0)
+            numa_count++;
+        else
+            break;
     }
     info.topology.numa_nodes = std::max(1, numa_count);
 
@@ -352,9 +378,8 @@ CpuInfo HostProbe::probe_cpu() {
         }
     }
     if (!perf_ranking.empty()) {
-        std::stable_sort(perf_ranking.begin(), perf_ranking.end(), [](const auto& a, const auto& b) {
-            return a.first > b.first;
-        });
+        std::stable_sort(perf_ranking.begin(), perf_ranking.end(),
+                         [](const auto& a, const auto& b) { return a.first > b.first; });
         for (const auto& p : perf_ranking) {
             info.topology.golden_cores_ranking.push_back(p.second);
         }
@@ -381,7 +406,8 @@ CpuInfo HostProbe::probe_cpu() {
             mf = static_cast<uint32_t>(khz / 1000);
         }
         max_freqs.push_back(mf);
-        if (mf > highest_max) highest_max = mf;
+        if (mf > highest_max)
+            highest_max = mf;
     }
     bool freq_disparity = false;
     if (highest_max > 0) {
@@ -451,7 +477,6 @@ CpuInfo HostProbe::probe_cpu() {
 }
 
 MemoryInfo HostProbe::probe_memory() {
-
     MemoryInfo mem;
 #if defined(__linux__)
     struct sysinfo si;
@@ -477,7 +502,8 @@ MemoryInfo HostProbe::probe_memory() {
             std::stringstream ss(line.substr(16));
             uint64_t total = 0;
             ss >> total;
-            if (total > 0) mem.hugepages_available = true;
+            if (total > 0)
+                mem.hugepages_available = true;
         }
     }
 #endif
@@ -490,7 +516,8 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
 #ifdef CRYPTOWORDS_HAVE_GPU
     cl_uint num_platforms = 0;
     cl_int err = clGetPlatformIDs(0, nullptr, &num_platforms);
-    if (err != CL_SUCCESS || num_platforms == 0) return devices;
+    if (err != CL_SUCCESS || num_platforms == 0)
+        return devices;
 
     std::vector<cl_platform_id> platforms(num_platforms);
     clGetPlatformIDs(num_platforms, platforms.data(), nullptr);
@@ -507,7 +534,8 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
 
         cl_uint num_devices = 0;
         err = clGetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, 0, nullptr, &num_devices);
-        if (err != CL_SUCCESS || num_devices == 0) continue;
+        if (err != CL_SUCCESS || num_devices == 0)
+            continue;
 
         std::vector<cl_device_id> dev_ids(num_devices);
         clGetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, num_devices, dev_ids.data(), nullptr);
@@ -523,7 +551,8 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
             auto read_str = [&](cl_device_info param) {
                 size_t sz = 0;
                 clGetDeviceInfo(dev_id, param, 0, nullptr, &sz);
-                if (sz == 0) return std::string();
+                if (sz == 0)
+                    return std::string();
                 std::string s(sz, '\0');
                 clGetDeviceInfo(dev_id, param, sz, s.data(), nullptr);
                 return trim(s);
@@ -562,10 +591,12 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
 
             // Classificação inteligente da GPU
             std::string name_upper = dev.device_name;
-            for (char& c : name_upper) c = static_cast<char>(std::toupper(c));
+            for (char& c : name_upper)
+                c = static_cast<char>(std::toupper(c));
 
             std::string p_name_upper = p_name;
-            for (char& c : p_name_upper) c = static_cast<char>(std::toupper(c));
+            for (char& c : p_name_upper)
+                c = static_cast<char>(std::toupper(c));
 
             bool is_cpu_emulator = (dev_type & CL_DEVICE_TYPE_CPU) != 0 ||
                                    name_upper.find("POCL") != std::string::npos ||
@@ -573,28 +604,22 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
                                    p_name_upper.find("PORTABLE COMPUTING") != std::string::npos ||
                                    p_name_upper.find("POCL") != std::string::npos;
 
-            bool name_is_integrated = (name_upper.find("610M") != std::string::npos ||
-                                       name_upper.find("680M") != std::string::npos ||
-                                       name_upper.find("780M") != std::string::npos ||
-                                       name_upper.find("VEGA") != std::string::npos ||
-                                       name_upper.find("UHD") != std::string::npos ||
-                                       name_upper.find("IRIS") != std::string::npos ||
-                                       name_upper.find("INTEGRATED") != std::string::npos);
+            bool name_is_integrated =
+                (name_upper.find("610M") != std::string::npos || name_upper.find("680M") != std::string::npos ||
+                 name_upper.find("780M") != std::string::npos || name_upper.find("VEGA") != std::string::npos ||
+                 name_upper.find("UHD") != std::string::npos || name_upper.find("IRIS") != std::string::npos ||
+                 name_upper.find("INTEGRATED") != std::string::npos);
 
-            bool name_is_high_end = (name_upper.find("RTX 4090") != std::string::npos ||
-                                     name_upper.find("RTX 4080") != std::string::npos ||
-                                     name_upper.find("RTX 3090") != std::string::npos ||
-                                     name_upper.find("7900 XTX") != std::string::npos ||
-                                     name_upper.find("7900 XT") != std::string::npos ||
-                                     name_upper.find("A100") != std::string::npos ||
-                                     name_upper.find("H100") != std::string::npos ||
-                                     name_upper.find("MI300") != std::string::npos);
+            bool name_is_high_end =
+                (name_upper.find("RTX 4090") != std::string::npos || name_upper.find("RTX 4080") != std::string::npos ||
+                 name_upper.find("RTX 3090") != std::string::npos || name_upper.find("7900 XTX") != std::string::npos ||
+                 name_upper.find("7900 XT") != std::string::npos || name_upper.find("A100") != std::string::npos ||
+                 name_upper.find("H100") != std::string::npos || name_upper.find("MI300") != std::string::npos);
 
-            bool name_is_discrete = (name_is_high_end ||
-                                     name_upper.find("RTX") != std::string::npos ||
-                                     name_upper.find("GTX") != std::string::npos ||
-                                     name_upper.find("RADEON RX") != std::string::npos ||
-                                     name_upper.find("ARC A") != std::string::npos);
+            bool name_is_discrete =
+                (name_is_high_end || name_upper.find("RTX") != std::string::npos ||
+                 name_upper.find("GTX") != std::string::npos || name_upper.find("RADEON RX") != std::string::npos ||
+                 name_upper.find("ARC A") != std::string::npos);
 
             double ipc_multiplier = 1.0;
             if (is_cpu_emulator) {
@@ -612,7 +637,8 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
                 dev.category_str = "dGPU Dedicada Performance";
                 dev.is_discrete = true;
                 ipc_multiplier = 10.0;
-            } else if (name_is_integrated || (dev.compute_units <= 4 && dev.global_mem_bytes < 8ULL * 1024 * 1024 * 1024)) {
+            } else if (name_is_integrated ||
+                       (dev.compute_units <= 4 && dev.global_mem_bytes < 8ULL * 1024 * 1024 * 1024)) {
                 dev.category = GpuCategory::Integrated;
                 dev.category_str = "iGPU Integrada (SoC/APU)";
                 dev.is_discrete = false;
@@ -626,12 +652,14 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
 
             // Warp / Wavefront Size preferido
             if (dev.vendor.find("NVIDIA") != std::string::npos) {
-                dev.preferred_work_group_multiple = 32; // Warp NVIDIA
-            } else if (dev.vendor.find("Advanced Micro Devices") != std::string::npos || dev.vendor.find("AMD") != std::string::npos) {
-                if (name_upper.find("GFX10") != std::string::npos || name_upper.find("GFX11") != std::string::npos || name_upper.find("RDNA") != std::string::npos || name_upper.find("610M") != std::string::npos) {
-                    dev.preferred_work_group_multiple = 32; // RDNA Wave32 padrão
+                dev.preferred_work_group_multiple = 32;  // Warp NVIDIA
+            } else if (dev.vendor.find("Advanced Micro Devices") != std::string::npos ||
+                       dev.vendor.find("AMD") != std::string::npos) {
+                if (name_upper.find("GFX10") != std::string::npos || name_upper.find("GFX11") != std::string::npos ||
+                    name_upper.find("RDNA") != std::string::npos || name_upper.find("610M") != std::string::npos) {
+                    dev.preferred_work_group_multiple = 32;  // RDNA Wave32 padrão
                 } else {
-                    dev.preferred_work_group_multiple = 64; // GCN/CDNA Wave64
+                    dev.preferred_work_group_multiple = 64;  // GCN/CDNA Wave64
                 }
             } else {
                 dev.preferred_work_group_multiple = 32;
@@ -639,7 +667,7 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
 
             double driver_priority = 1.0;
             if (p_name_upper.find("RUSTICL") != std::string::npos || p_name_upper.find("POCL") != std::string::npos) {
-                driver_priority = 0.6; // Menor prioridade para rusticl/emuladores se driver nativo estiver disponível
+                driver_priority = 0.6;  // Menor prioridade para rusticl/emuladores se driver nativo estiver disponível
             }
             if (name_upper.find("GFX10") != std::string::npos || name_upper.find("GFX11") != std::string::npos) {
                 // Em RDNA2/RDNA3 (gfx10xx/gfx11xx), 1 WGP reportado equivale a 2 Compute Units físicas
@@ -649,7 +677,8 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
             }
 
             // Cálculo do Compute Index (Score)
-            dev.compute_index = static_cast<double>(dev.compute_units) * (dev.clock_freq_mhz / 1000.0) * ipc_multiplier * driver_priority;
+            dev.compute_index = static_cast<double>(dev.compute_units) * (dev.clock_freq_mhz / 1000.0) *
+                                ipc_multiplier * driver_priority;
 
             int score = static_cast<int>(dev.compute_index * 1000.0);
             if (score > best_score) {
@@ -709,16 +738,19 @@ std::vector<int> HostProbe::get_physical_cpu_ids() {
     bool has_affinity = (sched_getaffinity(0, sizeof(cpu_set_t), &allowed) == 0);
 
     std::unordered_set<uint64_t> seen_physical_cores;
-    for (int cpu = 0; ; ++cpu) {
+    for (int cpu = 0;; ++cpu) {
         std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/core_id";
         std::ifstream f(path);
-        if (!f) break;
-        if (has_affinity && !CPU_ISSET(cpu, &allowed)) continue;
+        if (!f)
+            break;
+        if (has_affinity && !CPU_ISSET(cpu, &allowed))
+            continue;
 
         int core_id = -1;
         int pkg_id = 0;
         if (f >> core_id) {
-            std::string pkg_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/physical_package_id";
+            std::string pkg_path =
+                "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/physical_package_id";
             std::ifstream f_pkg(pkg_path);
             if (f_pkg >> pkg_id) {}
             uint64_t core_key = (static_cast<uint64_t>(pkg_id) << 32) | static_cast<uint32_t>(core_id);
@@ -729,7 +761,8 @@ std::vector<int> HostProbe::get_physical_cpu_ids() {
             }
         }
     }
-    for (int s : secondary) primary.push_back(s);
+    for (int s : secondary)
+        primary.push_back(s);
 #endif
     if (primary.empty()) {
         const unsigned int total = std::thread::hardware_concurrency();
@@ -740,5 +773,5 @@ std::vector<int> HostProbe::get_physical_cpu_ids() {
     return primary;
 }
 
-} // namespace hardware
-} // namespace cryptowords
+}  // namespace hardware
+}  // namespace cryptowords

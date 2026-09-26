@@ -6,15 +6,16 @@
 #include "../math/UInt.hpp"
 #pragma GCC diagnostic pop
 
+#include <immintrin.h>
+
 #include <cstdint>
 #include <cstring>
-#include <immintrin.h>
 
 namespace crypto {
 
 // Ordem do grupo SECP256K1 n:
 // n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-    constexpr UInt<4> N_VAL("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+constexpr UInt<4> N_VAL("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 
 // Delta para redução rápida de carry de 256 bits:
 // Delta = 2^256 - n = 0x14551231950B75FC4402DA1732FC9BEBF
@@ -22,7 +23,7 @@ namespace crypto {
 // limb 1: 0x4551231950B75FC4
 // limb 2: 0x0000000000000001
 // limb 3: 0x0000000000000000
-    constexpr UInt<4> DELTA(0x402DA1732FC9BEBFULL, 0x4551231950B75FC4ULL, 0x0000000000000001ULL, 0x0000000000000000ULL);
+constexpr UInt<4> DELTA(0x402DA1732FC9BEBFULL, 0x4551231950B75FC4ULL, 0x0000000000000001ULL, 0x0000000000000000ULL);
 
 // Adição escalar rápida: seckey = (seckey + tweak) mod n
 // Equivalente bit-a-bit à rotina secp256k1_ec_seckey_tweak_add com performance nativa inlined via UInt<4>.
@@ -37,20 +38,23 @@ FORCE_INLINE bool secp256k1_tweak_add_fast(uint8_t* seckey, const uint8_t* tweak
 
     const uint8_t carry = k.add_carry(tw);
     if (carry || k >= N_VAL) {
-        unsigned char c = _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));
+        unsigned char c =
+            _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));
         c = _addcarry_u64(c, k.bits[1], 0x4551231950B75FC4ULL, reinterpret_cast<unsigned long long*>(&k.bits[1]));
         c = _addcarry_u64(c, k.bits[2], 1ULL, reinterpret_cast<unsigned long long*>(&k.bits[2]));
         _addcarry_u64(c, k.bits[3], 0ULL, reinterpret_cast<unsigned long long*>(&k.bits[3]));
     }
 
-    if (k.eqz()) [[unlikely]] return false;
+    if (k.eqz()) [[unlikely]]
+        return false;
 
     k.to_bytes(seckey, 32, Endianness::big);
     return true;
 }
 
-FORCE_INLINE bool secp256k1_tweak_add_fast(std::array<uint8_t, 32> &seckey, const std::array<uint8_t, 32> &tweak) noexcept {
+FORCE_INLINE bool secp256k1_tweak_add_fast(std::array<uint8_t, 32>& seckey,
+                                           const std::array<uint8_t, 32>& tweak) noexcept {
     return secp256k1_tweak_add_fast(seckey.data(), tweak.data());
 }
 
-} // namespace crypto
+}  // namespace crypto
