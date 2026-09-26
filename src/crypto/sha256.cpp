@@ -1,6 +1,5 @@
 #include "../../include/crypto/sha256.hpp"
 #include "../../include/crypto/sha256_shani.hpp"
-#include "math/UInt.hpp"
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -409,7 +408,7 @@ void SHA256::hash(const void* data, uint8_t len, uint8_t out[32]) {
     ctx.finalize(out);
 }
 
-void SHA256::hash33(const std::array<u8, 33> &in, std::array<u8, 32> &out) noexcept {
+void SHA256::hash33(const std::array<uint8_t, 33> &in, std::array<uint8_t, 32> &out) noexcept {
     hash(in.data(), 33, out.data());
 }
 

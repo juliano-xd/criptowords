@@ -51,18 +51,14 @@ static bool run_derivation_mode(const AppConfig& cfg) {
         ? cryptowords::Bip39Deriver::derive_btc_address(ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator)
         : cryptowords::Bip39Deriver::derive_eth_address(*ctx, ids_span, cfg.wordlist, pp, cfg.passphrase.size(), cfg.pbkdf2_rounds, cfg.separator);
 
-    print("\n");
-    print_box_top("DERIVAÇÃO CONCLUÍDA", DEFAULT_INNER_WIDTH);
-    print_box_line(format("Moeda           : {}", (cfg.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)")), DEFAULT_INNER_WIDTH);
-    print_box_line(format("Tamanho Frase   : {} palavras (Checksum BIP-39 Válido)", ids.size()), DEFAULT_INNER_WIDTH);
-    print_box_line(format("Endereço Gerado : \033[1;32m{}\033[0m", addr), DEFAULT_INNER_WIDTH);
-    if (!cfg.passphrase.empty()) {
-        print_box_line(format("Senha (Pass)    : \"{}\"", cfg.passphrase), DEFAULT_INNER_WIDTH);
-    }
-    print_box_bottom(DEFAULT_INNER_WIDTH);
-
     println("\n[✓] DERIVAÇÃO CONCLUÍDA COM SUCESSO");
-    println("    [+] Endereço gerado: {}\n", addr);
+    println("  • Moeda           : {}", (cfg.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)"));
+    println("  • Tamanho Frase   : {} palavras (Checksum BIP-39 Válido)", ids.size());
+    println("  • Endereço gerado : \033[1;32m{}\033[0m", addr);
+    if (!cfg.passphrase.empty()) {
+        println("  • Senha (Pass)    : \"{}\"", cfg.passphrase);
+    }
+    println();
     return true;
 }
 
@@ -88,8 +84,9 @@ int main(int argc, char* argv[]) {
     // Inicializa e aquece a tabela comb 8-bit secp256k1 (512 KB) em L1/L2
     crypto::warmup_secp256k1_table();
 
-    // Sondagem profunda de hardware do host e análise de auto-tuning
-    const auto host_profile = cryptowords::hardware::HostProbe::probe_all();
+    // Sondagem de hardware do host e análise de auto-tuning (GPU sob demanda)
+    const bool need_gpu_probe = cfg.use_gpu || cfg.use_hybrid || cfg.list_gpus || cfg.run_benchmark || cfg.probe_hardware;
+    const auto host_profile = cryptowords::hardware::HostProbe::probe_all(need_gpu_probe);
     const auto tuning_strat = cryptowords::hardware::HardwareAdvisor::analyze(cfg, host_profile);
 
     if (cfg.probe_hardware) {
@@ -147,6 +144,7 @@ int main(int argc, char* argv[]) {
     const auto plan = SearchOptimizer::build_plan(cfg);
     SearchReporter::print_plan(plan, cfg);
     cryptowords::hardware::HardwareAdvisor::print_tuning_summary(tuning_strat);
+    std::fflush(stdout);
 
     cryptowords::ExecutionPipeline pipeline(cfg, plan);
     cryptowords::BruteForceEngine::run(pipeline, cfg.num_threads);

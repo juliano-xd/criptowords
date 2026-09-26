@@ -19,7 +19,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <format>
@@ -92,49 +91,6 @@ namespace {
         return s;
     }
 
-    struct CpuHardwareInfo {
-        string model = "Desconhecido";
-        int physical_cores = 0;
-        string governor = "";
-    };
-
-    static CpuHardwareInfo detect_cpu_hardware() {
-        CpuHardwareInfo info;
-#if defined(__linux__)
-        ifstream cpuinfo("/proc/cpuinfo");
-        if (cpuinfo.is_open()) {
-            string line;
-            set<int> core_ids;
-            while (getline(cpuinfo, line)) {
-                if (info.model == "Desconhecido" && line.rfind("model name", 0) == 0) {
-                    auto colon = line.find(':');
-                    if (colon != string::npos) {
-                        info.model = line.substr(colon + 1);
-                        while (!info.model.empty() && (info.model.front() == ' ' || info.model.front() == '\t'))
-                            info.model.erase(0, 1);
-                    }
-                }
-                if (line.rfind("core id", 0) == 0) {
-                    auto colon = line.find(':');
-                    if (colon != string::npos) {
-                        try {
-                            core_ids.insert(stoi(line.substr(colon + 1)));
-                        } catch (...) {}
-                    }
-                }
-            }
-            if (!core_ids.empty()) {
-                info.physical_cores = static_cast<int>(core_ids.size());
-            }
-        }
-        ifstream gov_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
-        if (gov_file.is_open()) {
-            getline(gov_file, info.governor);
-        }
-#endif
-        return info;
-    }
-
     static string sanitize_device_name(string name) {
         if (name.size() > 32) {
             auto p = name.find('(');
@@ -168,15 +124,15 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
     // =========================================================================
     // 1. DESCOBERTA E INFORMAÇÕES DE HARDWARE
     // =========================================================================
-    size_t hw_threads = thread::hardware_concurrency();
-    auto cpu_info = detect_cpu_hardware();
+    auto cpu = hardware::HostProbe::probe_cpu();
+    size_t hw_threads = cpu.topology.logical_threads > 0 ? cpu.topology.logical_threads : thread::hardware_concurrency();
 
     print_box_top("[1/8] HARDWARE & CAPACIDADES DETECTADAS DO HOST", DEFAULT_INNER_WIDTH);
-    print_box_line(format("Processador Host (CPU)    : {}", cpu_info.model));
+    print_box_line(format("Processador Host (CPU)    : {}", cpu.brand_string));
     print_box_line(format("Núcleos & Threads CPU     : {} físicos, {} threads lógicas{}",
-                          cpu_info.physical_cores > 0 ? to_string(cpu_info.physical_cores) : "?",
+                          cpu.topology.physical_cores > 0 ? to_string(cpu.topology.physical_cores) : "?",
                           hw_threads,
-                          cpu_info.governor.empty() ? "" : format(" [Gov: {}]", cpu_info.governor)));
+                          cpu.scaling_governor.empty() ? "" : format(" [Gov: {}]", cpu.scaling_governor)));
 
     string simd_list = "";
 #if defined(__AVX512F__) || defined(CRYPTOWORDS_HAVE_AVX512)

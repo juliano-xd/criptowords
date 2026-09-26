@@ -84,122 +84,38 @@ CpuInfo HostProbe::probe_cpu() {
         info.raw_model = (base_family == 0x06 || base_family == 0x0F) ? ((ext_model << 4) | base_model) : base_model;
 
         // ECX flags
-        info.caps.sse3      = (ecx & (1u << 0)) != 0;
-        info.caps.pclmulqdq = (ecx & (1u << 1)) != 0;
-        info.caps.intel_vmx = (ecx & (1u << 5)) != 0;
-        info.caps.ssse3     = (ecx & (1u << 9)) != 0;
-        info.caps.fma3      = (ecx & (1u << 12)) != 0;
         info.caps.sse41     = (ecx & (1u << 19)) != 0;
         info.caps.sse42     = (ecx & (1u << 20)) != 0;
         info.caps.movbe     = (ecx & (1u << 22)) != 0;
         info.caps.popcnt    = (ecx & (1u << 23)) != 0;
         info.caps.aes_ni    = (ecx & (1u << 25)) != 0;
         info.caps.avx       = (ecx & (1u << 28)) != 0;
-        info.caps.f16c      = (ecx & (1u << 29)) != 0;
-        info.caps.rdrand    = (ecx & (1u << 30)) != 0;
-
-        // EDX flags
-        info.caps.clflush   = (edx & (1u << 19)) != 0;
-        info.caps.mmx       = (edx & (1u << 23)) != 0;
-        info.caps.sse       = (edx & (1u << 25)) != 0;
-        info.caps.sse2      = (edx & (1u << 26)) != 0;
     }
 
-    // Leaf 7, Subleaf 0: Extensões AVX2, AVX-512, SHA-NI, BMI, AMX, Memória & Proteção
+    // Leaf 7, Subleaf 0: AVX2, AVX-512, SHA-NI, BMI
     if (max_leaf >= 7) {
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
-        // EBX
-        info.caps.fsgsbase  = (ebx & (1u << 0)) != 0;
         info.caps.bmi1      = (ebx & (1u << 3)) != 0;
-        info.caps.tsx_hle   = (ebx & (1u << 4)) != 0;
         info.caps.avx2      = (ebx & (1u << 5)) != 0;
-        info.caps.smep      = (ebx & (1u << 7)) != 0;
         info.caps.bmi2      = (ebx & (1u << 8)) != 0;
-        info.caps.erms      = (ebx & (1u << 9)) != 0;
-        info.caps.tsx_rtm   = (ebx & (1u << 11)) != 0;
         info.caps.avx512f   = (ebx & (1u << 16)) != 0;
-        info.caps.avx512dq  = (ebx & (1u << 17)) != 0;
-        info.caps.rdseed    = (ebx & (1u << 18)) != 0;
         info.caps.adx       = (ebx & (1u << 19)) != 0;
-        info.caps.smap      = (ebx & (1u << 20)) != 0;
-        info.caps.avx512ifma= (ebx & (1u << 21)) != 0;
-        info.caps.clflushopt= (ebx & (1u << 23)) != 0;
-        info.caps.clwb      = (ebx & (1u << 24)) != 0;
-        info.caps.avx512pf  = (ebx & (1u << 26)) != 0;
-        info.caps.avx512er  = (ebx & (1u << 27)) != 0;
-        info.caps.avx512cd  = (ebx & (1u << 28)) != 0;
         info.caps.sha_ni    = (ebx & (1u << 29)) != 0;
         info.caps.avx512bw  = (ebx & (1u << 30)) != 0;
         info.caps.avx512vl  = (ebx & (1u << 31)) != 0;
 
-        // ECX
-        info.caps.prefetchwt1  = (ecx & (1u << 0)) != 0;
-        info.caps.avx512vbmi   = (ecx & (1u << 1)) != 0;
-        info.caps.umip         = (ecx & (1u << 2)) != 0;
-        info.caps.pku_ospke    = (ecx & (1u << 3)) != 0;
-        info.caps.waitpkg      = (ecx & (1u << 5)) != 0;
-        info.caps.avx512vbmi2  = (ecx & (1u << 6)) != 0;
-        info.caps.cet_ss       = (ecx & (1u << 7)) != 0;
-        info.caps.gfni         = (ecx & (1u << 8)) != 0;
-        info.caps.vaes         = (ecx & (1u << 9)) != 0;
-        info.caps.vpclmulqdq   = (ecx & (1u << 10)) != 0;
-        info.caps.avx512vnni   = (ecx & (1u << 11)) != 0;
-        info.caps.avx512bitalg = (ecx & (1u << 12)) != 0;
-        info.caps.avx512vpopcntdq = (ecx & (1u << 14)) != 0;
-        info.caps.la57         = (ecx & (1u << 16)) != 0;
-        info.caps.rdpid        = (ecx & (1u << 22)) != 0;
-        info.caps.key_locker   = (ecx & (1u << 23)) != 0;
-        info.caps.cldemote     = (ecx & (1u << 25)) != 0;
-        info.caps.movdiri      = (ecx & (1u << 27)) != 0;
-        info.caps.movdir64b    = (ecx & (1u << 28)) != 0;
-        info.caps.enqcmd       = (ecx & (1u << 29)) != 0;
-
-        // EDX
-        info.caps.avx512_4fmaps= (edx & (1u << 2)) != 0;
-        info.caps.avx512_4vnniw= (edx & (1u << 3)) != 0;
-        info.caps.fsrm         = (edx & (1u << 4)) != 0;
-        info.caps.avx512_vp2intersect = (edx & (1u << 8)) != 0;
-        info.caps.serialize    = (edx & (1u << 14)) != 0;
         if ((edx & (1u << 15)) != 0) info.topology.is_hybrid = true;
-        info.caps.cet_ibt      = (edx & (1u << 20)) != 0;
-        info.caps.amx_bf16     = (edx & (1u << 22)) != 0;
-        info.caps.avx512fp16   = (edx & (1u << 23)) != 0;
-        info.caps.amx_tile     = (edx & (1u << 24)) != 0;
-        info.caps.amx_int8     = (edx & (1u << 25)) != 0;
 
-        // Leaf 7, Subleaf 1 (CPUID.(07H,01H)): Intel SHA-512, SM3/SM4, AMX, APX.
-        // EAX: SHA512[0] SM3[1] SM4[2] RAOINT[3] AVXVNNI[4] AVX512BF16[5]
-        //      CMPCCXADD[7] AMX_COMPLEX[8] AMX_FP16[21] AVXIFMA[23]
-        // EDX: AVXVNNIINT8[4] AVXNECONVERT[5] AVXVNNIINT16[10] PREFETCHI[14] APX_F[21]
+        // Leaf 7, Subleaf 1: Intel SHA-512
         __cpuid_count(7, 1, eax, ebx, ecx, edx);
         info.caps.intel_sha512 = (eax & (1u << 0)) != 0;
-        info.caps.sm3          = (eax & (1u << 1)) != 0;
-        info.caps.sm4          = (eax & (1u << 2)) != 0;
-        info.caps.rao_int      = (eax & (1u << 3)) != 0;
-        info.caps.avx_vnni     = (eax & (1u << 4)) != 0;
-        info.caps.avx512bf16   = (eax & (1u << 5)) != 0;
-        info.caps.cmpccxadd    = (eax & (1u << 7)) != 0;
-        info.caps.amx_complex  = (eax & (1u << 8)) != 0;
-        info.caps.amx_fp16     = (eax & (1u << 21)) != 0;
-        info.caps.avx_ifma     = (eax & (1u << 23)) != 0;
-
-        info.caps.avx_vnni_int8  = (edx & (1u << 4)) != 0;
-        info.caps.avx_ne_convert = (edx & (1u << 5)) != 0;
-        info.caps.avx_vnni_int16 = (edx & (1u << 10)) != 0;
-        info.caps.prefetchi      = (edx & (1u << 14)) != 0;
-        info.caps.apx            = (edx & (1u << 21)) != 0;
     }
 
-    // Leaf 0x1A: Hybrid Information (P-cores vs E-cores)
     if (max_leaf >= 0x1A) {
         __cpuid(0x1A, eax, ebx, ecx, edx);
-        uint32_t core_type = (eax >> 24) & 0xFF;
-        if (core_type != 0) {
-            info.topology.is_hybrid = true;
-        }
+        if (((eax >> 24) & 0xFF) != 0) info.topology.is_hybrid = true;
     }
 
-    // Leaf 0x24: AVX10
     if (max_leaf >= 0x24) {
         __cpuid_count(0x24, 0, eax, ebx, ecx, edx);
         if ((ebx & 0xFF) > 0) info.caps.avx10 = true;
@@ -211,18 +127,7 @@ CpuInfo HostProbe::probe_cpu() {
 
     if (max_ext_leaf >= 0x80000001) {
         __cpuid(0x80000001, eax, ebx, ecx, edx);
-        info.caps.amd_svm      = (ecx & (1u << 2)) != 0;
-        info.caps.lzcnt_abm    = (ecx & (1u << 5)) != 0;
-        info.caps.sse4a        = (ecx & (1u << 6)) != 0;
-        info.caps.misalignsse  = (ecx & (1u << 7)) != 0;
-        info.caps.prefetchw    = (ecx & (1u << 8)) != 0;
-        info.caps.xop          = (ecx & (1u << 11)) != 0;
-        info.caps.fma4         = (ecx & (1u << 16)) != 0;
-        info.caps.tbm          = (ecx & (1u << 21)) != 0;
-        info.caps.mwaitx       = (ecx & (1u << 29)) != 0;
-
         info.caps.hugepages_1gb = (edx & (1u << 26)) != 0;
-        info.caps.rdtscp        = (edx & (1u << 27)) != 0;
     }
 
     if (max_ext_leaf >= 0x80000004) {
@@ -236,7 +141,6 @@ CpuInfo HostProbe::probe_cpu() {
 
     if (max_ext_leaf >= 0x80000007) {
         __cpuid(0x80000007, eax, ebx, ecx, edx);
-        info.caps.invariant_tsc = (edx & (1u << 8)) != 0;
         info.caps.cpb_boost     = (edx & (1u << 9)) != 0;
     }
 
@@ -245,14 +149,6 @@ CpuInfo HostProbe::probe_cpu() {
         info.physical_addr_bits = eax & 0xFF;
         info.virtual_addr_bits  = (eax >> 8) & 0xFF;
         info.caps.clzero        = (ebx & (1u << 0)) != 0;
-        info.caps.rdpru         = (ebx & (1u << 4)) != 0;
-    }
-
-    if (max_ext_leaf >= 0x8000001F) {
-        __cpuid(0x8000001F, eax, ebx, ecx, edx);
-        info.caps.sme     = (eax & (1u << 0)) != 0;
-        info.caps.sev     = (eax & (1u << 1)) != 0;
-        info.caps.sev_snp = (eax & (1u << 4)) != 0;
     }
 #endif
 
@@ -773,11 +669,13 @@ std::vector<HostGpuDevice> HostProbe::probe_gpus() {
     return devices;
 }
 
-HostProfile HostProbe::probe_all() {
+HostProfile HostProbe::probe_all(bool do_probe_gpus) {
     HostProfile profile;
     profile.cpu = probe_cpu();
     profile.memory = probe_memory();
-    profile.gpus = probe_gpus();
+    if (do_probe_gpus) {
+        profile.gpus = probe_gpus();
+    }
 
 #if defined(__linux__)
     profile.os_info = "Linux x86_64";

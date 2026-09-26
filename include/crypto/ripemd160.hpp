@@ -1,6 +1,5 @@
 #pragma once
 #include "crypto/bip39.hpp"
-#include "math/UInt.hpp"
 #include <array>
 #include <cstdint>
 #include <cstddef>

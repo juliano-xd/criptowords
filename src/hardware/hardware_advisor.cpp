@@ -280,134 +280,32 @@ void HardwareAdvisor::print_host_report(const HostProfile& host, const TuningStr
     print_box_line(s_cache2, DEFAULT_INNER_WIDTH);
     print_box_separator(DEFAULT_INNER_WIDTH);
 
-    // Conjunto Completo de Instruções (ISA)
+    // Extensões de Instrução e Criptografia
     print_box_line("\033[1;37mEXTENSÕES DE INSTRUÇÃO E CAPACIDADES DE SILÍCIO (CPUID):\033[0m", DEFAULT_INNER_WIDTH);
 
-    // 1. SIMD Clássico & SSE
     std::string simds = "";
-    if (host.cpu.caps.avx2) simds += "\033[1;33mAVX2\033[0m ";
-    if (host.cpu.caps.avx)  simds += "AVX ";
-    if (host.cpu.caps.f16c) simds += "F16C ";
-    if (host.cpu.caps.fma3) simds += "FMA3 ";
-    if (host.cpu.caps.fma4) simds += "FMA4 ";
-    if (host.cpu.caps.xop)  simds += "XOP ";
-    if (host.cpu.caps.tbm)  simds += "TBM ";
-    if (host.cpu.caps.sse42) simds += "SSE4.2 ";
-    if (host.cpu.caps.sse41) simds += "SSE4.1 ";
-    if (host.cpu.caps.sse4a) simds += "SSE4a ";
-    if (host.cpu.caps.ssse3) simds += "SSSE3 ";
-    if (host.cpu.caps.sse3)  simds += "SSE3 ";
-    if (host.cpu.caps.sse2)  simds += "SSE2 ";
-    if (host.cpu.caps.mmx)   simds += "MMX ";
-    if (host.cpu.caps.misalignsse) simds += "MisalignSSE";
-    print_box_line(std::format("  ├─ SIMD Clássico : {}", simds), DEFAULT_INNER_WIDTH);
+    if (host.cpu.caps.avx512f)  simds += "\033[1;32mAVX-512(F/BW/VL)\033[0m ";
+    if (host.cpu.caps.avx10)    simds += "[AVX10] ";
+    if (host.cpu.caps.avx2)     simds += "\033[1;33mAVX2\033[0m ";
+    if (host.cpu.caps.avx)      simds += "AVX ";
+    if (host.cpu.caps.sse42)    simds += "SSE4.2 ";
+    if (host.cpu.caps.sse41)    simds += "SSE4.1 ";
+    print_box_line(std::format("  ├─ SIMD / Vetorial: {}", simds.empty() ? "Básico" : simds), DEFAULT_INNER_WIDTH);
 
-    // 2. AVX-512 e Novas Gerações
-    std::string avx512s = "";
-    if (host.cpu.caps.avx512f)  avx512s += "\033[1;32mF\033[0m ";
-    if (host.cpu.caps.avx512dq) avx512s += "DQ ";
-    if (host.cpu.caps.avx512bw) avx512s += "BW ";
-    if (host.cpu.caps.avx512vl) avx512s += "\033[1;33mVL(128/256)\033[0m ";
-    if (host.cpu.caps.avx512cd) avx512s += "CD ";
-    if (host.cpu.caps.avx512er) avx512s += "ER ";
-    if (host.cpu.caps.avx512pf) avx512s += "PF ";
-    if (host.cpu.caps.avx512ifma) avx512s += "IFMA ";
-    if (host.cpu.caps.avx512vbmi) avx512s += "VBMI ";
-    if (host.cpu.caps.avx512vbmi2) avx512s += "VBMI2 ";
-    if (host.cpu.caps.avx512vnni) avx512s += "VNNI ";
-    if (host.cpu.caps.avx512bitalg) avx512s += "BITALG ";
-    if (host.cpu.caps.avx512vpopcntdq) avx512s += "VPOPCNTDQ ";
-    if (host.cpu.caps.avx512fp16) avx512s += "FP16 ";
-    if (host.cpu.caps.avx512bf16) avx512s += "BF16 ";
-    if (host.cpu.caps.avx512_4fmaps) avx512s += "4FMAPS ";
-    if (host.cpu.caps.avx512_4vnniw) avx512s += "4VNNIW ";
-    if (host.cpu.caps.avx512_vp2intersect) avx512s += "VP2INTERSECT ";
-    if (host.cpu.caps.avx10) avx512s += "\033[1;36m[AVX10 Converged]\033[0m ";
-    if (host.cpu.caps.apx)   avx512s += "\033[1;32m[Intel APX 32-GPRs]\033[0m ";
-    if (host.cpu.caps.amx_tile) avx512s += "[AMX-Tile] ";
-    if (host.cpu.caps.amx_int8) avx512s += "AMX-INT8 ";
-    if (host.cpu.caps.amx_bf16) avx512s += "AMX-BF16 ";
-    if (host.cpu.caps.amx_fp16) avx512s += "AMX-FP16 ";
-    if (host.cpu.caps.amx_complex) avx512s += "AMX-Complex ";
-    if (host.cpu.caps.avx_vnni) avx512s += "AVX-VNNI ";
-    if (host.cpu.caps.avx_ifma) avx512s += "AVX-IFMA ";
-    if (host.cpu.caps.avx_ne_convert) avx512s += "AVX-NE-CONVERT ";
-    if (host.cpu.caps.avx_vnni_int8) avx512s += "VNNI-INT8 ";
-    if (host.cpu.caps.avx_vnni_int16) avx512s += "VNNI-INT16 ";
-    if (avx512s.empty()) avx512s = "Não suportado no núcleo deste processador";
-    print_box_line(std::format("  ├─ AVX-512 / ISA : {}", avx512s), DEFAULT_INNER_WIDTH);
-
-    // 3. Criptografia e Hashing em Silício
     std::string cryptos = "";
     if (host.cpu.caps.sha_ni)       cryptos += "\033[1;32m[SHA-NI Silício (SHA-256)]\033[0m ";
     if (host.cpu.caps.intel_sha512) cryptos += "\033[1;32m[Intel SHA-512 Silício]\033[0m ";
-    if (host.cpu.caps.sm3)          cryptos += "SM3 ";
-    if (host.cpu.caps.sm4)          cryptos += "SM4 ";
     if (host.cpu.caps.aes_ni)       cryptos += "AES-NI ";
-    if (host.cpu.caps.vaes)         cryptos += "\033[1;33mVAES(256/512)\033[0m ";
-    if (host.cpu.caps.pclmulqdq)    cryptos += "PCLMULQDQ ";
-    if (host.cpu.caps.vpclmulqdq)   cryptos += "VPCLMULQDQ ";
-    if (host.cpu.caps.gfni)         cryptos += "GFNI ";
-    if (host.cpu.caps.rdrand)       cryptos += "RDRAND ";
-    if (host.cpu.caps.rdseed)       cryptos += "RDSEED ";
-    if (host.cpu.caps.key_locker)   cryptos += "KeyLocker ";
-    if (cryptos.empty()) cryptos = "Nenhuma extensão criptográfica dedicada encontrada";
-    print_box_line(std::format("  ├─ Criptografia  : {}", cryptos), DEFAULT_INNER_WIDTH);
+    print_box_line(std::format("  ├─ Criptografia   : {}", cryptos.empty() ? "Nenhuma extensão dedicada" : cryptos), DEFAULT_INNER_WIDTH);
 
-    // 4. Manipulação de Bits, Matemática & Sincronização
     std::string bits = "";
-    if (host.cpu.caps.bmi2)      bits += "\033[1;33mBMI2(RORX/PDEP/PEXT)\033[0m ";
-    if (host.cpu.caps.bmi1)      bits += "BMI1(ANDN/TZCNT) ";
+    if (host.cpu.caps.bmi2)      bits += "\033[1;33mBMI2(RORX/PDEP)\033[0m ";
+    if (host.cpu.caps.bmi1)      bits += "BMI1 ";
     if (host.cpu.caps.movbe)     bits += "\033[1;32mMOVBE(Byte-Swap)\033[0m ";
     if (host.cpu.caps.popcnt)    bits += "POPCNT ";
-    if (host.cpu.caps.lzcnt_abm) bits += "LZCNT(ABM) ";
-    if (host.cpu.caps.adx)       bits += "ADX(ADCX/ADOX) ";
-    if (host.cpu.caps.cmpccxadd) bits += "CMPCCXADD ";
-    if (host.cpu.caps.rao_int)   bits += "RAO-INT ";
-    if (host.cpu.caps.waitpkg)   bits += "WAITPKG(UMWAIT) ";
-    if (host.cpu.caps.serialize) bits += "SERIALIZE ";
-    if (host.cpu.caps.tsx_rtm)   bits += "TSX(RTM) ";
-    if (host.cpu.caps.tsx_hle)   bits += "TSX(HLE) ";
-    print_box_line(std::format("  ├─ Aritmética/Bit: {}", bits), DEFAULT_INNER_WIDTH);
-
-    // 5. Caches, Memória e Barramento
-    std::string mem_isa = "";
-    if (host.cpu.caps.clzero)    mem_isa += "\033[1;32m[CLZERO 64B em 1 ciclo]\033[0m ";
-    if (host.cpu.caps.clflushopt) mem_isa += "CLFLUSHOPT ";
-    if (host.cpu.caps.clwb)      mem_isa += "CLWB ";
-    if (host.cpu.caps.cldemote)  mem_isa += "CLDEMOTE ";
-    if (host.cpu.caps.movdiri)   mem_isa += "MOVDIRI ";
-    if (host.cpu.caps.movdir64b) mem_isa += "\033[1;32mMOVDIR64B(Direct-Store 64B)\033[0m ";
-    if (host.cpu.caps.enqcmd)    mem_isa += "ENQCMD ";
-    if (host.cpu.caps.clflush)   mem_isa += "CLFLUSH ";
-    if (host.cpu.caps.erms)      mem_isa += "ERMS(Fast-Memcpy) ";
-    if (host.cpu.caps.fsrm)      mem_isa += "FSRM(<128B) ";
-    if (host.cpu.caps.fsgsbase)  mem_isa += "FSGSBASE ";
-    if (host.cpu.caps.rdpru)     mem_isa += "RDPRU ";
-    if (host.cpu.caps.rdpid)     mem_isa += "RDPID ";
-    if (host.cpu.caps.rdtscp)    mem_isa += "RDTSCP ";
-    if (host.cpu.caps.invariant_tsc) mem_isa += "InvariantTSC ";
-    if (host.cpu.caps.prefetchw) mem_isa += "PREFETCHW ";
-    if (host.cpu.caps.prefetchwt1) mem_isa += "PREFETCHWT1 ";
-    if (host.cpu.caps.prefetchi) mem_isa += "PREFETCHI ";
-    if (host.cpu.caps.mwaitx)    mem_isa += "MWAITX ";
-    print_box_line(std::format("  ├─ Caches/Memória: {}", mem_isa), DEFAULT_INNER_WIDTH);
-
-    // 6. Segurança e Virtualização
-    std::string sec_isa = "";
-    if (host.cpu.caps.la57)      sec_isa += "LA57(57b-Virtual) ";
-    if (host.cpu.caps.cet_ss)    sec_isa += "CET-SS(Shadow-Stack) ";
-    if (host.cpu.caps.cet_ibt)   sec_isa += "CET-IBT ";
-    if (host.cpu.caps.umip)      sec_isa += "UMIP ";
-    if (host.cpu.caps.smep)      sec_isa += "SMEP ";
-    if (host.cpu.caps.smap)      sec_isa += "SMAP ";
-    if (host.cpu.caps.pku_ospke) sec_isa += "PKU/OSPKE ";
-    if (host.cpu.caps.sme)       sec_isa += "\033[1;32mAMD-SME(Mem-Encrypt)\033[0m ";
-    if (host.cpu.caps.sev)       sec_isa += "SEV ";
-    if (host.cpu.caps.sev_snp)   sec_isa += "SEV-SNP ";
-    if (host.cpu.caps.intel_vmx) sec_isa += "Intel-VMX ";
-    if (host.cpu.caps.amd_svm)   sec_isa += "AMD-SVM ";
-    print_box_line(std::format("  └─ Segurança/SO  : {}", sec_isa), DEFAULT_INNER_WIDTH);
+    if (host.cpu.caps.adx)       bits += "ADX ";
+    if (host.cpu.caps.clzero)    bits += "\033[1;32mCLZERO(64B/ciclo)\033[0m ";
+    print_box_line(std::format("  └─ Aritmética/Bit : {}", bits.empty() ? "Padrão" : bits), DEFAULT_INNER_WIDTH);
     print_box_separator(DEFAULT_INNER_WIDTH);
 
     // Memória RAM e Hugepages
@@ -482,13 +380,11 @@ void HardwareAdvisor::print_host_report(const HostProfile& host, const TuningStr
     print_box_line(s_acc3, DEFAULT_INNER_WIDTH);
 
     std::string s_acc4 = std::format("  ├─ Caches e Buffers: {}",
-        (host.cpu.caps.clzero ? "\033[1;32mCLZERO ativado (Sanitização imediata de 64B no L1d)\033[0m" :
-         (host.cpu.caps.movdir64b ? "\033[1;32mMOVDIR64B ativado (Direct Store sem poluição de cache)\033[0m" : "Vetor de inicialização em cache L1d")));
+        (host.cpu.caps.clzero ? "\033[1;32mCLZERO ativado (Sanitização imediata de 64B no L1d)\033[0m" : "Vetor de inicialização em cache L1d"));
     print_box_line(s_acc4, DEFAULT_INNER_WIDTH);
 
-    std::string s_acc5 = std::format("  ├─ Telemetria/Sync : {}",
-        (host.cpu.caps.rdpid ? "\033[1;32mRDPID em Ring 3 (Identificação de Core em 1 ciclo sem syscall)\033[0m" :
-         (host.cpu.caps.rdtscp ? "RDTSCP atômico (TSC + Core ID)" : "Telemetria padrão")));
+    std::string s_acc5 = std::format("  ├─ Aritmética BMI  : {}",
+        (host.cpu.caps.bmi2 ? "\033[1;32mBMI2 RORX/PDEP (Rotações sem dependência de flags)\033[0m" : "Instruções escalares padrão"));
     print_box_line(s_acc5, DEFAULT_INNER_WIDTH);
 
     std::string s_acc6 = std::format("  └─ Topologia/Cores : {}",

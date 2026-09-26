@@ -158,34 +158,14 @@ void ExecutionPipeline::verify_and_print_result(const std::vector<uint16_t>& mne
         if (i + 1 < mnemonic.size()) mnem_str += cfg_.separator;
     }
 
-    print_box_top("CHAVE ENCONTRADA!", DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("\033[1;37mFrase Mnemônica ({} palavras):\033[0m", mnemonic.size()), DEFAULT_INNER_WIDTH);
-
-    std::string current;
-    for (size_t i = 0; i < mnemonic.size(); ++i) {
-        const std::string& w = cfg_.wordlist[mnemonic[i]];
-        if (!current.empty() && current.size() + w.size() + 1 > 68) {
-            print_box_line(std::format("   \033[1;33m{}\033[0m", current), DEFAULT_INNER_WIDTH);
-            current.clear();
-        }
-        if (!current.empty()) current += cfg_.separator;
-        current += w;
-    }
-    if (!current.empty()) {
-        print_box_line(std::format("   \033[1;33m{}\033[0m", current), DEFAULT_INNER_WIDTH);
-    }
-
-    print_box_separator(DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("Moeda           : {}", (cfg_.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)")), DEFAULT_INNER_WIDTH);
-    print_box_line(std::format("Endereço Alvo   : \033[1;32m{}\033[0m", addr), DEFAULT_INNER_WIDTH);
-    if (!cfg_.passphrase.empty()) {
-        print_box_line(std::format("Senha (Pass)    : \"{}\"", cfg_.passphrase), DEFAULT_INNER_WIDTH);
-    }
-    print_box_bottom(DEFAULT_INNER_WIDTH);
-
     std::println("\n[!] CHAVE ENCONTRADA!");
-    std::println("    [+] Mnemonic: {}", mnem_str);
-    std::println("    [+] Address : {}\n", addr);
+    std::println("  • Mnemonic: \033[1;33m{}\033[0m", mnem_str);
+    std::println("  • Address : \033[1;32m{}\033[0m", addr);
+    std::println("  • Moeda   : {}", (cfg_.coin == CoinTarget::BTC ? "Bitcoin (BTC)" : "Ethereum (ETH)"));
+    if (!cfg_.passphrase.empty()) {
+        std::println("  • Senha   : \"{}\"", cfg_.passphrase);
+    }
+    std::println();
 }
 
 } // namespace cryptowords

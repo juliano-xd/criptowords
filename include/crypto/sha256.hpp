@@ -1,6 +1,5 @@
 #pragma once
-
-#include "math/UInt.hpp"
+ 
 #include <cstdint>
 #include <cstddef>
 #include <array>
@@ -22,7 +21,7 @@ public:
 
     // Atalho Estático para Processamento de Alvo Único (Alta performance Escalar / SHA-NI)
     static void hash(const void* data, uint8_t len, uint8_t out[32]);
-    static void hash33(const std::array<u8, 33> &in, std::array<u8, 32> &out) noexcept;
+    static void hash33(const std::array<uint8_t, 33> &in, std::array<uint8_t, 32> &out) noexcept;
 
 private:
     uint32_t h_[8];

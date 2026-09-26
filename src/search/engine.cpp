@@ -161,13 +161,9 @@ namespace cryptowords {
             num_threads = 1;
         }
 
-        print_box_top("EXECUÇÃO DO MOTOR SIMD", DEFAULT_INNER_WIDTH);
-        print_box_line(std::format("Motor SIMD   : \033[1;36m{}\033[0m", pipeline.architecture_name()), DEFAULT_INNER_WIDTH);
-        std::string pin_str = pipeline.config().pin_cores ? "\033[1;32mAtivo (Core Pinning Físico)\033[0m" : "\033[90mDesativado\033[0m";
-        print_box_line(std::format("Threads      : \033[1;37m{:<4}\033[0m │ Afinidade CPU : {}", num_threads, pin_str), DEFAULT_INNER_WIDTH);
-        print_box_bottom(DEFAULT_INNER_WIDTH);
-        std::print("\n");
-
+        std::string pin_str = pipeline.config().pin_cores ? "Ativo (Pinning Físico)" : "Desativado";
+        std::println("Iniciando busca SIMD (Motor: \033[1;36m{}\033[0m │ Threads: \033[1;37m{}\033[0m │ Afinidade: {})\n",
+                     pipeline.architecture_name(), num_threads, pin_str);
 
         const auto start = std::chrono::steady_clock::now();
         SearchState state;
@@ -205,19 +201,12 @@ namespace cryptowords {
             print_box_line(std::format("Total testado     : {} chaves", format_num(static_cast<double>(total_tested))), DEFAULT_INNER_WIDTH);
         }
         print_box_line(std::format("Checksums OK      : {} chaves válidas", format_num(static_cast<double>(state.valid_count.load()))), DEFAULT_INNER_WIDTH);
-        print_box_separator(DEFAULT_INNER_WIDTH);
-        if (state.success) {
-            print_box_line("Status Final      : \033[1;32m[✓] CHAVE ENCONTRADA COM SUCESSO!\033[0m", DEFAULT_INNER_WIDTH);
-        } else {
-            print_box_line("Status Final      : \033[1;31m[!] Busca finalizada. Chave não encontrada.\033[0m", DEFAULT_INNER_WIDTH);
-        }
         print_box_bottom(DEFAULT_INNER_WIDTH);
-        std::print("\n");
 
         if (state.success) {
             pipeline.verify_and_print_result(state.result_mnemonic);
         } else {
-            std::println("\n[!] Busca finalizada. Chave não encontrada.");
+            std::println("\n[!] Busca finalizada. Chave não encontrada.\n");
         }
     }
 } // namespace cryptowords
