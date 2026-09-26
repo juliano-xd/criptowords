@@ -11,6 +11,7 @@
 #include "../include/hardware/host_probe.hpp"
 #include "../include/hardware/hardware_advisor.hpp"
 #include "../include/benchmark/benchmark_runner.hpp"
+#include "../include/crypto/secp256k1_point.hpp"
 #include "../include/cli/ui.hpp"
 
 #include <cstdint>
@@ -83,6 +84,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     auto cfg = *config;
+
+    // Inicializa e aquece a tabela comb 8-bit secp256k1 (512 KB) em L1/L2
+    crypto::warmup_secp256k1_table();
 
     // Sondagem profunda de hardware do host e análise de auto-tuning
     const auto host_profile = cryptowords::hardware::HostProbe::probe_all();

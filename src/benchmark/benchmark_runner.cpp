@@ -729,7 +729,7 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const double fast_pub_us = chrono::duration<double, micro>(t_pf1 - t_pf0).count() / PUB_ITERS;
 
         print_box_line(format("Pubkey Create libsecp256k1      : {:>11.2f} µs/op", secp_pub_us));
-        print_box_line(format("Pubkey Create UInt<4> Nativa    : {:>11.2f} µs/op ({:.2f}x speedup)", fast_pub_us, secp_pub_us / fast_pub_us));
+        print_box_line(format("Pubkey Create Comb 8-bit Nativa : {:>11.2f} µs/op ({:.2f}x vs libsecp)", fast_pub_us, secp_pub_us / fast_pub_us));
 
         secp256k1_context_destroy(secp_ctx);
     }

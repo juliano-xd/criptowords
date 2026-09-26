@@ -462,23 +462,59 @@ FORCE_INLINE void store_be256(uint8_t be[32], const UInt<4>& v) noexcept {
     std::memcpy(be + 24, &w0, 8);
 }
 
+struct Secp256k1ByteTableHolder {
+    ConstexprPointA table[32][256];
+
+    Secp256k1ByteTableHolder() noexcept {
+        for (int byte_idx = 0; byte_idx < 32; ++byte_idx) {
+            std::memset(&table[byte_idx][0], 0, sizeof(ConstexprPointA));
+            for (int val = 1; val < 256; ++val) {
+                PointJacobian acc;
+                for (int bit = 0; bit < 8; ++bit) {
+                    if ((val >> bit) & 1) {
+                        int global_bit = byte_idx * 8 + bit;
+                        const auto& pt = G_TABLE_CONSTEXPR[global_bit];
+                        point_add_mixed_raw(acc, pt.x, pt.y);
+                    }
+                }
+                if (!acc.is_infinity) {
+                    UInt<4> z_inv = inv_mod_p(acc.Z);
+                    UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);
+                    UInt<4> z_inv3 = mul_mod_p(z_inv, z_inv2);
+                    UInt<4> x_aff = mul_mod_p(acc.X, z_inv2);
+                    UInt<4> y_aff = mul_mod_p(acc.Y, z_inv3);
+                    std::memcpy(table[byte_idx][val].x, x_aff.bits.data(), 32);
+                    std::memcpy(table[byte_idx][val].y, y_aff.bits.data(), 32);
+                }
+            }
+        }
+    }
+};
+
+inline const ConstexprPointA (*get_secp256k1_byte_table() noexcept)[256] {
+    static const Secp256k1ByteTableHolder s_holder;
+    return s_holder.table;
+}
+
+inline void warmup_secp256k1_table() noexcept {
+    (void)get_secp256k1_byte_table();
+}
+
 // Multiplicação de gerador G * seckey convertida para coordenadas afins (X, Y)
+// Acelerada via tabela Comb de 8 bits (32 adições mistas vs 128 do algoritmo clássico)
 inline bool secp256k1_ecmult_gen_affine(UInt<4>& x_aff, UInt<4>& y_aff, const uint8_t seckey[32]) noexcept {
-    UInt<4> k = load_be256(seckey);
-    if (__builtin_expect(k.eqz(), 0)) return false;
+    const auto table = get_secp256k1_byte_table();
 
     PointJacobian acc;
-    for (int limb = 0; limb < 4; ++limb) {
-        uint64_t w = k.bits[limb];
-        while (w != 0) {
-            int bit = __builtin_ctzll(w);
-            const auto& pt = G_TABLE_CONSTEXPR[limb * 64 + bit];
+    for (int i = 0; i < 32; ++i) {
+        uint8_t val = seckey[31 - i];
+        if (val != 0) {
+            const auto& pt = table[i][val];
             point_add_mixed_raw(acc, pt.x, pt.y);
-            w &= (w - 1);
         }
     }
 
-    if (acc.is_infinity) return false;
+    if (__builtin_expect(acc.is_infinity, 0)) return false;
 
     UInt<4> z_inv = inv_mod_p(acc.Z);
     UInt<4> z_inv2 = mul_mod_p(z_inv, z_inv);

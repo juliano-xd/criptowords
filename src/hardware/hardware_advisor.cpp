@@ -45,11 +45,11 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
     if (cfg.num_threads > 0) {
         strat.recommended_threads = cfg.num_threads;
     } else {
-        // Se a CPU tiver 16 ou mais núcleos físicos e estiver executando com AVX-512,
-        // alocar 1 thread por núcleo físico evita a disputa de portas de execução ZMM de 512 bits
-        // e previne throttling térmico / clock downclock do SMT.
-        if (host.cpu.topology.physical_cores >= 16 && strat.chosen_simd == SimdArch::AVX512) {
-            strat.recommended_threads = host.cpu.topology.physical_cores;
+        // Se a CPU tiver SMT ativo e estiver executando SIMD AVX2 ou AVX-512,
+        // alocar 1 thread por núcleo físico evita a disputa de portas de execução SIMD/FPU
+        // e previne throttling térmico e contenção de cache L1/L2 do SMT, maximizando throughput.
+        if (host.cpu.topology.smt_enabled && (strat.chosen_simd == SimdArch::AVX2 || strat.chosen_simd == SimdArch::AVX512)) {
+            strat.recommended_threads = host.cpu.topology.physical_cores > 0 ? host.cpu.topology.physical_cores : 1;
         } else {
             // Modo Auto geral: usar todas as threads lógicas com afinidade de silício (core pinning)
             strat.recommended_threads = host.cpu.topology.logical_threads > 0 ? host.cpu.topology.logical_threads : 1;
@@ -177,8 +177,8 @@ TuningStrategy HardwareAdvisor::analyze(const AppConfig& cfg, const HostProfile&
             strat.rationale = "CPU multithread com instruções vetoriais " + simd_name +
                               (strat.use_hardware_sha_ni ? " e SHA-NI em silício (~10x no checksum)" : "") +
                               " oferece a menor latência e maior vazão sustentada para este perfil.";
-            if (host.cpu.topology.physical_cores >= 16 && strat.chosen_simd == SimdArch::AVX512) {
-                strat.rationale += " [High-Core AVX-512: Alocação 1:1 por núcleo físico para evitar contenção de pipeline ZMM e throttling térmico de SMT]";
+            if (host.cpu.topology.smt_enabled && (strat.chosen_simd == SimdArch::AVX2 || strat.chosen_simd == SimdArch::AVX512)) {
+                strat.rationale += " [SIMD Vetorial: Alocação 1:1 por núcleo físico (" + std::to_string(strat.recommended_threads) + "T) para eliminar disputa de portas FPU/SIMD do SMT e maximizar throughput]";
             }
             if (host.cpu.topology.numa_nodes > 1) {
                 strat.rationale += " [Topologia Multi-NUMA (" + std::to_string(host.cpu.topology.numa_nodes) + " nós): Core pinning ativado para retenção de afinidade de nó]";

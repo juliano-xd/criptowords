@@ -1,5 +1,6 @@
 #include "../../include/search/optimizer.hpp"
 #include "../../include/crypto/bip39.hpp"
+#include "../../include/crypto/sha256.hpp"
 #include "../../include/crypto/sha256_shani.hpp"
 #include <algorithm>
 #include <numeric>
