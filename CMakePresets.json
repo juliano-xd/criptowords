@@ -10,9 +10,10 @@
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CRYPTOWORDS_NATIVE": "OFF",
+        "CRYPTOWORDS_ARCH": "generic",
         "CRYPTOWORDS_LTO": "ON",
-        "CRYPTOWORDS_GPU": "ON"
+        "CRYPTOWORDS_GPU": "ON",
+        "CRYPTOWORDS_PCH": "ON"
       }
     },
     {
@@ -22,7 +23,27 @@
       "inherits": "release",
       "binaryDir": "${sourceDir}/build/native",
       "cacheVariables": {
-        "CRYPTOWORDS_NATIVE": "ON"
+        "CRYPTOWORDS_ARCH": "native"
+      }
+    },
+    {
+      "name": "v3",
+      "displayName": "Release Cloud x86-64-v3 (AVX2)",
+      "description": "Otimizado para nuvem e instâncias modernas com AVX2 e BMI2",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/v3",
+      "cacheVariables": {
+        "CRYPTOWORDS_ARCH": "x86-64-v3"
+      }
+    },
+    {
+      "name": "v4",
+      "displayName": "Release Cloud x86-64-v4 (AVX-512)",
+      "description": "Otimizado para clusters e servidores com AVX-512",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/v4",
+      "cacheVariables": {
+        "CRYPTOWORDS_ARCH": "x86-64-v4"
       }
     },
     {
@@ -43,7 +64,8 @@
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CRYPTOWORDS_LTO": "OFF"
+        "CRYPTOWORDS_LTO": "OFF",
+        "CRYPTOWORDS_ARCH": "native"
       }
     },
     {
@@ -77,42 +99,62 @@
       "cacheVariables": {
         "CRYPTOWORDS_GPU": "OFF"
       }
+    },
+    {
+      "name": "pgo-generate",
+      "displayName": "PGO Generate (Instrumentação)",
+      "description": "Compila com instrumentação para coleta de dados de execução",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/build/pgo",
+      "cacheVariables": {
+        "CRYPTOWORDS_PGO": "GENERATE"
+      }
+    },
+    {
+      "name": "pgo-use",
+      "displayName": "PGO Use (Otimização Guiada)",
+      "description": "Compila aplicando os perfis de execução coletados",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/build/pgo",
+      "cacheVariables": {
+        "CRYPTOWORDS_PGO": "USE"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "release",  "configurePreset": "release"  },
-    { "name": "native",   "configurePreset": "native"   },
-    { "name": "fast",     "configurePreset": "fast"     },
-    { "name": "debug",    "configurePreset": "debug"    },
-    { "name": "asan",     "configurePreset": "asan"     },
-    { "name": "tsan",     "configurePreset": "tsan"     },
-    { "name": "cpu-only", "configurePreset": "cpu-only" }
+    { "name": "release",      "configurePreset": "release"      },
+    { "name": "native",       "configurePreset": "native"       },
+    { "name": "v3",           "configurePreset": "v3"           },
+    { "name": "v4",           "configurePreset": "v4"           },
+    { "name": "fast",         "configurePreset": "fast"         },
+    { "name": "debug",        "configurePreset": "debug"        },
+    { "name": "asan",         "configurePreset": "asan"         },
+    { "name": "tsan",         "configurePreset": "tsan"         },
+    { "name": "cpu-only",     "configurePreset": "cpu-only"     },
+    { "name": "pgo-generate", "configurePreset": "pgo-generate" },
+    { "name": "pgo-use",      "configurePreset": "pgo-use"      }
   ],
   "testPresets": [
+    { "name": "release",  "configurePreset": "release",  "output": { "outputOnFailure": true } },
+    { "name": "native",   "configurePreset": "native",   "output": { "outputOnFailure": true } },
+    { "name": "v3",       "configurePreset": "v3",       "output": { "outputOnFailure": true } },
+    { "name": "v4",       "configurePreset": "v4",       "output": { "outputOnFailure": true } },
+    { "name": "fast",     "configurePreset": "fast",     "output": { "outputOnFailure": true } },
+    { "name": "debug",    "configurePreset": "debug",    "output": { "outputOnFailure": true } },
+    { "name": "asan",     "configurePreset": "asan",     "output": { "outputOnFailure": true } },
+    { "name": "tsan",     "configurePreset": "tsan",     "output": { "outputOnFailure": true } },
+    { "name": "cpu-only", "configurePreset": "cpu-only", "output": { "outputOnFailure": true } }
+  ],
+  "packagePresets": [
     {
       "name": "release",
       "configurePreset": "release",
-      "output": { "outputOnFailure": true }
+      "generators": ["TGZ", "TXZ"]
     },
     {
       "name": "native",
       "configurePreset": "native",
-      "output": { "outputOnFailure": true }
-    },
-    {
-      "name": "fast",
-      "configurePreset": "fast",
-      "output": { "outputOnFailure": true }
-    },
-    {
-      "name": "debug",
-      "configurePreset": "debug",
-      "output": { "outputOnFailure": true }
-    },
-    {
-      "name": "asan",
-      "configurePreset": "asan",
-      "output": { "outputOnFailure": true }
+      "generators": ["TGZ", "TXZ"]
     }
   ]
 }

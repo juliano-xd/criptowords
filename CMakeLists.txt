@@ -29,17 +29,47 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Exporta compile_commands.json para a raiz se necessário (suporte a LSPs: clangd, etc.)
+if(CMAKE_EXPORT_COMPILE_COMMANDS AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${CMAKE_BINARY_DIR}/compile_commands.json"
+                "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+        RESULT_VARIABLE _symlink_res
+        OUTPUT_QUIET ERROR_QUIET
+    )
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Tipo de compilação (Release, Debug, RelWithDebInfo, MinSizeRel)" FORCE)
 endif()
 
-# ---------- Opções de Compilação ----------
+# ---------- Opções de Compilação & Otimização ----------
 option(CRYPTOWORDS_GPU     "Aceleração OpenCL (GPU)" ON)
-option(CRYPTOWORDS_NATIVE  "Otimização para CPU local (-march=native -mtune=native)" ON)
+option(CRYPTOWORDS_PCH     "Habilitar Precompiled Headers (PCH) para cabeçalhos pesados C++23" ON)
 option(CRYPTOWORDS_LTO     "Link-Time Optimization (LTO / IPO)" ON)
 option(CRYPTOWORDS_WERROR  "Tratar warnings do compilador como erros" OFF)
 option(CRYPTOWORDS_ASAN    "Habilitar AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(CRYPTOWORDS_TSAN    "Habilitar ThreadSanitizer (Detecção de Data Races)" OFF)
+
+# Seleção de Microarquitetura
+set(CRYPTOWORDS_ARCH "native" CACHE STRING "Microarquitetura alvo: native, x86-64-v4, x86-64-v3, x86-64-v2, generic")
+set_property(CACHE CRYPTOWORDS_ARCH PROPERTY STRINGS "native" "x86-64-v4" "x86-64-v3" "x86-64-v2" "generic")
+
+# Retrocompatibilidade com CRYPTOWORDS_NATIVE
+if(DEFINED CRYPTOWORDS_NATIVE)
+    if(NOT CRYPTOWORDS_NATIVE AND CRYPTOWORDS_ARCH STREQUAL "native")
+        set(CRYPTOWORDS_ARCH "generic")
+    endif()
+endif()
+
+# Profile-Guided Optimization (PGO)
+set(CRYPTOWORDS_PGO "OFF" CACHE STRING "Profile-Guided Optimization: OFF, GENERATE, USE")
+set_property(CACHE CRYPTOWORDS_PGO PROPERTY STRINGS "OFF" "GENERATE" "USE")
+set(CRYPTOWORDS_PGO_DIR "${CMAKE_BINARY_DIR}/pgo_profile" CACHE PATH "Diretório de perfis PGO")
+
+# Otimização do FetchContent (evita checagens repetidas de rede após o primeiro download)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Desconectar checagem de atualizações do FetchContent" FORCE)
 
 # ---------- Linker de Alta Performance (mold / lld) ----------
 include(CheckLinkerFlag)
@@ -157,8 +187,43 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     list(APPEND PERF_FLAGS -floop-interchange -floop-unroll-and-jam -fno-semantic-interposition)
 endif()
 
-if(CRYPTOWORDS_NATIVE)
+# Microarquitetura
+if(CRYPTOWORDS_ARCH STREQUAL "native")
     list(APPEND PERF_FLAGS -march=native -mtune=native)
+    message(STATUS "Microarquitetura: native (-march=native -mtune=native)")
+elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v4")
+    list(APPEND PERF_FLAGS -march=x86-64-v4)
+    message(STATUS "Microarquitetura: x86-64-v4 (AVX-512, FMA, BMI2)")
+elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v3")
+    list(APPEND PERF_FLAGS -march=x86-64-v3)
+    message(STATUS "Microarquitetura: x86-64-v3 (AVX2, FMA, BMI2)")
+elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v2")
+    list(APPEND PERF_FLAGS -march=x86-64-v2)
+    message(STATUS "Microarquitetura: x86-64-v2 (SSE4.2, POPCNT)")
+elseif(CRYPTOWORDS_ARCH STREQUAL "generic")
+    message(STATUS "Microarquitetura: generic (x86_64 baseline)")
+endif()
+
+# Flags PGO (Profile-Guided Optimization)
+if(CRYPTOWORDS_PGO STREQUAL "GENERATE")
+    message(STATUS "PGO: Modo GENERATE ativado (gerando perfis em ${CRYPTOWORDS_PGO_DIR})")
+    file(MAKE_DIRECTORY "${CRYPTOWORDS_PGO_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        add_compile_options(-fprofile-generate=${CRYPTOWORDS_PGO_DIR})
+        add_link_options(-fprofile-generate=${CRYPTOWORDS_PGO_DIR})
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-generate=${CRYPTOWORDS_PGO_DIR}/default.profraw)
+        add_link_options(-fprofile-instr-generate=${CRYPTOWORDS_PGO_DIR}/default.profraw)
+    endif()
+elseif(CRYPTOWORDS_PGO STREQUAL "USE")
+    message(STATUS "PGO: Modo USE ativado (lendo perfis de ${CRYPTOWORDS_PGO_DIR})")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        add_compile_options(-fprofile-use=${CRYPTOWORDS_PGO_DIR} -fprofile-correction)
+        add_link_options(-fprofile-use=${CRYPTOWORDS_PGO_DIR} -fprofile-correction)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-use=${CRYPTOWORDS_PGO_DIR}/default.profdata)
+        add_link_options(-fprofile-instr-use=${CRYPTOWORDS_PGO_DIR}/default.profdata)
+    endif()
 endif()
 
 # ---------- Sanitizers ----------
@@ -201,6 +266,28 @@ add_library(criptowords_core OBJECT ${CORE_SOURCES})
 target_include_directories(criptowords_core PUBLIC include)
 target_link_libraries(criptowords_core PUBLIC PkgConfig::SECP256K1 CLI11::CLI11)
 target_compile_options(criptowords_core PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
+
+# Precompiled Headers (PCH) para acelerar compilação do núcleo C++23
+if(CRYPTOWORDS_PCH)
+    message(STATUS "PCH: Precompiled Headers ativados para criptowords_core")
+    target_precompile_headers(criptowords_core PRIVATE
+        <algorithm>
+        <array>
+        <atomic>
+        <chrono>
+        <cstdint>
+        <cstring>
+        <format>
+        <memory>
+        <optional>
+        <print>
+        <span>
+        <string>
+        <string_view>
+        <utility>
+        <vector>
+    )
+endif()
 
 if(CRYPTOWORDS_GPU)
     target_link_libraries(criptowords_core PUBLIC OpenCL::OpenCL)
@@ -264,6 +351,9 @@ add_executable(criptowords
 
 target_compile_options(criptowords PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 target_link_libraries(criptowords PRIVATE criptowords_core)
+if(CRYPTOWORDS_PCH)
+    target_precompile_headers(criptowords REUSE_FROM criptowords_core)
+endif()
 
 # ---------- Binário de Testes Comparativos SHA-512 ----------
 add_executable(test_sha512_comparison
@@ -273,6 +363,9 @@ add_executable(test_sha512_comparison
 )
 target_compile_options(test_sha512_comparison PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 target_link_libraries(test_sha512_comparison PRIVATE criptowords_core)
+if(CRYPTOWORDS_PCH)
+    target_precompile_headers(test_sha512_comparison REUSE_FROM criptowords_core)
+endif()
 
 # ---------- Testes Automatizados e Integração CTest ----------
 enable_testing()
@@ -298,6 +391,52 @@ add_custom_target(check
     COMMENT "Executando bateria de testes do CTest..."
 )
 
-# ---------- Instalação ----------
+# ---------- Ferramentas de Qualidade de Código (clang-format) ----------
+find_program(CLANG_FORMAT_EXE clang-format)
+if(CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE ALL_FORMAT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.hpp
+    )
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXE} -i -style=file ${ALL_FORMAT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Formatando código-fonte C++ com clang-format..."
+    )
+    add_custom_target(check-format
+        COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror -style=file ${ALL_FORMAT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Verificando conformidade do código com clang-format..."
+    )
+endif()
+
+# ---------- Instalação e Empacotamento de Distribuição (CPack) ----------
 install(TARGETS criptowords RUNTIME DESTINATION bin)
 install(DIRECTORY wordlist/ DESTINATION share/criptowords/wordlist)
+install(FILES README.md DESTINATION share/doc/criptowords OPTIONAL)
+
+set(CPACK_PACKAGE_NAME "criptowords")
+set(CPACK_PACKAGE_VENDOR "CriptoWords Core Team")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Motor Ultrarrápido de Recuperação de Mnemonics BIP39 em C++23")
+set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+
+# Geradores de pacotes suportados
+set(CPACK_GENERATOR "TGZ;TXZ")
+
+# Configurações Debian (.deb)
+set(CPACK_DEBIAN_PACKAGE_NAME "criptowords")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Juliano Trindade <juliano@criptowords.local>")
+set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
+include(CPack)
