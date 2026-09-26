@@ -4,36 +4,115 @@
   "configurePresets": [
     {
       "name": "release",
-      "displayName": "Release (portável)",
+      "displayName": "Release (Portável)",
+      "description": "Compilação otimizada portável com LTO e suporte a GPU",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CRYPTOWORDS_GPU":  "ON"
+        "CRYPTOWORDS_NATIVE": "OFF",
+        "CRYPTOWORDS_LTO": "ON",
+        "CRYPTOWORDS_GPU": "ON"
       }
     },
     {
       "name": "native",
-      "displayName": "Release + -march=native",
+      "displayName": "Release Nativa (-march=native)",
+      "description": "Máxima performance para a CPU e hardware local",
       "inherits": "release",
       "binaryDir": "${sourceDir}/build/native",
-      "cacheVariables": { "CRYPTOWORDS_NATIVE": "ON" }
+      "cacheVariables": {
+        "CRYPTOWORDS_NATIVE": "ON"
+      }
+    },
+    {
+      "name": "fast",
+      "displayName": "Desenvolvimento Rápido (Sem LTO)",
+      "description": "Compilação incremental ultra-rápida sem custo de LTO",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/build/fast",
+      "cacheVariables": {
+        "CRYPTOWORDS_LTO": "OFF"
+      }
     },
     {
       "name": "debug",
-      "displayName": "Debug + sanitizers",
+      "displayName": "Debug",
+      "description": "Símbolos completos de depuração (-g3 -O0)",
       "inherits": "release",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+        "CRYPTOWORDS_LTO": "OFF"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Sanitizers (Address + UBSan)",
+      "description": "Detecção de corrupção de memória e comportamento indefinido",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/asan",
+      "cacheVariables": {
+        "CRYPTOWORDS_ASAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer (Data Races)",
+      "description": "Validação de concorrência e detecção de condições de corrida",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CRYPTOWORDS_TSAN": "ON",
+        "CRYPTOWORDS_LTO": "OFF"
+      }
+    },
+    {
+      "name": "cpu-only",
+      "displayName": "CPU Only (Sem GPU)",
+      "description": "Compilação exclusiva para CPU sem dependência de OpenCL",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/build/cpu",
+      "cacheVariables": {
+        "CRYPTOWORDS_GPU": "OFF"
       }
     }
   ],
   "buildPresets": [
-    { "name": "release", "configurePreset": "release" },
-    { "name": "native",  "configurePreset": "native"  },
-    { "name": "debug",   "configurePreset": "debug"   }
+    { "name": "release",  "configurePreset": "release"  },
+    { "name": "native",   "configurePreset": "native"   },
+    { "name": "fast",     "configurePreset": "fast"     },
+    { "name": "debug",    "configurePreset": "debug"    },
+    { "name": "asan",     "configurePreset": "asan"     },
+    { "name": "tsan",     "configurePreset": "tsan"     },
+    { "name": "cpu-only", "configurePreset": "cpu-only" }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "fast",
+      "configurePreset": "fast",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": { "outputOnFailure": true }
+    }
   ]
 }

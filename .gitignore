@@ -1,20 +1,19 @@
 # Binaries and Build Artifacts
 build/
 bin/
-tests/
 *.o
 *.a
 *.so
 *.out
 *.log
-.*
 compile_commands.json
-criptowords
 CMakeCache.txt
 CMakeFiles/
-Makefile
 _deps/
 cmake_install.cmake
+
+# Test artifacts
+tests/.qa_history.json
 
 # Editor and OS files
 .vscode/
@@ -24,3 +23,5 @@ cmake_install.cmake
 .openclaude/
 .opencode/
 scripts/
+__pycache__/
+*.pyc

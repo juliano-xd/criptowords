@@ -6,46 +6,65 @@ project(criptowords
     LANGUAGES   CXX
 )
 
+# ---------- Proteção contra In-Source Build ----------
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+    message(FATAL_ERROR
+        "\n[ERRO] In-source builds são proibidos!\n"
+        "Por favor, crie um diretório de build separado e execute CMake a partir dele:\n"
+        "  cmake -B build -G Ninja\n"
+        "  cmake --build build\n"
+    )
+endif()
+
+# ---------- Acelerador de Compilação (ccache) ----------
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "ccache encontrado: ${CCACHE_PROGRAM}")
 endif()
 
-# ---------- Padrão e defaults ----------
+# ---------- Padrão C++ e Defaults ----------
 set(CMAKE_CXX_STANDARD          23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Tipo de compilação (Release, Debug, RelWithDebInfo, MinSizeRel)" FORCE)
 endif()
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -flto")
 
-# ---------- Opções ----------
-option(CRYPTOWORDS_GPU    "Aceleração OpenCL"       ON)
-option(CRYPTOWORDS_NATIVE "Compilar com -march=native (máxima performance para o hardware local)" ON)
-option(CRYPTOWORDS_LTO    "Otimização em tempo de linkedição (LTO/IPO)" ON)
-option(CRYPTOWORDS_WERROR "Tratar warnings como erros" OFF)
+# ---------- Opções de Compilação ----------
+option(CRYPTOWORDS_GPU     "Aceleração OpenCL (GPU)" ON)
+option(CRYPTOWORDS_NATIVE  "Otimização para CPU local (-march=native -mtune=native)" ON)
+option(CRYPTOWORDS_LTO     "Link-Time Optimization (LTO / IPO)" ON)
+option(CRYPTOWORDS_WERROR  "Tratar warnings do compilador como erros" OFF)
+option(CRYPTOWORDS_ASAN    "Habilitar AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(CRYPTOWORDS_TSAN    "Habilitar ThreadSanitizer (Detecção de Data Races)" OFF)
 
-# ---------- Otimização Inter-Procedural (LTO / IPO) ----------
+# ---------- Linker de Alta Performance (mold / lld) ----------
+include(CheckLinkerFlag)
+check_linker_flag(CXX "-fuse-ld=mold" HAS_MOLD)
+if(HAS_MOLD)
+    add_link_options("-fuse-ld=mold")
+    message(STATUS "Linker de ultra-alta velocidade detectado: mold (-fuse-ld=mold)")
+else()
+    check_linker_flag(CXX "-fuse-ld=lld" HAS_LLD)
+    if(HAS_LLD)
+        add_link_options("-fuse-ld=lld")
+        message(STATUS "Linker de alta velocidade detectado: lld (-fuse-ld=lld)")
+    endif()
+endif()
+
+# ---------- Otimização em Tempo de Linkedição (LTO / IPO) ----------
 if(CRYPTOWORDS_LTO)
-  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-    # include(CheckIPOSupported)
-    # check_ipo_supported(RESULT IPO_SUPPORTED)
-    # if(IPO_SUPPORTED)
-    #     # Prioriza linkers de alta performance
-    #     include(CheckCXXLinkerFlag)
-    #     check_cxx_linker_flag("-fuse-ld=mold" HAS_MOLD)
-    #     if(HAS_MOLD)
-    #         add_link_options("-fuse-ld=mold")
-    #     else()
-    #         check_cxx_linker_flag("-fuse-ld=lld" HAS_LLD)
-    #         if(HAS_LLD)
-    #             add_link_options("-fuse-ld=lld")
-    #         endif()
-    #     endif()
-    # endif()
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+    if(IPO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        message(STATUS "LTO/IPO: Habilitado globalmente (Interprocedural Optimization)")
+    else()
+        message(STATUS "LTO/IPO não suportado pelo compilador: ${IPO_ERROR}")
+    endif()
 endif()
 
 
@@ -126,21 +145,34 @@ endif()
 
 message(STATUS "SIMD: SSE4.1=${HAVE_SSE41}  AVX2=${HAVE_AVX2}  AVX512=${HAVE_AVX512}  SHA-NI=${HAVE_SHA_NI}")
 
-# ---------- Flags de aviso e performance ----------
-set(WARN_FLAGS -Wall -Wextra -Wpedantic)
+# ---------- Flags de Diagnóstico e Otimização ----------
+set(WARN_FLAGS -Wall -Wextra -Wpedantic -Wno-ignored-attributes)
 if(CRYPTOWORDS_WERROR)
     list(APPEND WARN_FLAGS -Werror)
 endif()
 
-set(PERF_FLAGS -fomit-frame-pointer -fstrict-aliasing -fno-math-errno -fno-trapping-math -funroll-loops -floop-interchange -floop-unroll-and-jam)
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    list(APPEND PERF_FLAGS -ftree-vectorize)
+set(PERF_FLAGS -pipe -fomit-frame-pointer -fstrict-aliasing -fno-math-errno -fno-trapping-math -funroll-loops -ftree-vectorize)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    list(APPEND PERF_FLAGS -floop-interchange -floop-unroll-and-jam -fno-semantic-interposition)
 endif()
+
 if(CRYPTOWORDS_NATIVE)
     list(APPEND PERF_FLAGS -march=native -mtune=native)
 endif()
 
-# ---------- Núcleo (portável) ----------
+# ---------- Sanitizers ----------
+if(CRYPTOWORDS_ASAN)
+    message(STATUS "Sanitizers: AddressSanitizer + UndefinedBehaviorSanitizer habilitados")
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+elseif(CRYPTOWORDS_TSAN)
+    message(STATUS "Sanitizers: ThreadSanitizer habilitado")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+endif()
+
+# ---------- Núcleo da Aplicação (criptowords_core) ----------
 set(CORE_SOURCES
     src/cli/parser.cpp
     src/cli/wordlist.cpp
@@ -175,14 +207,24 @@ if(CRYPTOWORDS_GPU)
     target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_GPU=1)
 endif()
 
+if(HAVE_SSE41)
+    target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_SSE41=1)
+endif()
+if(HAVE_AVX2)
+    target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_AVX2=1)
+endif()
+if(HAVE_AVX512)
+    target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_AVX512=1)
+endif()
 
-# ---------- TUs SIMD compiladas por arquitetura ----------
+# ---------- Unidades de Tradução SIMD Especializadas ----------
+set(SIMD_OBJECTS "")
+
 if(HAVE_SSE41)
     add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
     target_include_directories(simd_sse PRIVATE include)
     target_link_libraries(simd_sse PRIVATE PkgConfig::SECP256K1)
     target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
-    target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_SSE41=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
 endif()
 
@@ -191,7 +233,6 @@ if(HAVE_AVX2)
     target_include_directories(simd_avx2 PRIVATE include)
     target_link_libraries(simd_avx2 PRIVATE PkgConfig::SECP256K1)
     target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${WARN_FLAGS} ${PERF_FLAGS})
-    target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX2=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx2>)
 endif()
 
@@ -200,12 +241,10 @@ if(HAVE_AVX512)
     target_include_directories(simd_avx512 PRIVATE include)
     target_link_libraries(simd_avx512 PRIVATE PkgConfig::SECP256K1)
     target_compile_options(simd_avx512 PRIVATE -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd ${WARN_FLAGS} ${PERF_FLAGS})
-    target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_AVX512=1)
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx512>)
 endif()
 
-
-# ---------- GPU (opcional) ----------
+# ---------- Fontes da GPU ----------
 set(GPU_SOURCES "")
 if(CRYPTOWORDS_GPU)
     set(GPU_SOURCES
@@ -214,7 +253,7 @@ if(CRYPTOWORDS_GPU)
     )
 endif()
 
-# ---------- Executável ----------
+# ---------- Executável Principal ----------
 add_executable(criptowords
     src/main.cpp
     src/benchmark/benchmark_runner.cpp
@@ -223,43 +262,42 @@ add_executable(criptowords
     ${SIMD_OBJECTS}
 )
 
-target_include_directories(criptowords PRIVATE include)
 target_compile_options(criptowords PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
-target_link_libraries(criptowords PRIVATE
-    PkgConfig::SECP256K1
-    CLI11::CLI11
-)
+target_link_libraries(criptowords PRIVATE criptowords_core)
 
-
-if(CRYPTOWORDS_GPU)
-    target_link_libraries(criptowords PRIVATE OpenCL::OpenCL)
-    target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_GPU=1)
-endif()
-
-
-if(HAVE_SSE41)
-    target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_SSE41=1)
-endif()
-if(HAVE_AVX2)
-    target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_AVX2=1)
-endif()
-if(HAVE_AVX512)
-    target_compile_definitions(criptowords PRIVATE CRYPTOWORDS_HAVE_AVX512=1)
-endif()
-
-# ---------- Testes Comparativos ----------
+# ---------- Binário de Testes Comparativos SHA-512 ----------
 add_executable(test_sha512_comparison
     tests/test_sha512_comparison.cpp
     $<TARGET_OBJECTS:criptowords_core>
     ${SIMD_OBJECTS}
 )
-target_include_directories(test_sha512_comparison PRIVATE include)
 target_compile_options(test_sha512_comparison PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
-target_link_libraries(test_sha512_comparison PRIVATE PkgConfig::SECP256K1 CLI11::CLI11)
-if(CRYPTOWORDS_GPU)
-    target_link_libraries(test_sha512_comparison PRIVATE OpenCL::OpenCL)
+target_link_libraries(test_sha512_comparison PRIVATE criptowords_core)
+
+# ---------- Testes Automatizados e Integração CTest ----------
+enable_testing()
+
+add_test(NAME test_sha512 COMMAND test_sha512_comparison)
+set_tests_properties(test_sha512 PROPERTIES TIMEOUT 60)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME qa_suite
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/qa_suite.py $<TARGET_FILE:criptowords>
+    )
+    set_tests_properties(qa_suite PROPERTIES
+        TIMEOUT 240
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
 endif()
 
-# ---------- Install ----------
+add_custom_target(check
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --test-dir ${CMAKE_BINARY_DIR}
+    DEPENDS criptowords test_sha512_comparison
+    COMMENT "Executando bateria de testes do CTest..."
+)
+
+# ---------- Instalação ----------
 install(TARGETS criptowords RUNTIME DESTINATION bin)
 install(DIRECTORY wordlist/ DESTINATION share/criptowords/wordlist)
