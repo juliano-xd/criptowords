@@ -7,6 +7,7 @@
 #include <thread>
 #include <cstring>
 #include <cctype>
+#include <unordered_set>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <cpuid.h>
@@ -16,6 +17,7 @@
 #include <unistd.h>
 #include <sys/sysinfo.h>
 #include <dirent.h>
+#include <sched.h>
 #endif
 
 #ifdef CRYPTOWORDS_HAVE_GPU
@@ -798,6 +800,46 @@ HostProfile HostProbe::probe_all() {
 #endif
 
     return profile;
+}
+
+std::vector<int> HostProbe::get_physical_cpu_ids() {
+    std::vector<int> primary;
+    std::vector<int> secondary;
+#if defined(__linux__)
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    bool has_affinity = (sched_getaffinity(0, sizeof(cpu_set_t), &allowed) == 0);
+
+    std::unordered_set<uint64_t> seen_physical_cores;
+    for (int cpu = 0; ; ++cpu) {
+        std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/core_id";
+        std::ifstream f(path);
+        if (!f) break;
+        if (has_affinity && !CPU_ISSET(cpu, &allowed)) continue;
+
+        int core_id = -1;
+        int pkg_id = 0;
+        if (f >> core_id) {
+            std::string pkg_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/physical_package_id";
+            std::ifstream f_pkg(pkg_path);
+            if (f_pkg >> pkg_id) {}
+            uint64_t core_key = (static_cast<uint64_t>(pkg_id) << 32) | static_cast<uint32_t>(core_id);
+            if (seen_physical_cores.insert(core_key).second) {
+                primary.push_back(cpu);
+            } else {
+                secondary.push_back(cpu);
+            }
+        }
+    }
+    for (int s : secondary) primary.push_back(s);
+#endif
+    if (primary.empty()) {
+        const unsigned int total = std::thread::hardware_concurrency();
+        for (unsigned int i = 0; i < total; ++i) {
+            primary.push_back(static_cast<int>(i));
+        }
+    }
+    return primary;
 }
 
 } // namespace hardware

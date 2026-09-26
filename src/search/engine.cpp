@@ -1,5 +1,6 @@
 #include "../../include/search/engine.hpp"
 #include "../../include/cli/ui.hpp"
+#include "../../include/hardware/host_probe.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -20,46 +21,6 @@ using namespace cryptowords::ui;
 
 namespace cryptowords {
     namespace {
-#if defined(__linux__)
-        static std::vector<int> get_physical_cpu_ids() {
-            std::vector<int> primary;
-            std::vector<int> secondary;
-            cpu_set_t allowed;
-            CPU_ZERO(&allowed);
-            bool has_affinity = (sched_getaffinity(0, sizeof(cpu_set_t), &allowed) == 0);
-
-            std::unordered_set<uint64_t> seen_physical_cores;
-            for (int cpu = 0; ; ++cpu) {
-                std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/core_id";
-                std::ifstream f(path);
-                if (!f) break;
-                if (has_affinity && !CPU_ISSET(cpu, &allowed)) continue;
-
-                int core_id = -1;
-                int pkg_id = 0;
-                if (f >> core_id) {
-                    std::string pkg_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/physical_package_id";
-                    std::ifstream f_pkg(pkg_path);
-                    if (f_pkg >> pkg_id) {}
-                    uint64_t core_key = (static_cast<uint64_t>(pkg_id) << 32) | static_cast<uint32_t>(core_id);
-                    if (seen_physical_cores.insert(core_key).second) {
-                        primary.push_back(cpu);
-                    } else {
-                        secondary.push_back(cpu);
-                    }
-                }
-            }
-            for (int s : secondary) primary.push_back(s);
-            if (primary.empty()) {
-                const unsigned int total = std::thread::hardware_concurrency();
-                for (unsigned int i = 0; i < total; ++i) {
-                    if (!has_affinity || CPU_ISSET(static_cast<int>(i), &allowed))
-                        primary.push_back(static_cast<int>(i));
-                }
-            }
-            return primary;
-        }
-#endif
 
         void monitor_progress(const SearchState& state, [[maybe_unused]] size_t num_threads,
                               std::chrono::steady_clock::time_point start,
@@ -170,7 +131,7 @@ namespace cryptowords {
 
         void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx, size_t num_threads, SearchState& state) {
 #if defined(__linux__)
-        static const auto cpu_ids = get_physical_cpu_ids();
+        static const auto cpu_ids = hardware::HostProbe::get_physical_cpu_ids();
         if (!cpu_ids.empty() && pipeline.config().pin_cores) {
             int target_cpu = cpu_ids[thread_idx % cpu_ids.size()];
             cpu_set_t cpuset;

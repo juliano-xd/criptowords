@@ -248,6 +248,7 @@ public:
     static MemoryInfo probe_memory();
     static std::vector<HostGpuDevice> probe_gpus();
     static HostProfile probe_all();
+    static std::vector<int> get_physical_cpu_ids();
 };
 
 } // namespace hardware

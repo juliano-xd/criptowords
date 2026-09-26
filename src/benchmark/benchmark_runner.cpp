@@ -13,6 +13,7 @@
 #include "../../include/gpu/gpu_info.hpp"
 #include "../../include/simd/arch.hpp"
 #include "../../include/cli/ui.hpp"
+#include "../../include/hardware/host_probe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +31,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <x86intrin.h>
@@ -447,14 +453,24 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
         const size_t hashes_per_thread = batches_per_thread * simd_lanes;
         const size_t total_hashes = threads * hashes_per_thread;
 
-        // Amostragem multi-run (3 iterações por contagem de threads)
+        // Amostragem multi-run (3 iterações por contagem de threads) com afinidade de núcleos físicos
         auto run_mt_sample = [&]() -> double {
+            static const auto cpu_ids = hardware::HostProbe::get_physical_cpu_ids();
             latch gate(static_cast<ptrdiff_t>(threads));
             vector<thread> workers;
             workers.reserve(threads);
             atomic<uint64_t> guard{0};
 
-            auto worker_fn = [&]() {
+            auto worker_fn = [&](size_t thread_idx) {
+#if defined(__linux__)
+                if (!cpu_ids.empty()) {
+                    int target_cpu = cpu_ids[thread_idx % cpu_ids.size()];
+                    cpu_set_t cpuset;
+                    CPU_ZERO(&cpuset);
+                    CPU_SET(target_cpu, &cpuset);
+                    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+                }
+#endif
                 gate.arrive_and_wait();
                 alignas(64) uint8_t out[16][64];
                 uint64_t local = 0;
@@ -466,7 +482,7 @@ int BenchmarkRunner::run(const AppConfig& /*cfg*/) {
             };
 
             for (size_t t = 0; t < threads; ++t) {
-                workers.emplace_back(worker_fn);
+                workers.emplace_back(worker_fn, t);
             }
 
             auto t0 = Clock::now();

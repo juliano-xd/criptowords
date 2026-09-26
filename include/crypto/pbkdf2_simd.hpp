@@ -345,9 +345,7 @@ alignas(32) static constexpr uint8_t SHUF_ROR8_AVX2[32] = {
 static inline void sha512_block64_sse(const __m128i iv[8], __m128i W[16], __m128i out[8]) {
     __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m128i* k_tbl = get_k512_sse();
-    #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m128i kw      = _mm_add_epi64(k_tbl[r*16+i], W[i]);
             __m128i h_kw    = _mm_add_epi64(h, kw);
@@ -428,9 +426,7 @@ static inline void sha512_padded_block64_sse(const __m128i iv[8], __m128i W[16],
     #undef STEP_SSE
     #undef STEP_FUSED_SSE
 
-    #pragma GCC unroll 4
     for (int r = 1; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m128i kw      = _mm_add_epi64(k_tbl[r*16+i], W[i]);
             __m128i h_kw    = _mm_add_epi64(h, kw);
@@ -477,7 +473,6 @@ static inline void sha512_salt_fastforward_sse(const __m128i iv[8],
                                                __m128i out[8])
 {
     __m128i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
-    #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m128i kw      = kw_salt_vec[i];
         __m128i h_kw    = _mm_add_epi64(h, kw);
@@ -600,9 +595,7 @@ inline void pbkdf2_hmac_sha512_4way_sse(
 static inline void sha512_block64_avx2(const __m256i iv[8], __m256i W[16], __m256i out[8]) {
     __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m256i* k_tbl = get_k512_avx2();
-    #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m256i kw      = _mm256_add_epi64(k_tbl[r*16+i], W[i]);
             __m256i h_kw    = _mm256_add_epi64(h, kw);
@@ -683,9 +676,7 @@ static inline void sha512_padded_block64_avx2(const __m256i iv[8], __m256i W[16]
     #undef STEP_AVX2
     #undef STEP_FUSED_AVX2
 
-    #pragma GCC unroll 4
     for (int r = 1; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m256i kw      = _mm256_add_epi64(k_tbl[r*16+i], W[i]);
             __m256i h_kw    = _mm256_add_epi64(h, kw);
@@ -732,7 +723,6 @@ static inline void sha512_salt_fastforward_avx2(const __m256i iv[8],
                                                 __m256i out[8])
 {
     __m256i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
-    #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m256i kw      = kw_salt_vec[i];
         __m256i h_kw    = _mm256_add_epi64(h, kw);
@@ -862,9 +852,7 @@ inline void pbkdf2_hmac_sha512_8way_avx2(
 static inline void sha512_block64_avx512(const __m512i iv[8], __m512i W[16], __m512i out[8]) {
     __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
     const __m512i* k_tbl = get_k512_avx512();
-    #pragma GCC unroll 5
     for (int r = 0; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m512i kw      = _mm512_add_epi64(k_tbl[r*16+i], W[i]);
             __m512i h_kw    = _mm512_add_epi64(h, kw);
@@ -945,9 +933,7 @@ static inline void sha512_padded_block64_avx512(const __m512i iv[8], __m512i W[1
     #undef STEP_AVX512
     #undef STEP_FUSED_AVX512
 
-    #pragma GCC unroll 4
     for (int r = 1; r < 5; ++r) {
-        #pragma GCC unroll 16
         for (int i = 0; i < 16; ++i) {
             __m512i kw      = _mm512_add_epi64(k_tbl[r*16+i], W[i]);
             __m512i h_kw    = _mm512_add_epi64(h, kw);
@@ -994,7 +980,6 @@ static inline void sha512_salt_fastforward_avx512(const __m512i iv[8],
                                                   __m512i out[8])
 {
     __m512i a=iv[0], b=iv[1], c=iv[2], d=iv[3], e=iv[4], f=iv[5], g=iv[6], h=iv[7];
-    #pragma GCC unroll 80
     for (int i = 0; i < 80; ++i) {
         __m512i kw      = kw_salt_vec[i];
         __m512i h_kw    = _mm512_add_epi64(h, kw);
