@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <print>
 
 #include "../../include/crypto/base58.hpp"
 #include "../../include/crypto/hmac_sha512.hpp"
@@ -102,8 +103,13 @@ bool Bip39Deriver::derive_child_key([[maybe_unused]] const secp256k1_context& ct
     std::array<uint8_t, 64> I;
     crypto::HMAC_SHA512::bip32_hash(chain_code, data, I);
 
+    std::println("antes -> priv_key = {}", priv_key);
+    std::println("I = {}", I);
+
     if (__builtin_expect(!crypto::secp256k1_tweak_add_fast(priv_key.data(), I.data()), 0))
         return false;
+
+    std::println("depois -> priv_key = {}", priv_key);
 
     std::memcpy(chain_code.data(), I.data() + 32, 32);
     return true;
