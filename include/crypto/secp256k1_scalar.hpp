@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <print>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include "../math/UInt.hpp"
@@ -30,6 +31,9 @@ constexpr UInt<4> DELTA(0x402DA1732FC9BEBFULL, 0x4551231950B75FC4ULL, 0x00000000
 FORCE_INLINE bool secp256k1_tweak_add_fast(uint8_t* seckey, const uint8_t* tweak) noexcept {
     UInt<4> k(seckey, 32, Endianness::big);
     const UInt<4> tw(tweak, 32, Endianness::big);
+
+    std::println("k -> ", k.to_hex_string());
+    std::println("tw -> ", tw.to_hex_string());
 
     // Regra estrita SECP256K1 / BIP-32: tweak < n e 0 < seckey < n
     if (__builtin_expect(tw >= N_VAL || k >= N_VAL || k.eqz(), 0)) {
