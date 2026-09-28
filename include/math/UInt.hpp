@@ -8,6 +8,7 @@
 #include <bit>
 #include <cassert>
 #include <charconv>
+#include <compare>
 #include <concepts>
 #include <cstddef>
 #include <format>
@@ -30,6 +31,7 @@ using u32 = unsigned int;
 using u64 = unsigned long long;
 using u128 = unsigned __int128;
 
+#define JC(label) asm volatile goto("jc %l0" : : : : label) // jump if carry,   EXTREMAMENTE INSEGURO.
 #define FORCE_INLINE inline __attribute__((always_inline))
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
@@ -557,29 +559,54 @@ class alignas(64) UInt {
         return std::strong_ordering::equal;
     }
 
+    // Adds another UInt to this one, returning the carry flag.
+    FORCE_INLINE bool add(const UInt& other) noexcept {
+        [[maybe_unused]] bool carry;
+        asm volatile(R"(
+            .set offset, 0
+            movq offset(%[src]), %%rax
+            addq %%rax, offset(%[dst])
+            .set offset, offset+8
+            .rept %c[count]
+                movq offset(%[src]), %%rax
+                adcq %%rax, offset(%[dst])
+                .set offset, offset+8
+            .endr
+        )"
+            : "+m"(bits), "=@ccc"(carry)
+            : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+            : "rax", "cc");
+        return carry;
+    }
+
     FORCE_INLINE UInt& operator+=(const UInt& other) noexcept {
         if (mode_ == Backend::SIMD) {
             size_t i = 0;
-#if defined(__AVX512F__)
-            for (; i + 8 <= N; i += 8) {
-                __m512i a = _mm512_loadu_si512(reinterpret_cast<const void*>(bits.data() + i));
-                __m512i b = _mm512_loadu_si512(reinterpret_cast<const void*>(other.bits.data() + i));
-                _mm512_storeu_si512(reinterpret_cast<void*>(bits.data() + i), _mm512_add_epi64(a, b));
+            #ifdef __AVX512F__
+            if constexpr ((N % 8) == 0){
+                for (; i + 8 <= N; i += 8) {
+                    __m512i a = _mm512_loadu_si512(reinterpret_cast<const void*>(bits.data() + i));
+                    __m512i b = _mm512_loadu_si512(reinterpret_cast<const void*>(other.bits.data() + i));
+                    _mm512_storeu_si512(reinterpret_cast<void*>(bits.data() + i), _mm512_add_epi64(a, b));
+                }
             }
-#endif
-#if defined(__AVX2__)
-            for (; i + 4 <= N; i += 4) {
-                __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bits.data() + i));
-                __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(other.bits.data() + i));
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(bits.data() + i), _mm256_add_epi64(a, b));
+            #elifdef __AVX2__
+            if constexpr ((N % 4) == 0){
+                for (; i + 4 <= N; i += 4) {
+                    __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bits.data() + i));
+                    __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(other.bits.data() + i));
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(bits.data() + i), _mm256_add_epi64(a, b));
+                }
             }
-#elif defined(__SSE2__)
-            for (; i + 2 <= N; i += 2) {
-                __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bits.data() + i));
-                __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(other.bits.data() + i));
-                _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_add_epi64(a, b));
+            #elifdef __SSE2__
+            if constexpr ((N % 2) == 0){
+                for (; i + 2 <= N; i += 2) {
+                    __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bits.data() + i));
+                    __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(other.bits.data() + i));
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(bits.data() + i), _mm_add_epi64(a, b));
+                }
             }
-#endif
+            #endif
             for (; i < N; ++i)
                 bits[i] += other.bits[i];
         } else {
@@ -602,56 +629,32 @@ class alignas(64) UInt {
                         .set offset, offset+8
                     .endr
                 )"
-                             : "+m"(bits)
-                             : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
-                             : "rax", "cc");
+                    : "+m"(bits)
+                    : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+                    : "rax", "cc");
             }
         }
         return *this;
     }
 
-    FORCE_INLINE uint8_t add_carry(const UInt& other) noexcept {
-        if (mode_ == Backend::SIMD) {
-            *this += other;
-            return 0;
-        }
-        if consteval {
-            u64 carry = 0;
-            for (u8 i = 0; i < N; ++i) {
-                u128 sum = static_cast<u128>(bits[i]) + other.bits[i] + carry;
-                bits[i] = static_cast<u64>(sum);
-                carry = static_cast<u64>(sum >> 64);
-            }
-            return static_cast<uint8_t>(carry);
-        } else {
-            unsigned char c = 0;
-            for (u8 i = 0; i < N; ++i) {
-                c = _addcarry_u64(c, bits[i], other.bits[i], reinterpret_cast<unsigned long long*>(&bits[i]));
-            }
-            return c;
-        }
-    }
-
-    FORCE_INLINE uint8_t sub_borrow(const UInt& other) noexcept {
-        if (mode_ == Backend::SIMD) {
-            *this -= other;
-            return 0;
-        }
-        if consteval {
-            u64 borrow = 0;
-            for (u8 i = 0; i < N; ++i) {
-                u128 sub = static_cast<u128>(bits[i]) - other.bits[i] - borrow;
-                bits[i] = static_cast<u64>(sub);
-                borrow = static_cast<u64>((sub >> 64) & 1);
-            }
-            return static_cast<uint8_t>(borrow);
-        } else {
-            unsigned char b = 0;
-            for (u8 i = 0; i < N; ++i) {
-                b = _subborrow_u64(b, bits[i], other.bits[i], reinterpret_cast<unsigned long long*>(&bits[i]));
-            }
-            return b;
-        }
+    // Subtract other from this, returning whether there was a borrow
+    FORCE_INLINE bool sub(const UInt& other) noexcept {
+        [[maybe_unused]] bool borrow;
+        asm volatile(R"(
+            .set offset, 0
+            movq offset(%[src]), %%rax
+            subq %%rax, offset(%[dst])
+            .set offset, offset+8
+            .rept %c[count]
+                movq offset(%[src]), %%rax
+                sbbq %%rax, offset(%[dst])
+                .set offset, offset+8
+            .endr
+        )"
+            : "+m"(bits), "=@ccc"(borrow)
+            : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+            : "rax", "cc");
+        return borrow;
     }
 
     FORCE_INLINE UInt& operator-=(const UInt& other) noexcept {
@@ -699,9 +702,9 @@ class alignas(64) UInt {
                         .set offset, offset+8
                     .endr
                 )"
-                             : "+m"(bits)
-                             : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
-                             : "rax", "cc");
+                    : "+m"(bits)
+                    : [dst] "r"(bits.data()), [src] "r"(other.bits.data()), [count] "n"(N - 1), "m"(other.bits)
+                    : "rax", "cc");
             }
         }
         return *this;
@@ -932,6 +935,9 @@ class alignas(64) UInt {
             }
             return {q, bits[0] % v};
         }
+
+
+
         UInt<N> q{};
         q.set_mode(mode_);
         q.set_endianness(endian_);
@@ -969,7 +975,15 @@ class alignas(64) UInt {
                 bits[i] %= other.bits[i];
             }
         } else {
-            *this = divmod(other).second;
+            switch (*this<=other) {
+                case std::strong_ordering::greater:
+                    *this = divmod(other).second;
+                    break;
+                case std::strong_ordering::less:
+                    return *this;
+                case std::strong_ordering::equal:
+                    return (*this = 0);
+            }
         }
         return *this;
     }
