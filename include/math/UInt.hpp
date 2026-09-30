@@ -1,6 +1,5 @@
 #pragma once
 
-#include <endian.h>
 #include <immintrin.h>
 
 #include <algorithm>
