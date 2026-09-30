@@ -152,7 +152,7 @@ A suíte de benchmark integrada foi reestruturada em 8 capítulos com precisão 
 ## Compilação e Instalação
 
 ### Pré-requisitos
-- Compilador C++ com suporte a **C++23** (GCC 13+ ou Clang 16+).
+- Compilador C++ com suporte a **C++23** (GCC 14+ ou Clang 17+).
 - **CMake** versão 3.25 ou superior.
 - **OpenCL** (Opcional, para aceleração por placa de vídeo): drivers proprietários NVIDIA, AMD ROCm/AMDGPU-PRO ou Mesa Rusticl/Clover.
 - **pkg-config** (recomendado).

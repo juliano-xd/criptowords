@@ -26,6 +26,17 @@ endif()
 # ---------- Padrão C++ e Defaults ----------
 set(CMAKE_CXX_STANDARD          23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# O projeto usa <print> (C++23), que so existe no GCC 14+ e no Clang 17+.
+# Sem esta checagem, quem tem GCC 13 passa pelo configure e so descobre no meio
+# da compilacao com "fatal error: print: No such file or directory", que nao
+# ajuda a entender que o problema e a versao do compilador.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    message(FATAL_ERROR "GCC 14+ necessario (<print> do C++23). Detectado: ${CMAKE_CXX_COMPILER_VERSION}")
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17)
+    message(FATAL_ERROR "Clang 17+ necessario (<print> do C++23). Detectado: ${CMAKE_CXX_COMPILER_VERSION}")
+endif()
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
