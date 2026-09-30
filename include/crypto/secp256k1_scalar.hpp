@@ -32,15 +32,13 @@ FORCE_INLINE bool secp256k1_tweak_add_fast(uint8_t* seckey, const uint8_t* tweak
     UInt<4> k(seckey, 32, Endianness::big);
     const UInt<4> tw(tweak, 32, Endianness::big);
 
-    std::println("k -> {}", k.to_hex_string());
-    std::println("tw -> {}", tw.to_hex_string());
 
     // Regra estrita SECP256K1 / BIP-32: tweak < n e 0 < seckey < n
     if (__builtin_expect(tw >= N_VAL || k >= N_VAL || k.eqz(), 0)) {
         return false;
     }
 
-    const uint8_t carry = k.add_carry(tw);
+    const uint8_t carry = k.add(tw);
     if (carry || k >= N_VAL) {
         unsigned char c =
             _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));

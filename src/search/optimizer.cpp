@@ -8,6 +8,7 @@
 #include <numeric>
 
 #include "../../include/crypto/bip39.hpp"
+#include "../../include/crypto/sha256.hpp"
 #include "../../include/crypto/sha256_shani.hpp"
 
 OptimizedMnemonics SearchOptimizer::build_plan(const AppConfig& cfg) {

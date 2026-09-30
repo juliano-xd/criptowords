@@ -3,7 +3,7 @@
 #include <memory>
 
 #if defined(__x86_64__) || defined(_M_X64)
-#include <cpuid.h>
+#include "../../include/hardware/cw_cpuid.hpp"
 #endif
 
 namespace cryptowords {
@@ -11,12 +11,12 @@ namespace cryptowords {
 SimdArch detect_best_simd() {
 #if defined(__x86_64__) || defined(_M_X64)
     unsigned eax, ebx, ecx, edx;
-    __cpuid(1, eax, ebx, ecx, edx);
+    cw_cpuid(1, eax, ebx, ecx, edx);
     const bool has_sse41 = (ecx & bit_SSE4_1) != 0;
     // XSAVE/AVX habilitados pelo SO: sem isso o SO pode não salvar o estado YMM/ZMM
     const bool os_avx_ok = (ecx & bit_OSXSAVE) != 0 && (ecx & bit_AVX) != 0;
 
-    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    cw_cpuid_count(7, 0, eax, ebx, ecx, edx);
     const bool has_avx2 = os_avx_ok && ((ebx & bit_AVX2) != 0);
     // A rota AVX-512 usa instruções BW (`_mm512_shuffle_epi8`) e VL além de F;
     // exigir apenas AVX512F causaria SIGILL em CPUs como Knights Landing.

@@ -10,7 +10,7 @@
 #include <unordered_set>
 
 #if defined(__x86_64__) || defined(_M_X64)
-#include <cpuid.h>
+#include "../../include/hardware/cw_cpuid.hpp"
 #endif
 
 #if defined(__linux__)
@@ -66,7 +66,7 @@ CpuInfo HostProbe::probe_cpu() {
     unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
 
     // Leaf 0: Vendor String & max leaf
-    __cpuid(0, eax, ebx, ecx, edx);
+    cw_cpuid(0, eax, ebx, ecx, edx);
     char vendor_str[13] = {};
     std::memcpy(vendor_str + 0, &ebx, 4);
     std::memcpy(vendor_str + 4, &edx, 4);
@@ -76,7 +76,7 @@ CpuInfo HostProbe::probe_cpu() {
 
     // Leaf 1: Family, Model, Stepping, Features
     if (max_leaf >= 1) {
-        __cpuid(1, eax, ebx, ecx, edx);
+        cw_cpuid(1, eax, ebx, ecx, edx);
         uint32_t stepping = eax & 0x0F;
         uint32_t base_model = (eax >> 4) & 0x0F;
         uint32_t base_family = (eax >> 8) & 0x0F;
@@ -98,7 +98,7 @@ CpuInfo HostProbe::probe_cpu() {
 
     // Leaf 7, Subleaf 0: AVX2, AVX-512, SHA-NI, BMI
     if (max_leaf >= 7) {
-        __cpuid_count(7, 0, eax, ebx, ecx, edx);
+        cw_cpuid_count(7, 0, eax, ebx, ecx, edx);
         info.caps.bmi1 = (ebx & (1u << 3)) != 0;
         info.caps.avx2 = (ebx & (1u << 5)) != 0;
         info.caps.bmi2 = (ebx & (1u << 8)) != 0;
@@ -112,47 +112,47 @@ CpuInfo HostProbe::probe_cpu() {
             info.topology.is_hybrid = true;
 
         // Leaf 7, Subleaf 1: Intel SHA-512
-        __cpuid_count(7, 1, eax, ebx, ecx, edx);
+        cw_cpuid_count(7, 1, eax, ebx, ecx, edx);
         info.caps.intel_sha512 = (eax & (1u << 0)) != 0;
     }
 
     if (max_leaf >= 0x1A) {
-        __cpuid(0x1A, eax, ebx, ecx, edx);
+        cw_cpuid(0x1A, eax, ebx, ecx, edx);
         if (((eax >> 24) & 0xFF) != 0)
             info.topology.is_hybrid = true;
     }
 
     if (max_leaf >= 0x24) {
-        __cpuid_count(0x24, 0, eax, ebx, ecx, edx);
+        cw_cpuid_count(0x24, 0, eax, ebx, ecx, edx);
         if ((ebx & 0xFF) > 0)
             info.caps.avx10 = true;
     }
 
     // Extended Leaves 0x80000000+
-    __cpuid(0x80000000, eax, ebx, ecx, edx);
+    cw_cpuid(0x80000000, eax, ebx, ecx, edx);
     unsigned max_ext_leaf = eax;
 
     if (max_ext_leaf >= 0x80000001) {
-        __cpuid(0x80000001, eax, ebx, ecx, edx);
+        cw_cpuid(0x80000001, eax, ebx, ecx, edx);
         info.caps.hugepages_1gb = (edx & (1u << 26)) != 0;
     }
 
     if (max_ext_leaf >= 0x80000004) {
         char brand[49] = {};
         unsigned* p = reinterpret_cast<unsigned*>(brand);
-        __cpuid(0x80000002, p[0], p[1], p[2], p[3]);
-        __cpuid(0x80000003, p[4], p[5], p[6], p[7]);
-        __cpuid(0x80000004, p[8], p[9], p[10], p[11]);
+        cw_cpuid(0x80000002, p[0], p[1], p[2], p[3]);
+        cw_cpuid(0x80000003, p[4], p[5], p[6], p[7]);
+        cw_cpuid(0x80000004, p[8], p[9], p[10], p[11]);
         info.brand_string = trim(brand);
     }
 
     if (max_ext_leaf >= 0x80000007) {
-        __cpuid(0x80000007, eax, ebx, ecx, edx);
+        cw_cpuid(0x80000007, eax, ebx, ecx, edx);
         info.caps.cpb_boost = (edx & (1u << 9)) != 0;
     }
 
     if (max_ext_leaf >= 0x80000008) {
-        __cpuid(0x80000008, eax, ebx, ecx, edx);
+        cw_cpuid(0x80000008, eax, ebx, ecx, edx);
         info.physical_addr_bits = eax & 0xFF;
         info.virtual_addr_bits = (eax >> 8) & 0xFF;
         info.caps.clzero = (ebx & (1u << 0)) != 0;
