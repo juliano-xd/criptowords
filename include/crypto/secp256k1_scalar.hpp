@@ -40,7 +40,7 @@ FORCE_INLINE bool secp256k1_tweak_add_fast(uint8_t* seckey, const uint8_t* tweak
         return false;
     }
 
-    const uint8_t carry = k.add_carry(tw);
+    const uint8_t carry = k.add(tw);
     if (carry || k >= N_VAL) {
         unsigned char c =
             _addcarry_u64(0, k.bits[0], 0x402DA1732FC9BEBFULL, reinterpret_cast<unsigned long long*>(&k.bits[0]));
