@@ -1,0 +1,195 @@
+refactor!: reformulação arquitetural — HIP/ROCm, checkpoints, multi-target e novos modos de busca
+
+BREAKING CHANGE: Esta é uma reformulação profunda que altera contratos de
+configuração, motores de aceleração e a arquitetura de busca:
+
+  - Backend OpenCL substituído por HIP (AMD ROCm).
+  - Dependência externa `libsecp256k1` removida (ECC interno próprio).
+  - `--benchmark` removido; binário `test_sha512_comparison` descontinuado.
+  - `SearchStrategy` deixa de ser enum linear e passa a ser bitmask combinável.
+  - `--checksum`, `--random`, `--repeat`, `--target-file`, `--save`/`--load`
+    introduzem semânticas novas.
+  - Formato de checkpoint em disco é novo e não retrocompatível.
+
+Motivação
+─────────
+O projeto precisava de:
+  (1) aceleração GPU previsível em AMD (ROCm/HIP) sem o overhead do cache
+      binário OpenCL nem dependência de `PkgConfig::SECP256K1`;
+  (2) resiliência a interrupções via checkpoints persistentes com save/resume;
+  (3) recuperação multi-alvo (arquivo com N endereços) para lotes grandes;
+  (4) filtragem explícita de checksum por padrão (decimal/hex/binário c/ wildcard);
+  (5) enumeração pseudoaleatória para resistir a "zonas quentes" determinísticas;
+  (6) motor de odômetro modular (Mixed / Streaming / Random / Pairs / Triplets).
+
+Backend GPU (OpenCL → HIP/ROCm)
+───────────────────────────────
+- `include/gpu/gpu_backend.hpp` + `src/gpu/gpu_backend.cpp`: API unificada
+  `IGpuEngine` com modo `GpuComputeMode::PostPbkdf2Only` e
+  `enqueue_post_pbkdf2` (derivação ECC + Keccak na GPU).
+- `src/gpu/hip/hip_engine.hip`: kernel HIP com `--offload-arch` nativa.
+- Detecção de arch via `rocminfo` → fallback `hipcc --print-target-id`.
+- Compilação via `add_custom_command` + `hipcc` evita propagar flags HIP
+  (`-x hip`, `--offload-arch=`) para alvos C++ puros (PCH).
+- Removidos: `gpu_engine.{hpp,cpp}`, `gpu_info.{hpp,cpp}`,
+  `gpu_batch_processor.hpp`, `kernels_embedded.hpp` e todos os kernels
+  OpenCL em `src/gpu/kernels/*.cl`.
+
+Checkpoint / save-resume
+────────────────────────
+- Novo `include/search/checkpoint.hpp` + `src/search/checkpoint.cpp`:
+  serialização, hash de compatibilidade e `checkpoint_frontier()`.
+- Flags: `--save PATH`, `--save-interval SEC`, `--load PATH`, `--resume-strict`.
+- Handler de SIGINT/SIGTERM marca `SearchState::save_requested`.
+- Snapshots de cobertura gravados ao fim de execuções naturais (sem match)
+  permitem pular espaço já varrido em execuções futuras.
+
+Multi-target
+────────────
+- `--target-file PATH`: uma linha por endereço, `#` para comentários, CRLF-safe.
+- `include/crypto/cuckoo_filter.hpp`: prefiltro probabilístico quando N ≥ 8.
+- `SimdBatchProcessor::verify_targets` com 3 caminhos: GPU HIP (1 alvo),
+  CPU single-target (rejeição C1-64) e CPU multi-target (derive-20B +
+  cuckoo + memcmp).
+
+Filtro de checksum (`--checksum`)
+─────────────────────────────────
+- `ChecksumPattern {mask, value}` a partir de decimal (`7`), hex (`0x7`) ou
+  binário com wildcards (`0b*1*0`, exatamente C bits).
+- Múltiplos padrões separados por vírgula (OR).
+- `ChecksumMode` substitui a lógica anterior: None | Expected | AutoDeduce |
+  UserPattern | SelfVerify.
+
+Modo pseudoaleatório (`--random` / `--seed`)
+────────────────────────────────────────────
+- `include/search/random_perm.hpp`: `Permuter` (Feistel + cycle walking)
+  utilizado pelo `RandomMixedOdometer`.
+- `linear_position` retorna o contador (não o valor permutado), preservando
+  save/resume consistente.
+
+Restrições e filtros adicionais
+───────────────────────────────
+- `--repeat word:N` com `satisfies_repeat_constraints()` no hot path.
+- `--allow-all w1|w2|...` aplicado a todas as incógnitas.
+- `--distinct` respeita `max_count` (limiares por palavra; não apenas 1).
+
+Odômetro (src/search/odometer.cpp reescrito)
+────────────────────────────────────────────
+- `MixedOdometer`        — mixed-radix para K ≤ 2 ou com filtros.
+- `StreamingOdometer`    — outer wheels + síntese SHA-NI do último slot.
+- `RandomMixedOdometer`  — mixed-radix permutado.
+- `IndexedListOdometer`  — reservado para Pairs/Triplets pré-computados.
+- `make_odometer(plan)` decide em runtime sem branch no hot path.
+
+Optimizer (src/search/optimizer.cpp reescrito)
+──────────────────────────────────────────────
+- `Wheel {words, mask}` substitui `std::vector<uint16_t>` cru.
+- `PhraseSegment` pré-computado (evita concatenação no hot loop).
+- `count_exact<...>` via DP sobre cardinalidades (K ≤ 16).
+- Contagens exatas agora em `mpz_class` (GMP) — sem overflow em K grande.
+- Reordenamento por tamanho, por estratégia (Hamming/Zipf/Typo) e por
+  --repeat (palavras obrigatórias no início do wheel).
+
+SIMD / PBKDF2
+─────────────
+- `SimdBatchProcessor<Arch, ChecksumMode>` — sem branch de checksum em runtime.
+- `SHA512::complete_batch` (SSE/AVX2/AVX-512) removido — o ganho migrou
+  para o caminho PBKDF2.
+- `pbkdf2_simd.hpp`: requisito explícito de `__AVX512BW__` (por causa de
+  `_mm512_shuffle_epi8`).
+- Byte-swap final via `vpshufb` (dentro das 128-bit lanes) em vez de
+  `bswap64` escalar.
+- `sha512_padded_block64_avx2_x2` / `_avx512_x2` com interleaving 2x para ILP.
+- PCH perdeu `REUSE_FROM` (evitava `-Winvalid-pch` em `main.cpp`).
+
+UInt
+────
+- Removido `enum class Backend` (Scalar/SIMD) e a rota SIMD ingênua
+  (`bits[i] *= other.bits[i]` era semanticamente incorreta).
+- `operator[]` para acesso direto aos limbs.
+- `add`/`sub` com variantes `constexpr` (consteval-safe) + asm otimizado.
+- `mul_consteval` / `mul_runtime` convivendo.
+
+Crypto (BIP-39 / BIP-32 / SHA-256 / SHA-512)
+────────────────────────────────────────────
+- `Bip39Deriver` não recebe mais `secp256k1_context` (ECC interno).
+- Novos: `derive_{btc,eth}_address_bytes` (20 B, caminho multi-target),
+  `extract_checksum`.
+- `derive_*_address_from_seed` aceita `out_priv_key` opcional.
+- `HMAC_SHA512`: outer state preservado (8 words) em vez de um `SHA512`
+  completo do opad.
+- `SHA256::hash` aceita `size_t` (era `uint8_t`; truncava silenciosamente).
+- `pbkdf2_hmac_sha512` suporta `out_len` variável com contador BE (multi-bloco).
+
+Math
+────
+- Novos: `include/math/Point.hpp`, `include/math/Secp256k1Fp.hpp`.
+- Tabela Comb 8-bit secp256k1 (256 pontos) gerada em compile-time.
+- `Division.hpp` unificado em `div_knuth_impl` + `DivisionFixed<N>` enxuto.
+- `secp256k1_scalar.hpp` usa `operator[]`.
+
+CLI / validação
+───────────────
+- Novos helpers: `parse_checksum_token`, `read_target_file`, `parse_strategy`,
+  `decode_address`.
+- Flags novas: `--target-file`, `--allow-all`, `--prog {word|num}`, `--save`,
+  `--load`, `--save-interval`, `--repeat`, `--checksum`, `--random`, `--seed`,
+  `-q/--quiet`, `--resume-strict`.
+- Removido: `--benchmark` e `cfg.run_benchmark`.
+
+UI / Progresso
+──────────────
+- `LiveFrame`: frame multi-linha in-place via CSI puro (sem save/restore).
+- `format_eta` estendido (anos → quatrilhões de anos, notação científica).
+- `format_probability` (probabilidade de match em janela de 1h/1d).
+- `format_feasibility` (rótulos coloridos INVIÁVEL / IMPRATICÁVEL / LONGO).
+- `format_num(const mpz_class&)` com sumarização (dígitos totais + head/tail).
+- Monitor reescrito: 1 linha por thread, barra, ETA, taxa de eliminação e
+  projeções de curto prazo.
+
+Hardware / Host probe
+─────────────────────
+- `host_probe.cpp` decomposto em funções nomeadas (`probe_cpuid_basico`,
+  `classify_microarch`, `probe_topology_sysfs`, `probe_caches_sysfs`,
+  `probe_numa_sysfs`, `probe_freq_sysfs`, `probe_cppc_sysfs`,
+  `probe_misc_sysfs`, `probe_hybrid`).
+- `probe_gpus` consulta `enumerate_hip_devices()`.
+
+Build / CMake
+─────────────
+- GMP substitui secp256k1; HIP substitui OpenCL.
+- `.clangd` recebe `-D__HIP_PLATFORM_AMD__`.
+- `CPack` mantainer corrigido (`Juliano Xavier Diniz <juliano.prog.dev@gmail.com>`).
+- `BUILD_TESTING` controla `add_subdirectory(tests)` (`tests/CMakeLists.txt` novo).
+
+Removidos
+─────────
+- `include/benchmark/benchmark_runner.hpp` + implementação.
+- `tests/qa_suite.py`, `tests/test_sha512_comparison.cpp`,
+  `tests/test_point_header.cpp`.
+- Todos os kernels OpenCL em `src/gpu/kernels/`.
+
+Correções pontuais
+──────────────────
+- `-DCRYPTOWORDS_HAVE_AVX512` agora exige também `__AVX512BW__` — alinhado
+  ao uso real de `_mm512_shuffle_epi8` em `pbkdf2_simd`.
+- `detect_best_simd()` considera `OSXSAVE`/`XGETBV` (evita SIGILL em CPUs
+  com AVX-512 parcial ou SO sem estado YMM/ZMM salvo).
+- Contagem de "chaves válidas" no caminho GPU só incrementa se
+  `cfg.only_valids` (antes inflava para 100% do lote).
+- `--gpu --hybrid` não descarta mais threads de CPU.
+- `--resume-strict` retorna erro claro em incompatibilidade de config.
+
+Arquivos novos (destaques)
+──────────────────────────
+  include/gpu/gpu_backend.hpp
+  include/search/checkpoint.hpp
+  include/search/random_perm.hpp
+  include/simd/cpu_features.hpp
+  include/math/Point.hpp
+  include/math/Secp256k1Fp.hpp
+  include/crypto/cuckoo_filter.hpp
+  src/gpu/gpu_backend.cpp
+  src/gpu/hip/hip_engine.hip
+  src/search/checkpoint.cpp
+  tests/CMakeLists.txt

@@ -5,23 +5,20 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 #include "../../include/crypto/sha256_shani.hpp"
+#include "../../include/simd/cpu_features.hpp"
 
-// A rota SIMD só existe em x86 (mesmo padrão de sha512.cpp). Em outras
-// arquiteturas os símbolos declarados em sha256.hpp continuam existindo,
-// porém definidos pelos fallbacks escalares no fim deste arquivo.
-// Defina SHA256_NO_SIMD para forçar a rota escalar em x86 (debug/compat).
+// Rota SIMD só existe em x86 (mesmo padrão de sha512.cpp). Em outras
+// arquiteturas, os símbolos declarados em sha256.hpp continuam definidos
+// pelo fallback escalar no fim deste arquivo.
 #if !defined(SHA256_NO_SIMD) && (defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86))
 #define SHA256_X86 1
 #include <immintrin.h>
 #endif
-
-// =========================================================================
-// IMPLEMENTAÇÕES SIMD (Ocultas/Compiladas)
-// =========================================================================
 
 alignas(64) static constexpr std::array<uint32_t, 64> K256 = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -36,30 +33,23 @@ alignas(64) static constexpr std::array<uint32_t, 64> K256 = {
 static constexpr std::array<uint32_t, 8> SHA256_IV = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                                       0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
-template <uint8_t lanes>
-constexpr inline void sha256_init_simd(std::array<std::array<uint32_t, 8>, lanes> arr) noexcept {
-    for (uint8_t i = 0; i < lanes; ++i) {
-        arr[i] = SHA256_IV;
-    }
+// Init de estado vetorial: layout [word][lane].
+template <size_t LANES>
+constexpr inline void sha256_init_simd(std::array<std::array<uint32_t, LANES>, 8>& arr) noexcept {
+    for (size_t i = 0; i < 8; ++i)
+        for (size_t l = 0; l < LANES; ++l)
+            arr[i][l] = SHA256_IV[i];
 }
 
-void sha256_init_sse(SHA256_SSE_State* ctx) {
-    sha256_init_simd<4>(ctx->state);
-}
-void sha256_init_avx2(SHA256_AVX2_State* ctx) {
-    sha256_init_simd<8>(ctx->state);
-}
-void sha256_init_avx512(SHA256_AVX512_State* ctx) {
-    sha256_init_simd<16>(ctx->state);
-}
+void sha256_init_sse(SHA256_SSE_State* ctx)         { sha256_init_simd<4>(ctx->state); }
+void sha256_init_avx2(SHA256_AVX2_State* ctx)       { sha256_init_simd<8>(ctx->state); }
+void sha256_init_avx512(SHA256_AVX512_State* ctx)   { sha256_init_simd<16>(ctx->state); }
 
 #ifdef SHA256_X86
 
-// =========================================================================
-// IMPLEMENTAÇÃO SSE4.1
-// =========================================================================
+// SSE4.1 — 4 lanes
 [[gnu::target("sse4.1")]]
-void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std::array<uint32_t, 16>, 4>& W_in) {
+void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std::array<uint32_t, 4>, 16>& W_in) {
     __m128i a = _mm_loadu_si128((__m128i*)ctx->state[0].data());
     __m128i b = _mm_loadu_si128((__m128i*)ctx->state[1].data());
     __m128i c = _mm_loadu_si128((__m128i*)ctx->state[2].data());
@@ -82,7 +72,6 @@ void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std
     for (uint8_t t = 0; t < 16; t++)
         W[t] = _mm_loadu_si128((__m128i*)W_in[t].data());
 
-// Otimização de ILP extrema (Árvore binária de dependências)
 #pragma GCC unroll 48
     for (uint8_t t = 16; t < 64; t++) {
         __m128i s_1 = _mm_add_epi32(W[t - 16], s0_128(W[t - 15]));
@@ -99,13 +88,9 @@ void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std
 
         __m128i T2 = _mm_add_epi32(S0_128(a), MAJ128(a, b, c));
 
-        h = g;
-        g = f;
-        f = e;
+        h = g; g = f; f = e;
         e = _mm_add_epi32(d, T1);
-        d = c;
-        c = b;
-        b = a;
+        d = c; c = b; b = a;
         a = _mm_add_epi32(T1, T2);
     }
 #undef ROR128
@@ -126,9 +111,7 @@ void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std
     _mm_storeu_si128((__m128i*)ctx->state[7].data(), _mm_add_epi32(_mm_loadu_si128((__m128i*)ctx->state[7].data()), h));
 }
 
-// =========================================================================
-// IMPLEMENTAÇÃO AVX2
-// =========================================================================
+// AVX2 — 8 lanes
 [[gnu::target("avx2")]]
 void sha256_transform_avx2(SHA256_AVX2_State* __restrict ctx, const uint32_t W_in[16][8]) {
     __m256i a = _mm256_loadu_si256((__m256i*)ctx->state[0].data());
@@ -169,13 +152,9 @@ void sha256_transform_avx2(SHA256_AVX2_State* __restrict ctx, const uint32_t W_i
 
         __m256i T2 = _mm256_add_epi32(S0_256(a), MAJ256(a, b, c));
 
-        h = g;
-        g = f;
-        f = e;
+        h = g; g = f; f = e;
         e = _mm256_add_epi32(d, T1);
-        d = c;
-        c = b;
-        b = a;
+        d = c; c = b; b = a;
         a = _mm256_add_epi32(T1, T2);
     }
 #undef ROR256
@@ -204,9 +183,7 @@ void sha256_transform_avx2(SHA256_AVX2_State* __restrict ctx, const uint32_t W_i
                         _mm256_add_epi32(_mm256_loadu_si256((__m256i*)ctx->state[7].data()), h));
 }
 
-// =========================================================================
-// IMPLEMENTAÇÃO AVX-512
-// =========================================================================
+// AVX-512 — 16 lanes
 [[gnu::target("avx512f,avx512vl")]]
 void sha256_transform_avx512(SHA256_AVX512_State* __restrict ctx, const uint32_t W_in[16][16]) {
     __m512i a = _mm512_loadu_si512((__m512i*)ctx->state[0].data());
@@ -250,13 +227,9 @@ void sha256_transform_avx512(SHA256_AVX512_State* __restrict ctx, const uint32_t
 
         __m512i T2 = _mm512_add_epi32(S0_512(a), MAJ512(a, b, c));
 
-        h = g;
-        g = f;
-        f = e;
+        h = g; g = f; f = e;
         e = _mm512_add_epi32(d, T1);
-        d = c;
-        c = b;
-        b = a;
+        d = c; c = b; b = a;
         a = _mm512_add_epi32(T1, T2);
     }
 #undef CH512
@@ -284,39 +257,24 @@ void sha256_transform_avx512(SHA256_AVX512_State* __restrict ctx, const uint32_t
                         _mm512_add_epi32(_mm512_loadu_si512((__m512i*)ctx->state[7].data()), h));
 }
 
-#else  // !SHA256_X86 — fallbacks portáveis (lane a lane), sem intrínsecas
+#else  // !SHA256_X86 — fallback escalar, lane a lane
 
 namespace sha256_scalar_fallback {
 
-[[gnu::always_inline]] inline uint32_t ror(uint32_t x, int n) noexcept {
-    return std::rotr(x, n);
-}
-[[gnu::always_inline]] inline uint32_t bsig0(uint32_t x) noexcept {
-    return ror(x, 2) ^ ror(x, 13) ^ ror(x, 22);
-}
-[[gnu::always_inline]] inline uint32_t bsig1(uint32_t x) noexcept {
-    return ror(x, 6) ^ ror(x, 11) ^ ror(x, 25);
-}
-[[gnu::always_inline]] inline uint32_t ssig0(uint32_t x) noexcept {
-    return ror(x, 7) ^ ror(x, 18) ^ (x >> 3);
-}
-[[gnu::always_inline]] inline uint32_t ssig1(uint32_t x) noexcept {
-    return ror(x, 17) ^ ror(x, 19) ^ (x >> 10);
-}
-[[gnu::always_inline]] inline uint32_t ch(uint32_t x, uint32_t y, uint32_t z) noexcept {
-    return (x & y) ^ (~x & z);
-}
-[[gnu::always_inline]] inline uint32_t maj(uint32_t x, uint32_t y, uint32_t z) noexcept {
-    return (x & y) ^ (x & z) ^ (y & z);
-}
+[[gnu::always_inline]] inline uint32_t ror(uint32_t x, int n) noexcept { return std::rotr(x, n); }
+[[gnu::always_inline]] inline uint32_t bsig0(uint32_t x) noexcept { return ror(x, 2) ^ ror(x, 13) ^ ror(x, 22); }
+[[gnu::always_inline]] inline uint32_t bsig1(uint32_t x) noexcept { return ror(x, 6) ^ ror(x, 11) ^ ror(x, 25); }
+[[gnu::always_inline]] inline uint32_t ssig0(uint32_t x) noexcept { return ror(x, 7) ^ ror(x, 18) ^ (x >> 3); }
+[[gnu::always_inline]] inline uint32_t ssig1(uint32_t x) noexcept { return ror(x, 17) ^ ror(x, 19) ^ (x >> 10); }
+[[gnu::always_inline]] inline uint32_t ch(uint32_t x, uint32_t y, uint32_t z) noexcept { return (x & y) ^ (~x & z); }
+[[gnu::always_inline]] inline uint32_t maj(uint32_t x, uint32_t y, uint32_t z) noexcept { return (x & y) ^ (x & z) ^ (y & z); }
 
 template <unsigned Lanes>
 inline void transform_lanes(uint32_t (&state)[8][Lanes], const uint32_t W_in[16][Lanes]) noexcept {
     for (unsigned lane = 0; lane < Lanes; ++lane) {
         std::array<uint32_t, 64> W;
 #pragma GCC unroll 16
-        for (int t = 0; t < 16; ++t)
-            W[t] = W_in[t][lane];
+        for (int t = 0; t < 16; ++t) W[t] = W_in[t][lane];
 #pragma GCC unroll 48
         for (int t = 16; t < 64; ++t)
             W[t] = ssig1(W[t - 2]) + W[t - 7] + ssig0(W[t - 15]) + W[t - 16];
@@ -328,24 +286,11 @@ inline void transform_lanes(uint32_t (&state)[8][Lanes], const uint32_t W_in[16]
         for (int t = 0; t < 64; ++t) {
             const uint32_t T1 = h + bsig1(e) + ch(e, f, g) + K256[t] + W[t];
             const uint32_t T2 = bsig0(a) + maj(a, b, c);
-            h = g;
-            g = f;
-            f = e;
-            e = d + T1;
-            d = c;
-            c = b;
-            b = a;
-            a = T1 + T2;
+            h = g; g = f; f = e; e = d + T1;
+            d = c; c = b; b = a; a = T1 + T2;
         }
-
-        state[0][lane] += a;
-        state[1][lane] += b;
-        state[2][lane] += c;
-        state[3][lane] += d;
-        state[4][lane] += e;
-        state[5][lane] += f;
-        state[6][lane] += g;
-        state[7][lane] += h;
+        state[0][lane] += a; state[1][lane] += b; state[2][lane] += c; state[3][lane] += d;
+        state[4][lane] += e; state[5][lane] += f; state[6][lane] += g; state[7][lane] += h;
     }
 }
 
@@ -363,9 +308,7 @@ void sha256_transform_avx512(SHA256_AVX512_State* ctx, const uint32_t W_in[16][1
 
 #endif  // SHA256_X86
 
-// =========================================================================
-// IMPLEMENTAÇÃO ESCALAR
-// =========================================================================
+// Implementação escalar (sempre compilada)
 
 namespace crypto {
 
@@ -388,15 +331,11 @@ namespace crypto {
     return std::rotr(x, 17) ^ std::rotr(x, 19) ^ (x >> 10);
 }
 
-SHA256::SHA256() {
-    reset();
-}
+SHA256::SHA256() { reset(); }
 
 void SHA256::reset() {
 #pragma GCC unroll 8
-    for (int i = 0; i < 8; ++i)
-        h_[i] = SHA256_IV[i];
-
+    for (int i = 0; i < 8; ++i) h_[i] = SHA256_IV[i];
     total_len_ = 0;
     buf_len_ = 0;
 }
@@ -450,26 +389,27 @@ void SHA256::finalize(uint8_t out[32]) {
     }
 }
 
-void SHA256::hash(const void* data, uint8_t len, uint8_t out[32]) {
+void SHA256::hash(const void* data, size_t len, uint8_t out[32]) {
     if (len <= 55) {
         alignas(16) uint8_t block[64] = {0};
-        if (len != 0)
-            std::memcpy(block, data, len);
+        if (len != 0) std::memcpy(block, data, len);
         block[len] = 0x80;
         uint64_t bit_len_be = __builtin_bswap64(static_cast<uint64_t>(len) * 8);
         std::memcpy(block + 56, &bit_len_be, 8);
 
-#if defined(__SHA__)
-        std::array<uint32_t, 8> state = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                                         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-        cryptowords::detail::sha256_process_x86(state.data(), block, 64);
+#if defined(CRYPTOWORDS_HAS_SHANI_INTRINSICS)
+        if (cryptowords::cpu::has_sha_ni()) {
+            std::array<uint32_t, 8> state = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+            cryptowords::detail::sha256_process_x86(state.data(), block, 64);
 #pragma GCC unroll 8
-        for (int i = 0; i < 8; ++i) {
-            uint32_t out_be = __builtin_bswap32(state[i]);
-            std::memcpy(out + i * 4, &out_be, 4);
+            for (int i = 0; i < 8; ++i) {
+                uint32_t out_be = __builtin_bswap32(state[i]);
+                std::memcpy(out + i * 4, &out_be, 4);
+            }
+            return;
         }
-        return;
-#else
+#endif
         SHA256 ctx;
         ctx.process_block(block);
 #pragma GCC unroll 8
@@ -478,9 +418,7 @@ void SHA256::hash(const void* data, uint8_t len, uint8_t out[32]) {
             std::memcpy(out + i * 4, &out_be, 4);
         }
         return;
-#endif
     }
-
     SHA256 ctx;
     ctx.update(data, len);
     ctx.finalize(out);
@@ -509,24 +447,67 @@ void SHA256::process_block(const uint8_t block[64]) {
     for (int i = 0; i < 64; ++i) {
         uint32_t T1 = h + Sigma1(e) + Ch(e, f, g) + K256[i] + W[i];
         uint32_t T2 = Sigma0(a) + Maj(a, b, c);
-        h = g;
-        g = f;
-        f = e;
-        e = d + T1;
-        d = c;
-        c = b;
-        b = a;
-        a = T1 + T2;
+        h = g; g = f; f = e; e = d + T1;
+        d = c; c = b; b = a; a = T1 + T2;
     }
 
-    h_[0] += a;
-    h_[1] += b;
-    h_[2] += c;
-    h_[3] += d;
-    h_[4] += e;
-    h_[5] += f;
-    h_[6] += g;
-    h_[7] += h;
+    h_[0] += a; h_[1] += b; h_[2] += c; h_[3] += d;
+    h_[4] += e; h_[5] += f; h_[6] += g; h_[7] += h;
 }
 
 }  // namespace crypto
+
+// Fallback não-x86: implementações escalares das funções "shani".
+// Devem estar em `cryptowords::detail` no escopo global (fora de
+// `namespace crypto`), para casar com as declarações de sha256_shani.hpp.
+#if !defined(CRYPTOWORDS_HAS_SHANI_INTRINSICS)
+namespace cryptowords::detail {
+
+uint8_t sha256_bip39_first_byte_shani(const uint8_t block64[64]) {
+    uint8_t hash[32];
+    crypto::SHA256::hash(block64, 64, hash);
+    return hash[0];
+}
+
+// Transform de bloco cru (sem padding), 1 ou mais blocos de 64 bytes.
+// Mantém a semântica da variante SHA-NI: apenas injeta os dados no estado.
+void sha256_process_x86(uint32_t state[8], const uint8_t data[], uint32_t length) {
+    while (length >= 64) {
+        uint32_t W[64];
+#pragma GCC unroll 16
+        for (int i = 0; i < 16; ++i) {
+            W[i] = (uint32_t(data[i * 4]) << 24) | (uint32_t(data[i * 4 + 1]) << 16) |
+                   (uint32_t(data[i * 4 + 2]) << 8)  | uint32_t(data[i * 4 + 3]);
+        }
+#pragma GCC unroll 48
+        for (int i = 16; i < 64; ++i) {
+            const uint32_t s0 = std::rotr(W[i - 15], 7) ^ std::rotr(W[i - 15], 18) ^ (W[i - 15] >> 3);
+            const uint32_t s1 = std::rotr(W[i - 2], 17) ^ std::rotr(W[i - 2], 19) ^ (W[i - 2] >> 10);
+            W[i] = W[i - 16] + s0 + W[i - 7] + s1;
+        }
+
+        uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+        uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
+
+#pragma GCC unroll 64
+        for (int i = 0; i < 64; ++i) {
+            const uint32_t S1 = std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25);
+            const uint32_t ch = (e & f) ^ (~e & g);
+            const uint32_t T1 = h + S1 + ch + K256[i] + W[i];
+            const uint32_t S0 = std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22);
+            const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const uint32_t T2 = S0 + maj;
+            h = g; g = f; f = e; e = d + T1;
+            d = c; c = b; b = a; a = T1 + T2;
+        }
+
+        state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+        state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+        data += 64;
+        length -= 64;
+    }
+}
+
+}  // namespace cryptowords::detail
+#endif  // !CRYPTOWORDS_HAS_SHANI_INTRINSICS

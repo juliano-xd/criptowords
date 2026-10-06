@@ -1,34 +1,31 @@
 #pragma once
-#include <atomic>
+#include <memory>
 
 #include "context.hpp"
 #include "plan.hpp"
 
 namespace cryptowords {
 
-// Avança a thread pelo espaço de busca (mixed-radix).
+// Interface do enumerador de candidatos.
+//
+// Cada thread tem o seu IOdometer. Ele emite um mnemônico por vez (via
+// `ctx.cursor.current_ids`) até `advance()` retornar false.
 class IOdometer {
    public:
     virtual ~IOdometer() = default;
-    virtual void init_state(PipelineThreadContext& ctx, size_t thread_idx, size_t num_threads,
-                            const OptimizedMnemonics& opt) = 0;
+
+    virtual void init_state(PipelineThreadContext& ctx, size_t thread_idx,
+                            size_t num_threads, const OptimizedMnemonics& opt) = 0;
     virtual bool advance(PipelineThreadContext& ctx, const OptimizedMnemonics& opt) = 0;
+
+    virtual uint64_t linear_position(const PipelineThreadContext& ctx,
+                                     const OptimizedMnemonics& opt) const = 0;
+    virtual void seek_linear(PipelineThreadContext& ctx,
+                             const OptimizedMnemonics& opt, uint64_t idx) = 0;
+    virtual uint64_t total_space(const OptimizedMnemonics& opt) const = 0;
 };
 
-class GenericOdometer final : public IOdometer {
-    std::atomic<size_t> next_pair_idx_{0};
-    std::atomic<size_t> next_triplet_idx_{0};
-    bool is_dynamic_partition_{false};
-    size_t gpu_batch_{1024};
-
-   public:
-    GenericOdometer() = default;
-    explicit GenericOdometer(bool dynamic_partition, size_t gpu_batch = 1024)
-        : is_dynamic_partition_(dynamic_partition), gpu_batch_(gpu_batch) {}
-
-    void init_state(PipelineThreadContext& ctx, size_t thread_idx, size_t num_threads,
-                    const OptimizedMnemonics& opt) override;
-    bool advance(PipelineThreadContext& ctx, const OptimizedMnemonics& opt) override;
-};
+// Escolhe a implementação pelo SearchMode resolvido na fase 3.
+std::unique_ptr<IOdometer> make_odometer(const OptimizedMnemonics& opt);
 
 }  // namespace cryptowords

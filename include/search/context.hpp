@@ -1,71 +1,155 @@
 #pragma once
-#include <secp256k1.h>
-
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <vector>
+
+#include "../gpu/gpu_backend.hpp"
 
 namespace cryptowords {
 
-// Tamanho máximo de slot de senha por via SIMD (comporta 24 palavras em qualquer idioma UTF-8)
+struct CoverageSnapshot;
+
+// Número máximo de candidatos por batch de PBKDF2 (= 16 para AVX-512,
+// 8 para AVX2, 4 para SSE; definido por ArchTraits). O storage é
+// sobredimensionado para o caso AVX-512.
 static constexpr size_t PW_SLOT_SIZE = 512;
+static constexpr size_t MAX_BATCH_LANES = 16;
+static constexpr size_t MAX_WORDS_PER_MNEMONIC = 24;
+static constexpr uint32_t GPU_POST_BATCH = 512;
 
-// Todo o estado mutável de uma thread. Um contexto = um núcleo.
-struct PipelineThreadContext {
-    alignas(64) char pw[16 * PW_SLOT_SIZE];
-    alignas(64) uint8_t seed[16 * 64];
-    alignas(64) uint16_t valid_batch[16 * 24];
-    alignas(64) uint16_t checksum_batch[32 * 24];
+// -------------------------------------------------------------------------
+// Salt HMAC + tabelas do key-schedule do PBKDF2. Imutável por execução;
+// copiado para cada thread na criação do contexto.
+// -------------------------------------------------------------------------
+struct SaltCache {
+    std::array<uint8_t, 256> buf{};
+    size_t len = 0;
 
-    size_t pw_len[16] = {};
-    size_t valid_batch_sz = 0;
-    size_t c_batch_sz = 0;
+    alignas(64) std::array<uint64_t, 16> block64{};
+    alignas(64) std::array<uint64_t, 80> kw_salt{};
+    alignas(64) std::array<uint64_t, 80 * 2> kw_salt_sse{};
+    alignas(64) std::array<uint64_t, 80 * 4> kw_salt_avx2{};
+    alignas(64) std::array<uint64_t, 80 * 8> kw_salt_avx512{};
+};
 
-    uint8_t decoded_target[20] = {};
-    uint8_t salt_buf[256] = {};
-    size_t salt_len = 0;
-    alignas(64) uint64_t salt_block64[16] = {};
-    bool prefix_initialized = false;
+// -------------------------------------------------------------------------
+// Cursor de enumeração — estado que o odômetro mantém por thread.
+// -------------------------------------------------------------------------
+struct EnumCursor {
+    std::vector<size_t>   state;        // dígitos mixed-radix (Mixed)
+    std::vector<size_t>   outer_state;  // dígitos outer (Streaming)
+    std::vector<uint16_t> current_ids;  // mnemônico atual
 
-    const secp256k1_context* ctx = nullptr;
-
-    std::vector<size_t> state;
-    std::vector<uint16_t> current_ids;
-    size_t thread_idx = 0;
-    size_t step_size = 1;
-    size_t pair_idx = 0;
-    size_t pair_end = 0;
-    size_t triplet_idx = 0;
-    size_t triplet_end = 0;
-    bool is_done = false;
-
-    // OTM-03 / Generalização Afim em F_2^C (K >= 3)
-    // No BIP-39, o checksum consome de 4 a 8 bits. Para um prefixo fixo, no máximo 128 palavras
-    // (2048 / 2^4) satisfazem o checksum. 256 elementos garantem 100% de margem com 512 bytes em vez de 4KB.
-    std::vector<size_t> outer_state;
-    uint16_t k_last_w_list[256] = {};
+    // Fila de candidatos para o último slot (Streaming).
+    static constexpr size_t K_LAST_MAX = 256;
+    std::array<uint16_t, K_LAST_MAX> k_last_w_list{};
     size_t k_last_w_count = 0;
-    size_t k_last_w_idx = 0;
-    alignas(64) uint8_t k_block64[64] = {};
+    size_t k_last_w_idx   = 0;
 
-    // OTM-39: Cache de Vetores de Palavras Pré-embaralhadas em F_2^C (Zero PSHUFB no Inner Loop)
-    alignas(16) uint8_t streaming_word_vecs[2048 * 16] = {};
-    alignas(16) uint8_t streaming_clear_mask[16] = {};
-    alignas(16) uint8_t streaming_combined_shuf_mask[16] = {};
-    alignas(16) uint8_t streaming_msg2[16] = {};
-    alignas(16) uint8_t streaming_msg3[16] = {};
-    bool streaming_vecs_initialized = false;
+    // Bloco BIP-39 sendo montado (Streaming).
+    alignas(64) std::array<uint8_t, 64> k_block64{};
 
-    // OTM-23: Fast-Forwarding PBKDF2 Round 1
-    alignas(64) uint64_t kw_salt[80] = {};
-    alignas(64) uint64_t kw_salt_sse[80 * 2] = {};
-    alignas(64) uint64_t kw_salt_avx2[80 * 4] = {};
-    alignas(64) uint64_t kw_salt_avx512[80 * 8] = {};
+    size_t thread_idx = 0;
+    size_t step_size  = 1;
 
-    size_t local_tested = 0;
-    size_t local_valid = 0;
+    // Índices para listas pré-computadas (Pairs/Triplets).
+    size_t pair_idx = 0, pair_end = 0;
+    size_t triplet_idx = 0, triplet_end = 0;
 
-    ~PipelineThreadContext() = default;
+    // Contador linear global. Usado em modo random (é o índice permutado).
+    // Em modos normais permanece 0.
+    uint64_t linear_counter = 0;
+
+    bool done = false;
+    bool last_candidate_accepted = true;
+};
+
+// -------------------------------------------------------------------------
+// Lote de candidatos (IDs das palavras). Usado em dois estágios:
+//   1. checksum_batch: candidatos esperando filtro SHA-256
+//   2. pbkdf2_batch:   candidatos que passaram, esperando PBKDF2
+// -------------------------------------------------------------------------
+struct CandidateBatch {
+    static constexpr size_t MAX_LANES = 32;   // cobre AVX-512 2x
+    alignas(64) std::array<uint16_t, MAX_LANES * MAX_WORDS_PER_MNEMONIC> ids{};
+    size_t size = 0;
+};
+
+// -------------------------------------------------------------------------
+// Scratch do modo Streaming — vetores pré-computados para SHA-NI em pares.
+// Alocado sob demanda, liberado com o contexto.
+// -------------------------------------------------------------------------
+struct StreamingScratch {
+    std::vector<uint8_t> word_vecs;   // 16 B por palavra do wheel
+    alignas(16) std::array<uint8_t, 16> clear_mask{};
+    alignas(16) std::array<uint8_t, 16> shuf_mask{};
+    alignas(16) std::array<uint8_t, 16> msg2{};
+    alignas(16) std::array<uint8_t, 16> msg3{};
+};
+
+// -------------------------------------------------------------------------
+// Estado do pós-PBKDF2 na GPU — ping-pong de dois buffers.
+// -------------------------------------------------------------------------
+struct GpuPostState {
+    IGpuEngine* engine = nullptr;
+    std::mutex* mutex  = nullptr;
+    uint32_t    slot   = 0;
+
+    std::array<std::vector<uint8_t>,  2> seeds;
+    std::array<std::vector<uint16_t>, 2> mnems;
+    std::array<uint32_t, 2> count{0, 0};
+    std::array<bool,     2> inflight{false, false};
+    std::array<uint32_t, 2> result{0xFFFFFFFFu, 0xFFFFFFFFu};
+    uint32_t write_idx = 0;
+};
+
+// -------------------------------------------------------------------------
+// Placeholder para futura backend CUDA/NVIDIA. Ignorado pelo caminho CPU;
+// nenhum custo quando não utilizado.
+// -------------------------------------------------------------------------
+struct NvidiaContext {
+    void* device = nullptr;
+    void* stream = nullptr;
+    std::vector<uint8_t> pinned_seeds;
+    std::vector<uint16_t> pinned_mnems;
+    uint32_t pending = 0;
+};
+
+// -------------------------------------------------------------------------
+// Contadores por thread. `local_*` são flushados periodicamente; `cumulative_*`
+// acumulam para checkpoint.
+// -------------------------------------------------------------------------
+struct ThreadCounters {
+    size_t   local_tested     = 0;   // chaves submetidas ao PBKDF2
+    size_t   local_valid      = 0;   // chaves que passaram no checksum
+    size_t   local_eliminated = 0;   // chaves rejeitadas pelo checksum
+    uint64_t cumulative_tested = 0;
+    uint64_t cumulative_valid  = 0;
+};
+
+// -------------------------------------------------------------------------
+// Contexto por thread. Buffers persistentes mínimos; o restante é alocado
+// em stack dentro de flush_valid_batch.
+// -------------------------------------------------------------------------
+struct PipelineThreadContext {
+    SaltCache      salt;
+    EnumCursor     cursor;
+    CandidateBatch checksum_batch;  // esperando filtro SHA-256
+    CandidateBatch pbkdf2_batch;    // esperando PBKDF2
+    StreamingScratch stream;
+    GpuPostState   gpu;
+    NvidiaContext  nvidia;
+    ThreadCounters counters;
+
+    std::array<uint8_t, 20> decoded_target{};
+
+    const std::vector<CoverageSnapshot>* coverage_snapshots = nullptr;
+
+    PipelineThreadContext() noexcept = default;
+    PipelineThreadContext(const PipelineThreadContext&) = delete;
+    PipelineThreadContext& operator=(const PipelineThreadContext&) = delete;
 };
 
 }  // namespace cryptowords

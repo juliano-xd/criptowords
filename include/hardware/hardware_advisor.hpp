@@ -30,7 +30,6 @@ struct TuningStrategy {
     size_t chosen_gpu_batch = 16384;
     size_t chosen_slot_size = 128;
 
-    // Racional técnico da escolha
     std::string rationale;
 };
 
@@ -38,8 +37,11 @@ class HardwareAdvisor {
    public:
     static TuningStrategy analyze(const AppConfig& cfg, const HostProfile& host);
     static void apply_tuning(AppConfig& cfg, const TuningStrategy& strat);
+
+    // `quiet` suprime a caixa de diagnóstico (host report é uma ação explícita
+    // do usuário e sempre imprime; summary é parte do fluxo normal).
     static void print_host_report(const HostProfile& host, const TuningStrategy& strat);
-    static void print_tuning_summary(const TuningStrategy& strat);
+    static void print_tuning_summary(const TuningStrategy& strat, bool quiet);
 };
 
 }  // namespace hardware

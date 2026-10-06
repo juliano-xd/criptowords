@@ -1,8 +1,11 @@
 #include "../../include/search/reporter.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <format>
+#include <gmpxx.h>
+#include <map>
 #include <print>
 #include <string>
 #include <vector>
@@ -10,165 +13,272 @@
 #include "../../include/cli/ui.hpp"
 
 using namespace cryptowords::ui;
+using namespace cryptowords;
+
+namespace {
+
+const char* mode_label(SearchMode m) {
+    switch (m) {
+        case SearchMode::Mixed:     return "Mixed (mixed-radix)";
+        case SearchMode::Streaming: return "Streaming (outer + cascade)";
+        case SearchMode::Pairs:     return "Pairs";
+        case SearchMode::Triplets:  return "Triplets";
+    }
+    return "?";
+}
+
+const char* checksum_mode_label(ChecksumMode m) {
+    switch (m) {
+        case ChecksumMode::None:        return "desativado";
+        case ChecksumMode::Expected:    return "checksum fixo (última palavra conhecida)";
+        case ChecksumMode::AutoDeduce:  return "síntese por cascade";
+        case ChecksumMode::UserPattern: return "--checksum";
+        case ChecksumMode::SelfVerify:  return "auto-verificação (K=1)";
+    }
+    return "?";
+}
+
+std::string strategy_name(SearchStrategy mask, const AppConfig& cfg) {
+    if (mask == SearchStrategy::Default || mask == SearchStrategy::None)
+        return "Padrão (Filtros em F₂ᶜ)";
+
+    std::vector<std::string> names;
+    if (has_bit(mask, SearchStrategy::HammingGrad)) names.push_back("Gradiente de Hamming");
+    if (has_bit(mask, SearchStrategy::Frequency))   names.push_back("Frequência (Zipf)");
+    if (has_bit(mask, SearchStrategy::Typo))
+        names.push_back(std::format("Levenshtein (dist≤{})", cfg.max_distance));
+
+    if (names.size() == 1) return names[0];
+    std::string s = "Combinada (";
+    for (size_t i = 0; i < names.size(); ++i) {
+        s += names[i];
+        if (i + 1 < names.size()) s += " + ";
+    }
+    s += ")";
+    return s;
+}
+
+}  // namespace
 
 void SearchReporter::print_plan(const OptimizedMnemonics& opt, const AppConfig& cfg) {
-    const size_t n_words = opt.base_mnemonic.size();
-    const size_t n_unknowns = opt.unknown_positions.size();
-    const size_t INNER_WIDTH = DEFAULT_INNER_WIDTH;
+    if (cfg.quiet) return;
+
+    const size_t n_words    = opt.base_mnemonic.size();
+    const size_t n_unknown  = opt.unknown_positions.size();
+    const size_t W = DEFAULT_INNER_WIDTH;
 
     std::print("\n");
-    print_box_top("AFUNILAMENTO COMBINATÓRIO & PLANO DE BUSCA", INNER_WIDTH);
+    print_box_top("AFUNILAMENTO COMBINATÓRIO & PLANO DE BUSCA", W);
 
-    // Mnemônico com badges
-    std::string mnem_title =
-        std::format("Frase ({} palavras, {} incógnita{}):", n_words, n_unknowns, (n_unknowns == 1 ? "" : "s"));
-    print_box_line(std::format("\033[1;37m{}\033[0m", mnem_title), INNER_WIDTH);
+    print_box_line(std::format("\033[1;37mFrase ({} palavras, {} incógnita{}):\033[0m",
+                               n_words, n_unknown, (n_unknown == 1 ? "" : "s")),
+                   W);
 
-    std::string current_line = "";
-    size_t current_vis_len = 0;
+    std::string line;
+    size_t line_vis = 0;
     for (size_t i = 0; i < n_words; ++i) {
-        std::string token;
-        size_t token_vis = 0;
+        std::string tok;
+        size_t tok_vis = 0;
         if (opt.base_mnemonic[i] != AppConfig::UNKNOWN_WORD) {
-            token = cfg.wordlist[opt.base_mnemonic[i]];
-            token_vis = token.size();
+            tok = cfg.wordlist[opt.base_mnemonic[i]];
+            tok_vis = tok.size();
         } else {
-            token = std::format("\033[1;93m[?#{:02d}]\033[0m", i + 1);
-            token_vis = 7;
+            tok = std::format("\033[1;93m[?#{:02d}]\033[0m", i + 1);
+            tok_vis = 7;
         }
-
-        if (current_vis_len + token_vis + (current_vis_len > 0 ? 2 : 0) > INNER_WIDTH) {
-            print_box_line(current_line, INNER_WIDTH);
-            current_line.clear();
-            current_vis_len = 0;
+        if (line_vis + tok_vis + (line_vis > 0 ? 2 : 0) > W) {
+            print_box_line(line, W);
+            line.clear();
+            line_vis = 0;
         }
-        if (current_vis_len > 0) {
-            current_line += "  ";
-            current_vis_len += 2;
-        }
-        current_line += token;
-        current_vis_len += token_vis;
+        if (line_vis > 0) { line += "  "; line_vis += 2; }
+        line += tok;
+        line_vis += tok_vis;
     }
-    if (!current_line.empty()) {
-        print_box_line(current_line, INNER_WIDTH);
+    if (!line.empty()) print_box_line(line, W);
+
+    print_box_separator(W);
+
+    const std::string coin_str = (cfg.coin == CoinTarget::BTC) ? "Bitcoin (BTC)"
+                                                               : "Ethereum (ETH)";
+    const std::string pass_str = cfg.passphrase.empty()
+                                     ? "(nenhuma)"
+                                     : std::format("\"{}\"", cfg.passphrase);
+    print_box_line(std::format("Moeda: {:<14} │ Threads: {:<2}  │ Rounds: {:<5} │ Senha: {:<12}",
+                               coin_str, cfg.num_threads, cfg.pbkdf2_rounds, pass_str),
+                   W);
+
+    print_box_line(std::format("Estratégia  : \033[1;36m{}\033[0m",
+                               strategy_name(cfg.strategy_mask, cfg)),
+                   W);
+
+    print_box_line(std::format("Enumeração  : \033[1;36m{}\033[0m",
+                               mode_label(opt.mode)),
+                   W);
+
+    print_box_line(std::format("Checksum    : \033[1;36m{}\033[0m",
+                               checksum_mode_label(opt.checksum_mode)),
+                   W);
+
+    if (opt.has_checksum_filter && !opt.checksum_repr.empty()) {
+        print_box_line(std::format("--checksum  : \033[1;33m{}\033[0m",
+                                   opt.checksum_repr),
+                       W);
     }
 
-    print_box_separator(INNER_WIDTH);
-
-    // Parâmetros e Estratégia
-    std::string coin_str = (cfg.coin == CoinTarget::BTC) ? "Bitcoin (BTC)" : "Ethereum (ETH)";
-    std::string pass_str = cfg.passphrase.empty() ? "(nenhuma)" : std::format("\"{}\"", cfg.passphrase);
-    print_box_line(std::format("Moeda: {:<14} │ Threads: {:<2}  │ Rounds: {:<5} │ Senha: {:<12}", coin_str,
-                               cfg.num_threads, cfg.pbkdf2_rounds, pass_str),
-                   INNER_WIDTH);
-
-    std::string strat_str;
-    if (opt.active_strategies.empty() ||
-        (opt.active_strategies.size() == 1 && opt.active_strategies[0] == SearchStrategy::Default)) {
-        strat_str = "Padrão (Filtros em F₂ᶜ)";
-    } else {
-        std::vector<std::string> names;
-        for (auto s : opt.active_strategies) {
-            if (s == SearchStrategy::HammingGradient)
-                names.push_back("Hamming (OTM-29)");
-            else if (s == SearchStrategy::Frequency)
-                names.push_back("Frequência (Zipf)");
-            else if (s == SearchStrategy::Typo)
-                names.push_back(std::format("Levenshtein (dist≤{})", cfg.max_distance));
+    if (!cfg.repeat_ids.empty()) {
+        std::string rep;
+        for (size_t i = 0; i < cfg.repeat_ids.size(); ++i) {
+            if (i > 0) rep += ", ";
+            rep += std::format("\033[1;33m{}\033[0m\033[90m×\033[0m{}",
+                               cfg.wordlist[cfg.repeat_ids[i].first],
+                               static_cast<int>(cfg.repeat_ids[i].second));
         }
-        if (names.size() == 1) {
-            if (opt.active_strategies[0] == SearchStrategy::HammingGradient)
-                strat_str = "Gradiente de Hamming & Entropia (OTM-29)";
-            else if (opt.active_strategies[0] == SearchStrategy::Frequency)
-                strat_str = "Frequência Linguística (Zipf)";
-            else if (opt.active_strategies[0] == SearchStrategy::Typo)
-                strat_str = std::format("Autômatos Levenshtein (Typo, dist≤{})", cfg.max_distance);
-        } else {
-            strat_str = "Combinada (";
-            for (size_t i = 0; i < names.size(); ++i) {
-                strat_str += names[i];
-                if (i + 1 < names.size())
-                    strat_str += " + ";
-            }
-            strat_str += ")";
-        }
+        print_box_line(std::format("--repeat    : {}", rep), W);
     }
-    print_box_line(std::format("Estratégia  : \033[1;36m{}\033[0m", strat_str), INNER_WIDTH);
 
     if (!cfg.target.empty()) {
-        print_box_line(std::format("Alvo        : \033[1;32m{:<34}\033[0m \033[90m(Token C1: 0x{:08x})\033[0m",
-                                   cfg.target, opt.target_fast_hash),
-                       INNER_WIDTH);
+        print_box_line(std::format(
+            "Alvo        : \033[1;32m{:<34}\033[0m \033[90m(Token C1: 0x{:08x})\033[0m",
+            cfg.target, opt.target_fast_hash),
+            W);
     }
 
-    print_box_separator(INNER_WIDTH);
+    print_box_separator(W);
 
-    // Redução Matemática do Espaço
-    print_box_line(
-        std::format("   Espaço Bruto Total       : {:>14} combinações", format_num(opt.exact_math_combinations)),
-        INNER_WIDTH);
+    // --- Funil de contagem ---
+    {
+        const double pow_2048_k = (opt.raw_unknowns > 0)
+                                      ? std::pow(2048.0, static_cast<double>(opt.raw_unknowns))
+                                      : 1.0;
 
-    double current_comb = opt.math_combinations;
-    double valid_target = opt.valid_combinations;
-    double ratio = (valid_target > 0) ? (current_comb / valid_target) : 1.0;
+        if (opt.raw_unknowns > 0) {
+            print_box_line(std::format(
+                "   \033[90mEspaço Bruto (2048^{})\033[0m  : \033[90m{}\033[0m",
+                opt.raw_unknowns, format_num(opt.exact_math_raw)),
+                W);
+        }
 
-    print_box_line(std::format("   Poda Matemática Checksum : {:>14} chaves válidas  [Redução: {:>5.1f}x]",
-                               format_num(opt.exact_valid_combinations), ratio),
-                   INNER_WIDTH);
-    print_box_line(std::format("   \033[1;32m➔ Chaves Efetivas PBKDF2\033[0m : \033[1;32m{:>14} chaves\033[0m         "
-                               "\033[1;33m[PODA: {:>5.1f}x]\033[0m",
-                               format_num(opt.exact_valid_combinations), ratio),
-                   INNER_WIDTH);
+        if (opt.exact_math_post_wheel < opt.exact_math_raw) {
+            const double r = (opt.math_combinations_raw > 0.0)
+                                 ? (pow_2048_k / opt.math_combinations_raw) : 1.0;
+            print_box_line(std::format(
+                "   \033[36mApós --allow/--allow-all\033[0m  : \033[36m{}\033[0m   "
+                "\033[33m[↓ {}x]\033[0m",
+                format_num(opt.exact_math_post_wheel), format_ratio(r)),
+                W);
+        }
 
-    print_box_separator(INNER_WIDTH);
+        if (opt.exact_math_post_distinct < opt.exact_math_post_wheel) {
+            const double r = (opt.exact_math_post_distinct != 0)
+                                 ? (opt.exact_math_post_wheel.get_d() /
+                                    opt.exact_math_post_distinct.get_d()) : 1.0;
+            print_box_line(std::format(
+                "   \033[36mApós --distinct\033[0m            : \033[36m{}\033[0m   "
+                "\033[33m[↓ {}x]\033[0m",
+                format_num(opt.exact_math_post_distinct), format_ratio(r)),
+                W);
+        }
 
-    // Badges de Otimização Ativas
-    print_box_line("\033[1;36mOTIMIZAÇÕES ATIVAS:\033[0m", INNER_WIDTH);
+        if (opt.exact_math_post_repeat < opt.exact_math_post_distinct) {
+            const double r = (opt.exact_math_post_repeat != 0)
+                                 ? (opt.exact_math_post_distinct.get_d() /
+                                    opt.exact_math_post_repeat.get_d()) : 1.0;
+            print_box_line(std::format(
+                "   \033[1;36mApós --repeat\033[0m              : \033[1;36m{}\033[0m   "
+                "\033[1;33m[↓ {}x]\033[0m",
+                format_num(opt.exact_math_post_repeat), format_ratio(r)),
+                W);
+        }
 
-    if (opt.has_valid_triplets) {
-        print_box_line(std::format("   [-] OTM-03 / OTM-34 (F₂ᶜ - K=3): {:>6} triplas [Redução: {:>5.1f}x]",
-                                   format_num(static_cast<double>(opt.valid_triplets.size())), ratio),
-                       INNER_WIDTH);
-    } else if (opt.has_valid_pairs) {
-        print_box_line(std::format("   [-] OTM-02 (Pruning em F₂ᶜ) : {:>10} pares [Redução: {:>5.1f}x]",
-                                   format_num(static_cast<double>(opt.valid_pairs.size())), ratio),
-                       INNER_WIDTH);
-    } else if (opt.has_streaming_pruning) {
-        print_box_line(std::format("   [-] OTM-03 (Poda em F₂ᶜ - K={}): {:>8} chaves [Redução: {:>5.1f}x]",
-                                   opt.unknown_positions.size(), format_num(opt.valid_combinations), ratio),
-                       INNER_WIDTH);
-    } else if (opt.direct_valid_wheels) {
-        print_box_line(std::format("   [-] OTM-01 (Dedução Reversa): {:>10} chaves [Bypass Checksum]",
-                                   format_num(opt.total_combinations)),
-                       INNER_WIDTH);
-    } else if (opt.auto_deduce_last_word) {
-        print_box_line(std::format("   [-] Dedução Reversa Checksum: {:>10} chaves [Síntese Analítica]",
-                                   format_num(opt.total_combinations)),
-                       INNER_WIDTH);
+        if (opt.has_checksum_filter &&
+            opt.exact_math_post_checksum < opt.exact_math_post_repeat) {
+            const double r = (opt.exact_math_post_checksum != 0)
+                                 ? (opt.exact_math_post_repeat.get_d() /
+                                    opt.exact_math_post_checksum.get_d()) : 1.0;
+            print_box_line(std::format(
+                "   \033[1;36mApós --checksum\033[0m            : \033[1;36m{}\033[0m   "
+                "\033[1;33m[↓ {}x]\033[0m",
+                format_num(opt.exact_math_post_checksum), format_ratio(r)),
+                W);
+        }
+
+        const size_t cs_div = size_t{1} << opt.checksum_bits;
+        if (cs_div > 1 &&
+            opt.checksum_mode != ChecksumMode::None &&
+            !opt.has_checksum_filter &&
+            opt.exact_math_valid < opt.exact_math_post_repeat) {
+            print_box_line(std::format(
+                "   \033[35mApós checksum BIP-39 (÷{})\033[0m  : \033[35m{}\033[0m",
+                cs_div, format_num(opt.exact_math_valid)),
+                W);
+        }
+
+        const double total_ratio = (opt.exact_math_total > 0 && opt.raw_unknowns > 0)
+                                       ? (pow_2048_k / opt.exact_math_total.get_d()) : 1.0;
+        print_box_line(std::format(
+            "   \033[1;32m➔ Chaves Efetivas PBKDF2\033[0m   : \033[1;32m{}\033[0m   "
+            "\033[1;33m[↓ {}x TOTAL]\033[0m",
+            format_num(opt.exact_math_total), format_ratio(total_ratio)),
+            W);
     }
 
-    if (!opt.slices.empty()) {
-        print_box_line(std::format("   [-] OTM-09 (Fatiamento Mem) : {:>10} fatias [L1 Patching]", opt.slices.size()),
-                       INNER_WIDTH);
-    }
-    print_box_line("   [-] OTM-15 (Salt Pré-comp)  : Ativo | OTM-23 (PBKDF2 Fast-Fwd): Ativo", INNER_WIDTH);
+    print_box_separator(W);
+    print_box_line("\033[1;36mOTIMIZAÇÕES ATIVAS:\033[0m", W);
 
+    // Filtros de checksum
+    if (opt.checksum_mode == ChecksumMode::UserPattern) {
+        const size_t popcount = opt.allowed_checksum_bits.count();
+        const size_t total    = size_t{1} << opt.checksum_bits;
+        print_box_line(std::format(
+            "   [-] Filtro --checksum        : {}/{} valores aceitos por padrão",
+            popcount, total),
+            W);
+    }
+    if (opt.has_cascade_deduction) {
+        print_box_line("   [-] Dedução cascata (última): ativa — síntese via SHA-256",
+                       W);
+    }
+    if (opt.checksum_mode == ChecksumMode::Expected) {
+        print_box_line(std::format(
+            "   [-] Checksum esperado        : 0x{:x}",
+            static_cast<unsigned>(opt.expected_checksum)),
+            W);
+    }
+
+    // Montagem e pré-computação
+    if (opt.phrase_n_segments > 0) {
+        print_box_line(std::format(
+            "   [-] Montagem da frase        : {} segmentos pré-computados",
+            opt.phrase_n_segments),
+            W);
+    }
+    print_box_line("   [-] Salt pré-computado       : ativo", W);
+    print_box_line("   [-] Fast-forward round 1     : ativo (PBKDF2)", W);
+
+    // Estratégias de reorder
     if (opt.has_hamming_gradient)
-        print_box_line("   [-] OTM-29 (Gradiente Hamming): Ativo [Varredura por Entropia]", INNER_WIDTH);
+        print_box_line("   [-] Gradiente de Hamming     : ativo", W);
     if (opt.has_frequency)
-        print_box_line("   [-] Heurística de Frequência  : Ativo [Lei de Zipf Ponderada]", INNER_WIDTH);
+        print_box_line("   [-] Frequência linguística   : ativo (Zipf)", W);
     if (opt.has_typo)
-        print_box_line("   [-] Autômatos de Levenshtein  : Ativo [Aproximação de Typos]", INNER_WIDTH);
-    if (opt.has_distinct_pruning)
-        print_box_line("   [-] Restrição Não-Repetição : Ativo [Poda Combinatória]", INNER_WIDTH);
-    if (opt.has_cascade_deduction)
-        print_box_line(std::format("   [-] Dedução Cascata (w_N-1) : Ativo [Poda: {:>3.0f}x]", ratio), INNER_WIDTH);
-    if (opt.has_gray_code)
-        print_box_line("   [-] Agendador Gray-Code     : Ativo [Localidade L1 Hamming=1]", INNER_WIDTH);
-    if (opt.has_beam_search)
-        print_box_line("   [-] Beam Search / A*        : Ativo [Feixes Probabilísticos]", INNER_WIDTH);
+        print_box_line("   [-] Autômatos de Levenshtein : ativo", W);
 
-    print_box_bottom(INNER_WIDTH);
+    // Constraints combinatórias
+    if (opt.is_distinct && opt.has_distinct_pruning)
+        print_box_line("   [-] Restrição não-repetição  : ativa", W);
+    if (!cfg.repeat_ids.empty()) {
+        size_t sum = 0;
+        for (auto [_, n] : cfg.repeat_ids) sum += n;
+        print_box_line(std::format(
+            "   [-] Restrição --repeat       : ativa ({} exigência(s), Σ N={})",
+            cfg.repeat_ids.size(), sum),
+            W);
+    }
+    if (opt.has_gray_code)
+        print_box_line("   [-] Agendador Gray-code      : ativo", W);
+
+    print_box_bottom(W);
     std::print("\n");
     std::fflush(stdout);
 }

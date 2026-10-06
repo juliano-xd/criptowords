@@ -1,56 +1,98 @@
 #include "../../include/simd/factory.hpp"
 
+#include <iostream>
 #include <memory>
+#include <print>
+#include <stdexcept>
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include "../../include/hardware/cw_cpuid.hpp"
 #endif
 
 namespace cryptowords {
 
-SimdArch detect_best_simd() {
-#if defined(__x86_64__) || defined(_M_X64)
-    unsigned eax, ebx, ecx, edx;
-    cw_cpuid(1, eax, ebx, ecx, edx);
-    const bool has_sse41 = (ecx & bit_SSE4_1) != 0;
-    // XSAVE/AVX habilitados pelo SO: sem isso o SO pode não salvar o estado YMM/ZMM
-    const bool os_avx_ok = (ecx & bit_OSXSAVE) != 0 && (ecx & bit_AVX) != 0;
+namespace {
 
-    cw_cpuid_count(7, 0, eax, ebx, ecx, edx);
-    const bool has_avx2 = os_avx_ok && ((ebx & bit_AVX2) != 0);
-    // A rota AVX-512 usa instruções BW (`_mm512_shuffle_epi8`) e VL além de F;
-    // exigir apenas AVX512F causaria SIGILL em CPUs como Knights Landing.
-    const bool has_avx512 = os_avx_ok && (ebx & bit_AVX512F) && (ebx & bit_AVX512VL) && (ebx & bit_AVX512BW);
-
-    if (has_avx512)
-        return SimdArch::AVX512;
-    if (has_avx2)
-        return SimdArch::AVX2;
-    if (has_sse41)
-        return SimdArch::SSE;
-#endif
+// Melhor arquitetura que o binário contém. Compilado uma vez por execução.
+constexpr SimdArch compiled_best() noexcept {
+#if defined(CRYPTOWORDS_HAVE_AVX512)
+    return SimdArch::AVX512;
+#elif defined(CRYPTOWORDS_HAVE_AVX2)
+    return SimdArch::AVX2;
+#elif defined(CRYPTOWORDS_HAVE_SSE41)
     return SimdArch::SSE;
+#else
+    return SimdArch::SSE;
+#endif
 }
 
-std::unique_ptr<IBatchProcessor> make_simd_processor(const AppConfig& cfg, const OptimizedMnemonics& opt,
+constexpr const char* arch_name(SimdArch a) noexcept {
+    switch (a) {
+        case SimdArch::AVX512: return "AVX512";
+        case SimdArch::AVX2:   return "AVX2";
+        case SimdArch::SSE:    return "SSE4.1";
+    }
+    return "?";
+}
+
+}  // namespace
+
+SimdArch detect_best_simd() {
+    SimdArch cpu_best = SimdArch::SSE;
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    unsigned eax, ebx, ecx, edx;
+    cw_cpuid(1, eax, ebx, ecx, edx);
+
+    const bool has_sse41 = (ecx & bit_SSE4_1) != 0;
+    const bool osxsave   = (ecx & bit_OSXSAVE) != 0;
+    const bool avx_cpu   = (ecx & bit_AVX) != 0;
+
+    const bool ymm_ok = osxsave && cpu::avx_ymm_enabled();
+    const bool zmm_ok = osxsave && cpu::avx512_zmm_enabled();
+
+    cw_cpuid_count(7, 0, eax, ebx, ecx, edx);
+    const bool has_avx2   = avx_cpu && ymm_ok && (ebx & bit_AVX2);
+    const bool has_avx512 = avx_cpu && zmm_ok &&
+                            (ebx & bit_AVX512F) && (ebx & bit_AVX512VL) && (ebx & bit_AVX512BW);
+
+    if (has_avx512)     cpu_best = SimdArch::AVX512;
+    else if (has_avx2)  cpu_best = SimdArch::AVX2;
+    else if (has_sse41) cpu_best = SimdArch::SSE;
+#endif
+
+    const SimdArch compiled  = compiled_best();
+    const SimdArch effective = (cpu_best < compiled) ? cpu_best : compiled;
+
+    if (effective != cpu_best) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::println(std::cerr,
+                         "[i] CPU suporta \033[1;36m{}\033[0m mas o binário foi compilado apenas com "
+                         "\033[1;33m{}\033[0m. Usando \033[1;33m{}\033[0m.",
+                         arch_name(cpu_best), arch_name(compiled), arch_name(effective));
+        }
+    }
+    return effective;
+}
+
+std::unique_ptr<IBatchProcessor> make_simd_processor(const AppConfig& cfg,
+                                                     const OptimizedMnemonics& opt,
                                                      SimdArch arch) {
 #ifdef CRYPTOWORDS_HAVE_AVX512
-    if (arch == SimdArch::AVX512)
-        return detail::make_simd_processor_avx512(cfg, opt);
+    if (arch == SimdArch::AVX512) return detail::make_simd_processor_avx512(cfg, opt);
 #endif
 #ifdef CRYPTOWORDS_HAVE_AVX2
-    if (arch == SimdArch::AVX2)
-        return detail::make_simd_processor_avx2(cfg, opt);
+    if (arch == SimdArch::AVX2)   return detail::make_simd_processor_avx2(cfg, opt);
 #endif
 #ifdef CRYPTOWORDS_HAVE_SSE41
-    if (arch == SimdArch::SSE)
-        return detail::make_simd_processor_sse(cfg, opt);
+    (void)arch;
     return detail::make_simd_processor_sse(cfg, opt);
 #else
-    (void)cfg;
-    (void)opt;
-    (void)arch;
-    return nullptr;
+    (void)cfg; (void)opt; (void)arch;
+    throw std::runtime_error(
+        "Nenhum backend SIMD compilado. Compile com -DCRYPTOWORDS_HAVE_SSE41 (ou AVX2/AVX512).");
 #endif
 }
 
