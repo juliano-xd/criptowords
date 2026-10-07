@@ -10,11 +10,11 @@
 #include "../../include/crypto/sha256_shani.hpp"
 #include "../../include/simd/cpu_features.hpp"
 
-// Rota SIMD existe em x86 (SSE/AVX2/AVX-512) e em ARM64 (NEON).
-#if !defined(SHA256_NO_SIMD) && (defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86))
-#define SHA256_X86 1
-#include <immintrin.h>
-#endif
+// Nota de portabilidade: as rotinas abaixo (sha256_transform_sse/avx2/avx512)
+// operam sobre o estado INTERLEAVED (state[palavra][lane]). São usadas apenas
+// pelo filtro de checksum em lote. Em plataformas sem SIMD, ou quando as
+// versões vetorizadas nativas não estão disponíveis no binário, caem no
+// mesmo caminho escalar lane-a-lane — comportamento correto, só mais lento.
 
 alignas(64) static constexpr std::array<uint32_t, 64> K256 = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -40,28 +40,11 @@ void sha256_init_sse(SHA256_SSE_State* ctx)         { sha256_init_simd<4>(ctx->s
 void sha256_init_avx2(SHA256_AVX2_State* ctx)       { sha256_init_simd<8>(ctx->state); }
 void sha256_init_avx512(SHA256_AVX512_State* ctx)   { sha256_init_simd<16>(ctx->state); }
 
-#ifdef SHA256_X86
-
-// SSE4.1 — 4 lanes
-[[gnu::target("sse4.1")]]
-void sha256_transform_sse(SHA256_SSE_State* __restrict ctx, const std::array<std::array<uint32_t, 4>, 16>& W_in) {
-    // ... [código SSE inalterado, mantém como está] ...
-}
-
-// AVX2 — 8 lanes
-[[gnu::target("avx2")]]
-void sha256_transform_avx2(SHA256_AVX2_State* __restrict ctx, const uint32_t W_in[16][8]) {
-    // ... [código AVX2 inalterado, mantém como está] ...
-}
-
-// AVX-512 — 16 lanes
-[[gnu::target("avx512f,avx512vl")]]
-void sha256_transform_avx512(SHA256_AVX512_State* __restrict ctx, const uint32_t W_in[16][16]) {
-    // ... [código AVX-512 inalterado, mantém como está] ...
-}
-
-#else  // !SHA256_X86 — fallback escalar, lane a lane
-
+// =========================================================================
+// Fallback escalar para as versões SIMD do transform. Aceita tanto
+// std::array<std::array<...>> (usado por SSE) quanto uint32_t[16][N] cru
+// (usado por AVX2/AVX512) via template genérico.
+// =========================================================================
 namespace sha256_scalar_fallback {
 
 [[gnu::always_inline]] inline uint32_t ror(uint32_t x, int n) noexcept { return std::rotr(x, n); }
@@ -72,9 +55,11 @@ namespace sha256_scalar_fallback {
 [[gnu::always_inline]] inline uint32_t ch(uint32_t x, uint32_t y, uint32_t z) noexcept { return (x & y) ^ (~x & z); }
 [[gnu::always_inline]] inline uint32_t maj(uint32_t x, uint32_t y, uint32_t z) noexcept { return (x & y) ^ (x & z) ^ (y & z); }
 
-template <unsigned Lanes>
+// W_in pode ser std::array<std::array<uint32_t,Lanes>,16> ou uint32_t[16][Lanes].
+// Em ambos os casos, W_in[t][lane] é uint32_t.
+template <unsigned Lanes, typename WArray>
 inline void transform_lanes(std::array<std::array<uint32_t, Lanes>, 8>& state,
-                            const std::array<std::array<uint32_t, Lanes>, 16>& W_in) noexcept {
+                            const WArray& W_in) noexcept {
     for (unsigned lane = 0; lane < Lanes; ++lane) {
         std::array<uint32_t, 64> W;
 #pragma GCC unroll 16
@@ -100,20 +85,19 @@ inline void transform_lanes(std::array<std::array<uint32_t, Lanes>, 8>& state,
 
 }  // namespace sha256_scalar_fallback
 
-void sha256_transform_sse(SHA256_SSE_State* ctx, const std::array<std::array<uint32_t, 4>, 16>& W_in) {
+void sha256_transform_sse(SHA256_SSE_State* ctx,
+                          const std::array<std::array<uint32_t, 4>, 16>& W_in) {
     sha256_scalar_fallback::transform_lanes<4>(ctx->state, W_in);
 }
-void sha256_transform_avx2(SHA256_AVX2_State* ctx, const std::array<std::array<uint32_t, 8>, 16>& W_in) {
+void sha256_transform_avx2(SHA256_AVX2_State* ctx, const uint32_t W_in[16][8]) {
     sha256_scalar_fallback::transform_lanes<8>(ctx->state, W_in);
 }
-void sha256_transform_avx512(SHA256_AVX512_State* ctx, const std::array<std::array<uint32_t, 16>, 16>& W_in) {
+void sha256_transform_avx512(SHA256_AVX512_State* ctx, const uint32_t W_in[16][16]) {
     sha256_scalar_fallback::transform_lanes<16>(ctx->state, W_in);
 }
 
-#endif  // SHA256_X86
-
 // =========================================================================
-// Implementação escalar — sempre compilada (usada por SHA256::hash etc).
+// Implementação escalar principal (sempre compilada).
 // =========================================================================
 namespace crypto {
 
@@ -240,8 +224,7 @@ void SHA256::process_block(const uint8_t block[64]) {
 }  // namespace crypto
 
 // =========================================================================
-// Fallback não-x86 para as funções "shani". Devem estar em
-// cryptowords::detail no escopo global.
+// Fallback não-x86 (Termux/ARM) para as rotinas "shani".
 // =========================================================================
 #if !defined(CRYPTOWORDS_HAS_SHANI_INTRINSICS)
 namespace cryptowords::detail {

@@ -384,7 +384,9 @@ void BruteForceEngine::worker(ExecutionPipeline& pipeline, size_t thread_idx,
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(target_cpu, &cpuset);
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+        // sched_setaffinity(0, ...) = afinidade da thread chamadora.
+        // pthread_setaffinity_np não é exposto em bionic/Termux.
+        (void)sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
     }
 #endif
 

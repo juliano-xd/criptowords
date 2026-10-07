@@ -7,7 +7,14 @@
 #include "../simd/cpu_features.hpp"
 #include "sha512.hpp"
 
-// Parte comum (arch-independent)
+// =========================================================================
+// Parte comum (arch-independent).
+//
+// IMPORTANTE: precompute_kw_salt_tables e precompute_kw_salt vivem AQUI,
+// fora do bloco x86. pipeline.cpp é compilado em todas as arquiteturas e
+// chama as duas; deixá-las atrás de #if defined(__x86_64__) quebra o link
+// em ARM64/Termux.
+// =========================================================================
 namespace pbkdf2_simd_detail {
 
 alignas(64) inline constexpr uint64_t K512[80] = {
@@ -123,9 +130,31 @@ inline void precompute_kw_salt_from_W(const uint64_t salt_W[16], uint64_t kw_sal
     for (int i = 0; i < 80; ++i) kw_salt[i] = K512[i] + W[i];
 }
 
+// Réplica de cada kw_salt[i] em cada lane das tabelas vetoriais.
+// Mesmo sem SIMD disponível, o custo é desprezível e o símbolo é exigido
+// pelo pipeline (compilado em todas as arquiteturas).
+inline void precompute_kw_salt_tables(const uint64_t kw_salt[80],
+                                      uint64_t* sse_tbl,
+                                      uint64_t* avx2_tbl,
+                                      uint64_t* avx512_tbl) noexcept {
+    for (int i = 0; i < 80; ++i) {
+        const uint64_t v = kw_salt[i];
+        if (sse_tbl)    { sse_tbl[i * 2] = v; sse_tbl[i * 2 + 1] = v; }
+        if (avx2_tbl)   { for (int j = 0; j < 4; ++j) avx2_tbl[i * 4 + j] = v; }
+        if (avx512_tbl) { for (int j = 0; j < 8; ++j) avx512_tbl[i * 8 + j] = v; }
+    }
+}
+
 }  // namespace pbkdf2_simd_detail
 
+// Wrapper portável (chamado por pipeline.cpp em qualquer arch).
+inline void precompute_kw_salt(const uint64_t salt_blk64[16], uint64_t kw_salt[80]) noexcept {
+    pbkdf2_simd_detail::precompute_kw_salt_from_W(salt_blk64, kw_salt);
+}
+
+// =========================================================================
 // Backends x86 (SSE4.1 / AVX2 / AVX-512)
+// =========================================================================
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 
 #include <immintrin.h>
@@ -408,9 +437,6 @@ inline void pbkdf2_hmac_sha512_4way_sse(const char* p1, size_t l1, const char* p
     pbkdf2_2lane_fused_stream(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
 
     uint8_t* outs[4] = {out1, out2, out3, out4};
-    // OTM-24: byte-swap vetorizado. vpshufb (SSSE3, incluso em SSE4.1)
-    // aplica a permutação {7,6,5,4,3,2,1,0, 15,...,8} a cada lane de 128
-    // bits, invertendo 2 × u64 por instrução em vez de 2 × bswap escalares.
     const __m128i bswap_mask = _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0,
                                              15, 14, 13, 12, 11, 10, 9, 8);
     for (int i = 0; i < 8; ++i) {
@@ -495,16 +521,6 @@ inline constexpr OctWord C_W8_AVX512{0x8000000000000000ULL};
 inline constexpr OctWord C_W15_AVX512{0x0000000000000600ULL};
 inline constexpr OctWord K_FUSED_8_AVX512{0xd807aa98a3030242ULL + 0x8000000000000000ULL};
 inline constexpr OctWord K_FUSED_15_AVX512{0xc19bf174cf692694ULL + 0x0000000000000600ULL};
-
-inline void precompute_kw_salt_tables(const uint64_t kw_salt[80], uint64_t* sse_tbl, uint64_t* avx2_tbl,
-                                      uint64_t* avx512_tbl) noexcept {
-    for (int i = 0; i < 80; ++i) {
-        uint64_t v = kw_salt[i];
-        if (sse_tbl) { sse_tbl[i*2] = v; sse_tbl[i*2 + 1] = v; }
-        if (avx2_tbl) { for (int j = 0; j < 4; ++j) avx2_tbl[i*4 + j] = v; }
-        if (avx512_tbl) { for (int j = 0; j < 8; ++j) avx512_tbl[i*8 + j] = v; }
-    }
-}
 
 }  // namespace pbkdf2_simd_detail
 
@@ -839,10 +855,6 @@ static inline void sha512_salt_fastforward_avx2(const __m256i iv[8], const uint6
     sha512_salt_fastforward_avx2(iv, kw_vec, out);
 }
 
-inline void precompute_kw_salt(const uint64_t salt_blk64[16], uint64_t kw_salt[80]) {
-    pbkdf2_simd_detail::precompute_kw_salt_from_W(salt_blk64, kw_salt);
-}
-
 [[gnu::target("avx2")]]
 inline void pbkdf2_hmac_sha512_8way_avx2(const char* p1, size_t l1, const char* p2, size_t l2, const char* p3,
                                          size_t l3, const char* p4, size_t l4, const char* p5, size_t l5,
@@ -901,8 +913,6 @@ inline void pbkdf2_hmac_sha512_8way_avx2(const char* p1, size_t l1, const char* 
                                     iterations);
 
     uint8_t* outs[8] = {out1, out2, out3, out4, out5, out6, out7, out8};
-    // OTM-24: vpshufb AVX2 — 4 × u64 por instrução. Máscara repetida em
-    // cada lane de 128 bits (vpshufb só opera intra-lane).
     const __m256i bswap_mask = _mm256_setr_epi8(
         7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
         7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8);
@@ -1290,8 +1300,6 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
                                      iterations);
 
     uint8_t* outs[16] = {out1, out2, out3, out4, out5, out6, out7, out8, out9, out10, out11, out12, out13, out14, out15, out16};
-    // OTM-24: vpshufb AVX-512 — 8 × u64 por instrução. Máscara replicada 4×
-    // (o vpshufb de 512 bits opera em 4 lanes independentes de 128 bits).
     alignas(64) static constexpr uint8_t bswap_bytes[64] = {
         7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
         7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,

@@ -1,7 +1,5 @@
 #include "../../include/search/odometer.hpp"
 
-#include <immintrin.h>
-
 #include <algorithm>
 #include <array>
 #include <cstring>
