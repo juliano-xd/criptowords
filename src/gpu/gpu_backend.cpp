@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <print>
+#include <vector>
 
 #include "../../include/config.hpp"
 
@@ -26,6 +27,17 @@ GpuBackendCaps probe_gpu_backends() {
     // CUDA: quando o engine for implementado, popular caps.has_cuda aqui.
     return caps;
 }
+
+// =========================================================================
+// Stub de enumerar devices AMD quando o backend HIP não está no binário.
+// host_probe.cpp chama essa função incondicionalmente — sem esse stub o
+// link quebra em ARM64/Termux (ou em builds x86 sem ROCm).
+// =========================================================================
+#if !defined(CRYPTOWORDS_HAVE_HIP)
+std::vector<HipDeviceSummary> enumerate_hip_devices() {
+    return {};
+}
+#endif
 
 // =========================================================================
 // Fábrica CUDA — stub. Retorna nullptr até o backend real existir; o
