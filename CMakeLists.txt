@@ -6,9 +6,6 @@ project(criptowords
     LANGUAGES   CXX
 )
 
-# =========================================================================
-# Proteção contra In-Source Build
-# =========================================================================
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   message(FATAL_ERROR
         "\n[ERRO] In-source builds são proibidos!\n"
@@ -18,18 +15,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     )
 endif()
 
-# =========================================================================
-# ccache
-# =========================================================================
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
   set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
   message(STATUS "ccache: ${CCACHE_PROGRAM}")
 endif()
 
-# =========================================================================
-# Padrão C++
-# =========================================================================
 set(CMAKE_CXX_STANDARD          23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -58,7 +49,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # =========================================================================
-# Opções de build
+# Opções
 # =========================================================================
 option(CRYPTOWORDS_ENABLE_HIP "Habilita backend AMD ROCm/HIP" ON)
 option(CRYPTOWORDS_PCH        "Precompiled Headers"          ON)
@@ -76,6 +67,15 @@ set_property(CACHE CRYPTOWORDS_PGO PROPERTY STRINGS "OFF" "GENERATE" "USE")
 set(CRYPTOWORDS_PGO_DIR "${CMAKE_BINARY_DIR}/pgo_profile" CACHE PATH "Diretório PGO")
 
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
+
+# =========================================================================
+# Arquitetura: x86 vs ARM64 (Termux)
+# =========================================================================
+set(CW_X86 FALSE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i386|i686")
+  set(CW_X86 TRUE)
+endif()
+message(STATUS "Arch: ${CMAKE_SYSTEM_PROCESSOR} (x86=${CW_X86})")
 
 # =========================================================================
 # Linker de alta velocidade
@@ -113,12 +113,12 @@ endif()
 include(FetchContent)
 find_package(GMP QUIET)
 if(NOT GMP_FOUND)
-  find_library(GMP_LIB   NAMES gmp   REQUIRED HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
-  find_library(GMPXX_LIB NAMES gmpxx REQUIRED HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+  find_library(GMP_LIB   NAMES gmp   REQUIRED)
+  find_library(GMPXX_LIB NAMES gmpxx REQUIRED)
   set(GMP_LIBRARIES "${GMP_LIB};${GMPXX_LIB}")
 endif()
 if(NOT GMP_LIBRARIES)
-  message(FATAL_ERROR "GMP não encontrado. Instale libgmp-dev / gmp-devel.")
+  message(FATAL_ERROR "GMP não encontrado. Instale libgmp-dev (Termux: pkg install libgmp).")
 endif()
 message(STATUS "GMP: ${GMP_LIBRARIES}")
 
@@ -137,33 +137,20 @@ if(NOT CLI11_FOUND)
 endif()
 
 # =========================================================================
-# Backend HIP (AMD ROCm) — arch nativa detectada em build-time
-#
-# Compilamos o kernel via add_custom_command + hipcc. Isso evita que o
-# CMake propague flags HIP (-x hip, --offload-arch=...) para targets C++
-# puros (PCH, etc.).
+# Backend HIP (AMD ROCm) — desabilitado em ARM/Termux
 # =========================================================================
 set(CRYPTOWORDS_HAVE_HIP  FALSE)
 set(CRYPTOWORDS_HIP_OBJECT "")
 set(CRYPTOWORDS_HIP_LIBS   "")
 
-if(CRYPTOWORDS_ENABLE_HIP)
+if(CRYPTOWORDS_ENABLE_HIP AND CW_X86)
   find_program(HIPCC_EXECUTABLE    hipcc)
   find_program(ROCMINFO_EXECUTABLE rocminfo HINTS /opt/rocm/bin /usr/bin)
 
   if(NOT HIPCC_EXECUTABLE)
     message(STATUS "hipcc não encontrado — backend AMD desabilitado")
   else()
-    # -------------------------------------------------------------
-    # Detecção da arch nativa.
-    #
-    # Ordem de tentativa:
-    #   1. rocminfo (mais confiável — lê direto do driver)
-    #   2. hipcc --print-target-id (fallback)
-    #   3. erro fatal (não faz sentido compilar HIP sem GPU)
-    # -------------------------------------------------------------
     set(_HIP_NATIVE_ARCH "")
-
     if(ROCMINFO_EXECUTABLE)
       execute_process(
                 COMMAND ${ROCMINFO_EXECUTABLE}
@@ -183,70 +170,52 @@ if(CRYPTOWORDS_ENABLE_HIP)
     endif()
 
     if(NOT _HIP_NATIVE_ARCH MATCHES "^gfx")
-      message(FATAL_ERROR
-                "\n[ERRO] Não foi possível detectar a arquitetura AMD (gfx).\n"
-                "Verifique se o driver ROCm está instalado e funcional:\n"
-                "  rocminfo | grep gfx\n"
-                "  hipcc --print-target-id\n"
-                "Se preferir desabilitar o backend AMD, use: -DCRYPTOWORDS_ENABLE_HIP=OFF\n"
-            )
+      message(STATUS "ROCm presente mas arch não detectável — backend AMD desabilitado")
+    else()
+      message(STATUS "HIP: arch nativa detectada = ${_HIP_NATIVE_ARCH}")
+
+      find_library(HIP_RUNTIME_LIB NAMES amdhip64
+              HINTS /opt/rocm/lib /opt/rocm/lib64 /usr/lib/x86_64-linux-gnu)
+      find_library(HSA_RUNTIME_LIB NAMES hsa-runtime64
+              HINTS /opt/rocm/lib /opt/rocm/lib64 /usr/lib/x86_64-linux-gnu)
+
+      if(HIP_RUNTIME_LIB AND HSA_RUNTIME_LIB)
+        set(HIP_OBJECT "${CMAKE_BINARY_DIR}/hip_engine.o")
+
+        add_custom_command(
+            OUTPUT  ${HIP_OBJECT}
+            COMMAND ${HIPCC_EXECUTABLE}
+                    -O2 -ffast-math
+                    --offload-arch=${_HIP_NATIVE_ARCH}
+                    -std=c++23 -fPIC
+                    -Xclang -fno-cuda-host-device-constexpr
+                    -Wno-unused-value
+                    -DCRYPTOWORDS_HAVE_HIP=1
+                    -I${CMAKE_SOURCE_DIR}/include
+                    -I${CMAKE_SOURCE_DIR}/include/gpu/hip
+                    -c ${CMAKE_SOURCE_DIR}/src/gpu/hip/hip_engine.hip
+                    -o ${HIP_OBJECT}
+            DEPENDS ${CMAKE_SOURCE_DIR}/src/gpu/hip/hip_engine.hip
+                    ${CMAKE_SOURCE_DIR}/include/gpu/hip/hip_engine.hpp
+                    ${CMAKE_SOURCE_DIR}/include/gpu/hip/pbkdf2_sha512.cuh
+            COMMENT "hipcc: compilando hip_engine.hip (${_HIP_NATIVE_ARCH})"
+            VERBATIM
+        )
+
+        add_custom_target(criptowords_hip_obj DEPENDS ${HIP_OBJECT})
+
+        set(CRYPTOWORDS_HAVE_HIP  TRUE)
+        set(CRYPTOWORDS_HIP_OBJECT ${HIP_OBJECT})
+        set(CRYPTOWORDS_HIP_LIBS   ${HIP_RUNTIME_LIB} ${HSA_RUNTIME_LIB})
+      endif()
     endif()
-
-    message(STATUS "HIP: arch nativa detectada = ${_HIP_NATIVE_ARCH}")
-
-    # -------------------------------------------------------------
-    # Runtime libs (link direto, sem targets hip::*)
-    # -------------------------------------------------------------
-    find_library(HIP_RUNTIME_LIB NAMES amdhip64
-            HINTS /opt/rocm/lib /opt/rocm/lib64 /usr/lib/x86_64-linux-gnu)
-    find_library(HSA_RUNTIME_LIB NAMES hsa-runtime64
-            HINTS /opt/rocm/lib /opt/rocm/lib64 /usr/lib/x86_64-linux-gnu)
-
-    if(NOT HIP_RUNTIME_LIB OR NOT HSA_RUNTIME_LIB)
-      message(FATAL_ERROR
-                "\n[ERRO] libamdhip64 / hsa-runtime64 não encontradas.\n"
-                "Instale o ROCm completo:\n"
-                "  https://rocm.docs.amd.com/projects/install-on-linux/en/latest/\n"
-            )
-    endif()
-
-    # -------------------------------------------------------------
-    # Compilação do kernel — somente para a arch nativa
-    # -------------------------------------------------------------
-    set(HIP_OBJECT "${CMAKE_BINARY_DIR}/hip_engine.o")
-
-    add_custom_command(
-        OUTPUT  ${HIP_OBJECT}
-        COMMAND ${HIPCC_EXECUTABLE}
-                -O2
-                -ffast-math
-                --offload-arch=${_HIP_NATIVE_ARCH}
-                -std=c++23
-                -fPIC
-                -Xclang -fno-cuda-host-device-constexpr
-                -Wno-unused-value
-                -DCRYPTOWORDS_HAVE_HIP=1
-                -I${CMAKE_SOURCE_DIR}/include
-                -I${CMAKE_SOURCE_DIR}/include/gpu/hip
-                -c ${CMAKE_SOURCE_DIR}/src/gpu/hip/hip_engine.hip
-                -o ${HIP_OBJECT}
-        DEPENDS ${CMAKE_SOURCE_DIR}/src/gpu/hip/hip_engine.hip
-                ${CMAKE_SOURCE_DIR}/include/gpu/hip/hip_engine.hpp
-                ${CMAKE_SOURCE_DIR}/include/gpu/hip/pbkdf2_sha512.cuh
-        COMMENT "hipcc: compilando hip_engine.hip (${_HIP_NATIVE_ARCH})"
-        VERBATIM
-    )
-
-    add_custom_target(criptowords_hip_obj DEPENDS ${HIP_OBJECT})
-
-    set(CRYPTOWORDS_HAVE_HIP  TRUE)
-    set(CRYPTOWORDS_HIP_OBJECT ${HIP_OBJECT})
-    set(CRYPTOWORDS_HIP_LIBS   ${HIP_RUNTIME_LIB} ${HSA_RUNTIME_LIB})
   endif()
+elseif(CRYPTOWORDS_ENABLE_HIP AND NOT CW_X86)
+  message(STATUS "HIP: desabilitado (arch ${CMAKE_SYSTEM_PROCESSOR} não é x86)")
 endif()
 
 # =========================================================================
-# Detecção SIMD
+# Detecção SIMD (só em x86; ARM usa fallback escalar do SSE)
 # =========================================================================
 include(CheckCXXCompilerFlag)
 
@@ -255,7 +224,7 @@ set(HAVE_AVX2   FALSE)
 set(HAVE_AVX512 FALSE)
 set(HAVE_SHA_NI FALSE)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+if(CW_X86)
   check_cxx_compiler_flag("-msse4.1"  _SSE41_OK)
   check_cxx_compiler_flag("-mavx2"    _AVX2_OK)
   check_cxx_compiler_flag("-mavx512f" _AVX512_OK)
@@ -272,6 +241,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
   if(_SHA_OK)
     set(HAVE_SHA_NI TRUE)
   endif()
+else()
+  # Termux/ARM64: único "backend" é o 4-lane escalar (nome histórico: SSE).
+  set(HAVE_SSE41 TRUE)
 endif()
 
 message(STATUS "SIMD: SSE4.1=${HAVE_SSE41}  AVX2=${HAVE_AVX2}  AVX512=${HAVE_AVX512}  SHA-NI=${HAVE_SHA_NI}")
@@ -295,20 +267,35 @@ set(PERF_FLAGS
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-  list(APPEND PERF_FLAGS -floop-interchange -floop-unroll-and-jam -fno-semantic-interposition)
+  list(APPEND PERF_FLAGS -fno-semantic-interposition)
+  if(CW_X86)
+    list(APPEND PERF_FLAGS -floop-interchange -floop-unroll-and-jam)
+  endif()
 endif()
 
-if(CRYPTOWORDS_ARCH STREQUAL "native")
-  list(APPEND PERF_FLAGS -march=native -mtune=native)
-  message(STATUS "Microarquitetura: native")
-elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v4")
-  list(APPEND PERF_FLAGS -march=x86-64-v4)
-elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v3")
-  list(APPEND PERF_FLAGS -march=x86-64-v3)
-elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v2")
-  list(APPEND PERF_FLAGS -march=x86-64-v2)
-elseif(CRYPTOWORDS_ARCH STREQUAL "generic")
-  message(STATUS "Microarquitetura: generic")
+if(CW_X86)
+  if(CRYPTOWORDS_ARCH STREQUAL "native")
+    list(APPEND PERF_FLAGS -march=native -mtune=native)
+    message(STATUS "Microarquitetura: native (x86)")
+  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v4")
+    list(APPEND PERF_FLAGS -march=x86-64-v4)
+  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v3")
+    list(APPEND PERF_FLAGS -march=x86-64-v3)
+  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v2")
+    list(APPEND PERF_FLAGS -march=x86-64-v2)
+  elseif(CRYPTOWORDS_ARCH STREQUAL "generic")
+    message(STATUS "Microarquitetura: generic")
+  endif()
+else()
+  # ARM64 / Termux: usa tuning nativo quando disponível.
+  if(CRYPTOWORDS_ARCH STREQUAL "native")
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-mcpu=native" HAS_MCPU_NATIVE)
+    if(HAS_MCPU_NATIVE)
+      list(APPEND PERF_FLAGS -mcpu=native -mtune=native)
+    endif()
+  endif()
+  message(STATUS "Microarquitetura: ARM (${CMAKE_SYSTEM_PROCESSOR})")
 endif()
 
 # ---------- PGO ----------
@@ -421,10 +408,6 @@ endif()
 
 # =========================================================================
 # Objetos SIMD especializados
-#
-# Cada arquivo é compilado com as flags SIMD específicas da sua arquitetura.
-# Os objetos resultantes são adicionados ao executável — o dispatch ocorre
-# em runtime (detect_best_simd + factory.cpp).
 # =========================================================================
 set(SIMD_OBJECTS "")
 
@@ -432,7 +415,12 @@ if(HAVE_SSE41)
     add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
     target_include_directories(simd_sse PRIVATE include)
     target_link_libraries(simd_sse PRIVATE ${GMP_LIBRARIES})
-    target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
+    if(CW_X86)
+      target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
+    else()
+      # ARM/Termux: sem -msse4.1; o template usa fallback escalar interno.
+      target_compile_options(simd_sse PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
+    endif()
     list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
 endif()
 
@@ -472,10 +460,6 @@ endif()
 target_compile_options(criptowords PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 target_link_libraries(criptowords PRIVATE criptowords_core ${GMP_LIBRARIES})
 
-# Sem REUSE_FROM: o PCH do core é gerado com CRYPTOWORDS_HAVE_HIP=1 (PRIVATE),
-# e main.cpp não tem esse define. Reusar geraria -Winvalid-pch a cada build.
-# Como main.cpp é uma única TU, o custo de compilar sem PCH é irrelevante.
-
 # =========================================================================
 # clang-format
 # =========================================================================
@@ -501,9 +485,7 @@ if(CLANG_FORMAT_EXE)
 endif()
 
 # =========================================================================
-# Testes (opcionais — controlados por BUILD_TESTING, habilitado por CTest).
-# O target fica em tests/CMakeLists.txt como `criptowords_tests` para não
-# colidir com o diretório. Nada de `add_executable` inline aqui.
+# Testes
 # =========================================================================
 include(CTest)
 if(BUILD_TESTING)

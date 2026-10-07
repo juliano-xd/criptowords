@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Multiplication.hpp"
+#include "x86_compat.hpp"
 
 namespace Division {
 
@@ -28,8 +29,10 @@ using u128 = unsigned __int128;
 // Compara a > b → 1, a < b → -1, a == b → 0.
 inline int cmp_n(const u64* a, const u64* b, size_t n) {
     for (size_t i = n; i-- > 0;) {
-        if (a[i] > b[i]) return 1;
-        if (a[i] < b[i]) return -1;
+        if (a[i] > b[i])
+            return 1;
+        if (a[i] < b[i])
+            return -1;
     }
     return 0;
 }
@@ -44,7 +47,8 @@ inline u64 add_n(u64* res, const u64* a, const u64* b, size_t n) {
         carry = _addcarry_u64(carry, a[i + 2], b[i + 2], &res[i + 2]);
         carry = _addcarry_u64(carry, a[i + 3], b[i + 3], &res[i + 3]);
     }
-    for (; i < n; ++i) carry = _addcarry_u64(carry, a[i], b[i], &res[i]);
+    for (; i < n; ++i)
+        carry = _addcarry_u64(carry, a[i], b[i], &res[i]);
     return carry;
 }
 
@@ -58,14 +62,16 @@ inline u64 sub_n(u64* res, const u64* a, const u64* b, size_t n) {
         borrow = _subborrow_u64(borrow, a[i + 2], b[i + 2], &res[i + 2]);
         borrow = _subborrow_u64(borrow, a[i + 3], b[i + 3], &res[i + 3]);
     }
-    for (; i < n; ++i) borrow = _subborrow_u64(borrow, a[i], b[i], &res[i]);
+    for (; i < n; ++i)
+        borrow = _subborrow_u64(borrow, a[i], b[i], &res[i]);
     return borrow;
 }
 
 // res = a << shift (shift ∈ [0,63]). Retorna carry out.
 inline u64 shl_n(u64* res, const u64* a, size_t n, int shift) {
     if (shift == 0) {
-        if (res != a) std::copy_n(a, n, res);
+        if (res != a)
+            std::copy_n(a, n, res);
         return 0;
     }
     u64 carry = 0;
@@ -80,7 +86,8 @@ inline u64 shl_n(u64* res, const u64* a, size_t n, int shift) {
 // res = a >> shift (shift ∈ [0,63]). Retorna bits deslocados out.
 inline u64 shr_n(u64* res, const u64* a, size_t n, int shift) {
     if (shift == 0) {
-        if (res != a) std::copy_n(a, n, res);
+        if (res != a)
+            std::copy_n(a, n, res);
         return 0;
     }
     u64 carry = 0;
@@ -96,7 +103,8 @@ inline u64 shr_n(u64* res, const u64* a, size_t n, int shift) {
 // u: dividendo (u_len), v: divisor (v_len).
 template <size_t MaxBlocks = 64>
 inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v, int v_len) {
-    if (v_len == 0) throw std::domain_error("Division by zero in div_knuth_impl");
+    if (v_len == 0)
+        throw std::domain_error("Division by zero in div_knuth_impl");
 
     if (u_len < v_len) {
         std::fill_n(q, u_len - v_len + 1, 0);
@@ -132,7 +140,7 @@ inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v
 
     for (int j = an - bn; j >= 0; --j) {
         u64 u_high = u_norm[j + bn];
-        u64 u_mid  = u_norm[j + bn - 1];
+        u64 u_mid = u_norm[j + bn - 1];
         u64 q_hat;
         u128 current_dividend_top_two_limbs = ((u128)u_high << 64) | u_mid;
 
@@ -146,7 +154,7 @@ inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v
         // bound o loop pode girar indefinidamente para casos degenerados.
         u128 r_hat_val_for_check = current_dividend_top_two_limbs - (u128)q_hat * v_high;
         u128 lhs_compare = (u128)q_hat * v_next;
-        u64  u_low       = (j + bn >= 2) ? u_norm[j + bn - 2] : 0;
+        u64 u_low = (j + bn >= 2) ? u_norm[j + bn - 2] : 0;
         u128 rhs_compare = (r_hat_val_for_check << 64) | u_low;
 
         if (lhs_compare > rhs_compare) [[unlikely]] {
@@ -155,7 +163,8 @@ inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v
             if (r_hat_val_for_check < v_high) {
                 lhs_compare = (u128)q_hat * v_next;
                 rhs_compare = (r_hat_val_for_check << 64) | u_low;
-                if (lhs_compare > rhs_compare) [[unlikely]] q_hat--;
+                if (lhs_compare > rhs_compare) [[unlikely]]
+                    q_hat--;
             }
         }
 
@@ -166,12 +175,20 @@ inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v
         size_t i = 0;
         for (; i + 4 <= (size_t)bn; i += 4) {
             u64 lo;
-            u128 prod0 = (u128)q_hat * v_ptr[i]     + mult_carry; lo = (u64)prod0; mult_carry = prod0 >> 64;
-            u128 prod1 = (u128)q_hat * v_ptr[i + 1] + mult_carry; u64 lo1 = (u64)prod1; mult_carry = prod1 >> 64;
-            u128 prod2 = (u128)q_hat * v_ptr[i + 2] + mult_carry; u64 lo2 = (u64)prod2; mult_carry = prod2 >> 64;
-            u128 prod3 = (u128)q_hat * v_ptr[i + 3] + mult_carry; u64 lo3 = (u64)prod3; mult_carry = prod3 >> 64;
+            u128 prod0 = (u128)q_hat * v_ptr[i] + mult_carry;
+            lo = (u64)prod0;
+            mult_carry = prod0 >> 64;
+            u128 prod1 = (u128)q_hat * v_ptr[i + 1] + mult_carry;
+            u64 lo1 = (u64)prod1;
+            mult_carry = prod1 >> 64;
+            u128 prod2 = (u128)q_hat * v_ptr[i + 2] + mult_carry;
+            u64 lo2 = (u64)prod2;
+            mult_carry = prod2 >> 64;
+            u128 prod3 = (u128)q_hat * v_ptr[i + 3] + mult_carry;
+            u64 lo3 = (u64)prod3;
+            mult_carry = prod3 >> 64;
 
-            sub_borrow = _subborrow_u64(sub_borrow, u_norm[j + i],     lo,  &u_norm[j + i]);
+            sub_borrow = _subborrow_u64(sub_borrow, u_norm[j + i], lo, &u_norm[j + i]);
             sub_borrow = _subborrow_u64(sub_borrow, u_norm[j + i + 1], lo1, &u_norm[j + i + 1]);
             sub_borrow = _subborrow_u64(sub_borrow, u_norm[j + i + 2], lo2, &u_norm[j + i + 2]);
             sub_borrow = _subborrow_u64(sub_borrow, u_norm[j + i + 3], lo3, &u_norm[j + i + 3]);
@@ -198,8 +215,10 @@ inline void div_knuth_impl(u64* q, u64* r, const u64* u, int u_len, const u64* v
     }
 
     // D8: desnormaliza o resto.
-    if (shift > 0) shr_n(r, u_norm, bn, shift);
-    else           std::copy_n(u_norm, bn, r);
+    if (shift > 0)
+        shr_n(r, u_norm, bn, shift);
+    else
+        std::copy_n(u_norm, bn, r);
 }
 
 // Divisão Knuth com tamanho fixo N (para N pequeno, sem loops externos).
@@ -207,22 +226,28 @@ template <size_t N>
 struct DivisionFixed {
     static FORCE_INLINE u64 add_n(u64* res, const u64* a, const u64* b) {
         unsigned char carry = 0;
-        for (size_t i = 0; i < N; ++i) carry = _addcarry_u64(carry, a[i], b[i], &res[i]);
+        for (size_t i = 0; i < N; ++i)
+            carry = _addcarry_u64(carry, a[i], b[i], &res[i]);
         return carry;
     }
 
     static FORCE_INLINE u64 sub_n(u64* res, const u64* a, const u64* b) {
         unsigned char borrow = 0;
-        for (size_t i = 0; i < N; ++i) borrow = _subborrow_u64(borrow, a[i], b[i], &res[i]);
+        for (size_t i = 0; i < N; ++i)
+            borrow = _subborrow_u64(borrow, a[i], b[i], &res[i]);
         return borrow;
     }
 
     static void div(u64* q, u64* r, const u64* u, const u64* v) {
         int n_limbs = 0;
         for (int i = N - 1; i >= 0; --i) {
-            if (v[i] != 0) { n_limbs = i + 1; break; }
+            if (v[i] != 0) {
+                n_limbs = i + 1;
+                break;
+            }
         }
-        if (n_limbs == 0) throw std::domain_error("Division by zero");
+        if (n_limbs == 0)
+            throw std::domain_error("Division by zero");
 
         if (n_limbs < (int)N) {
             div_knuth_impl<N>(q, r, u, N, v, n_limbs);
@@ -250,7 +275,8 @@ struct DivisionFixed {
 
         if (shift == 0) {
 #pragma GCC unroll 8
-            for (size_t i = 0; i < N; ++i) u_norm[i] = u[i];
+            for (size_t i = 0; i < N; ++i)
+                u_norm[i] = u[i];
             u_norm[N] = 0;
             u_norm[N + 1] = 0;
         } else {
@@ -315,7 +341,8 @@ struct DivisionFixed {
 
         if (shift == 0) {
 #pragma GCC unroll 8
-            for (size_t i = 0; i < N; ++i) r[i] = u_norm[i];
+            for (size_t i = 0; i < N; ++i)
+                r[i] = u_norm[i];
         } else {
 #pragma GCC unroll 8
             for (int i = N - 1; i >= 0; --i) {

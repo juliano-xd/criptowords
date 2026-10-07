@@ -11,6 +11,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "x86_compat.hpp"
+
 namespace Multiplication {
 
 using u64 = unsigned long long;
