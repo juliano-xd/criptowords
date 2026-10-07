@@ -5,9 +5,24 @@
 #include "../hardware/cw_cpuid.hpp"
 #endif
 
+#if defined(__linux__) && (defined(__aarch64__) || defined(__arm__))
+#include <sys/auxv.h>
+#ifndef HWCAP_SHA2
+#define HWCAP_SHA2 (1 << 6)
+#endif
+#ifndef HWCAP_SHA512
+#define HWCAP_SHA512 (1 << 21)
+#endif
+#ifndef HWCAP_SHA3
+#define HWCAP_SHA3 (1 << 17)
+#endif
+#ifndef HWCAP_ASIMD
+#define HWCAP_ASIMD (1 << 1)
+#endif
+#endif
+
 namespace cryptowords::cpu {
 
-// XCR0 — leitura via inline asm (evita exigir -mxsave no build).
 [[gnu::always_inline]] inline uint64_t read_xcr0() noexcept {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #if defined(_MSC_VER)
@@ -29,10 +44,7 @@ namespace cryptowords::cpu {
     return (read_xcr0() & 0xE6ULL) == 0xE6ULL;
 }
 
-// Detecções CPUID — cacheadas na primeira chamada (cada cpuid ~50-200 ns;
-// o custo aparece em hot paths que consultam por candidato).
-
-// SHA-256 silício (SHA-NI): CPUID.7.0:EBX[29].
+// SHA-256 em silício (x86 SHA-NI ou ARM SHA2 extension).
 inline bool has_sha_ni() noexcept {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     static const bool cached = []() noexcept {
@@ -41,12 +53,15 @@ inline bool has_sha_ni() noexcept {
         return (ebx & (1u << 29)) != 0;
     }();
     return cached;
+#elif defined(__linux__) && defined(__aarch64__)
+    static const bool cached = (getauxval(AT_HWCAP) & HWCAP_SHA2) != 0;
+    return cached;
 #else
     return false;
 #endif
 }
 
-// SHA-512 silício: CPUID.7.1:EAX[0] (Intel Arrow Lake+ / AMD Zen 5+).
+// SHA-512 em silício (x86 SHA-512 ext ou ARM SHA512 ext).
 inline bool has_intel_sha512() noexcept {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     static const bool cached = []() noexcept {
@@ -55,12 +70,24 @@ inline bool has_intel_sha512() noexcept {
         return (eax & (1u << 0)) != 0;
     }();
     return cached;
+#elif defined(__linux__) && defined(__aarch64__)
+    static const bool cached = (getauxval(AT_HWCAP) & HWCAP_SHA512) != 0;
+    return cached;
 #else
     return false;
 #endif
 }
 
-// AVX10: CPUID.7.1:EDX[19]. Sem uso direto — reportado em host_probe.
+// SHA-3 em silício (x86 SHA3 ext não existe; útil só em ARMv8.4+).
+inline bool has_sha3() noexcept {
+#if defined(__linux__) && defined(__aarch64__)
+    static const bool cached = (getauxval(AT_HWCAP) & HWCAP_SHA3) != 0;
+    return cached;
+#else
+    return false;
+#endif
+}
+
 inline bool has_avx10() noexcept {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     static const bool cached = []() noexcept {

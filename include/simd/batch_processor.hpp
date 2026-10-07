@@ -126,11 +126,9 @@ class SimdBatchProcessor : public IBatchProcessor {
         }
     }
 
-    // ---------------------------------------------------------------------
     // PBKDF2 SIMD. Dispatch por template (Arch é constexpr).
-    // ---------------------------------------------------------------------
-    static void run_pbkdf2(Pbkdf2Work& work, const SaltCache& salt,
-                           uint32_t rounds, size_t count, bool is_flush) noexcept {
+    static void run_pbkdf2(Pbkdf2Work& work, const SaltCache& salt, uint32_t rounds, size_t count, bool is_flush) noexcept {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
         if (count == BATCH_SIZE) {
             if constexpr (Arch == SimdArch::AVX512) {
                 pbkdf2_hmac_sha512_16way_avx512(
@@ -187,14 +185,21 @@ class SimdBatchProcessor : public IBatchProcessor {
                     work.seed.data() + 2 * 64, work.seed.data() + 3 * 64,
                     salt.block64.data(), salt.kw_salt.data(), salt.kw_salt_sse.data());
             }
-        } else if (is_flush) {
-            // Sobra do último lote — PBKDF2 escalar item por item.
-            for (size_t b = 0; b < count; ++b)
-                crypto::pbkdf2_hmac_sha512(work.pw.data() + b * PW_SLOT_SIZE,
-                                           work.pw_len[b],
-                                           salt.buf.data(), salt.len, rounds,
-                                           work.seed.data() + b * 64, 64);
+            return;
         }
+#else
+        // ARM64 / outras arquiteturas: sem SIMD no PBKDF2 (por enquanto).
+        // Escalar, semente por semente — cada uma usa SHA-512 scalar
+        // (ou o path ARM da sha512.hpp, quando disponível).
+        // (void)salt; (void)rounds;
+#endif
+
+        // Sobra do último lote OU caminho escalar completo.
+        for (size_t b = 0; b < count; ++b)
+            crypto::pbkdf2_hmac_sha512(work.pw.data() + b * PW_SLOT_SIZE,
+                                       work.pw_len[b],
+                                       salt.buf.data(), salt.len, rounds,
+                                       work.seed.data() + b * 64, 64);
     }
 
     // Verificação do alvo.

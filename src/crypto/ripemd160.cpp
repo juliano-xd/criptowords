@@ -1,6 +1,7 @@
 #include "../../include/crypto/ripemd160.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace crypto {
@@ -126,9 +127,9 @@ void RIPEMD160::hash(const void* data, size_t len, uint8_t out[20]) {
     uint32_t al = h[0], bl = h[1], cl = h[2], dl = h[3], el = h[4];
     uint32_t ar = h[0], br = h[1], cr = h[2], dr = h[3], er = h[4];
 
-// Rodada 1 (j = 0..15): FL = F1, FR = F5
-#pragma GCC unroll 16
-    for (int j = 0; j < 16; ++j) {
+//  Rodada 1 (j = 0..15): FL = F1, FR = F5
+    #pragma GCC unroll 16
+    for (uint8_t j = 0; j < 16; ++j) {
         uint32_t t = al + F1(bl, cl, dl) + X[RL[j]] + KL[0];
         t = rotl(t, SL[j]) + el;
         al = el;

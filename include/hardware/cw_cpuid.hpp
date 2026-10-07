@@ -1,16 +1,5 @@
 #pragma once
 
-// Wrapper de CPUID que funciona nos dois mundos.
-//
-// No GCC/Clang o <cpuid.h> define __cpuid como MACRO de 5 argumentos:
-//     __cpuid(leaf, eax, ebx, ecx, edx)
-// No Windows o <intrin.h> declara uma FUNCAO com o mesmo nome e 2 argumentos:
-//     void __cpuid(int cpuInfo[4], int function_id)
-//
-// Se o <cpuid.h> for incluido no mingw, a macro de 5 argumentos passa por cima
-// da declaracao do <intrin.h> e o erro sai dentro do proprio header do sistema
-// (psdk_inc/intrin-impl.h), o que confunde bastante na hora de debugar.
-
 #if defined(_WIN32)
 
 #include <intrin.h>
@@ -34,7 +23,7 @@ static inline void cw_cpuid_count(unsigned leaf, unsigned sub, unsigned& a, unsi
     d = static_cast<unsigned>(r[3]);
 }
 
-#else
+#elif defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 
 #include <cpuid.h>
 
@@ -45,6 +34,20 @@ static inline void cw_cpuid(unsigned leaf, unsigned& a, unsigned& b, unsigned& c
 static inline void cw_cpuid_count(unsigned leaf, unsigned sub, unsigned& a, unsigned& b, unsigned& c,
                                   unsigned& d) noexcept {
     __cpuid_count(leaf, sub, a, b, c, d);
+}
+
+#else
+// =========================================================================
+// ARM64 (aarch64) / outras arquiteturas: CPUID x86 não existe.
+// As detecções de feature são feitas via HWCAP (cpu_features.hpp).
+// Este stub mantém a compilação de qualquer código que ainda inclua o header.
+// =========================================================================
+
+static inline void cw_cpuid(unsigned, unsigned& a, unsigned& b, unsigned& c, unsigned& d) noexcept {
+    a = b = c = d = 0;
+}
+static inline void cw_cpuid_count(unsigned, unsigned, unsigned& a, unsigned& b, unsigned& c, unsigned& d) noexcept {
+    a = b = c = d = 0;
 }
 
 #endif
