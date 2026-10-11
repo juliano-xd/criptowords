@@ -153,6 +153,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    std::printf(
+        "SHA-512 backend: %s\n",
+        crypto::SHA512::native_backend_name()
+    );
+
     const auto plan = SearchOptimizer::build_plan(cfg);
 
     if (plan.impossible) {

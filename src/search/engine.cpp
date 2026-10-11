@@ -8,6 +8,7 @@
 #include <print>
 #include <thread>
 #include <vector>
+#include <iostream>
 
 #include "../../include/cli/ui.hpp"
 #include "../../include/hardware/host_probe.hpp"

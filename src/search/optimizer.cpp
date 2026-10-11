@@ -13,6 +13,7 @@
 #include <numeric>
 #include <print>
 #include <utility>
+#include <iostream>
 
 #include "../../include/crypto/bip39.hpp"
 #include "../../include/crypto/sha256.hpp"

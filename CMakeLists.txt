@@ -23,6 +23,8 @@ endif()
 
 set(CMAKE_CXX_STANDARD          23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS         OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
   message(FATAL_ERROR "GCC 14+ necessario. Detectado: ${CMAKE_CXX_COMPILER_VERSION}")
@@ -30,9 +32,6 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17)
   message(FATAL_ERROR "Clang 17+ necessario. Detectado: ${CMAKE_CXX_COMPILER_VERSION}")
 endif()
-
-set(CMAKE_CXX_EXTENSIONS         OFF)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(CMAKE_EXPORT_COMPILE_COMMANDS AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json")
   execute_process(
@@ -52,15 +51,15 @@ endif()
 # Opções
 # =========================================================================
 option(CRYPTOWORDS_ENABLE_HIP "Habilita backend AMD ROCm/HIP" ON)
-option(CRYPTOWORDS_PCH        "Precompiled Headers"          ON)
-option(CRYPTOWORDS_LTO        "Link-Time Optimization"       ON)
-option(CRYPTOWORDS_WERROR     "Warnings como erros"          OFF)
-option(CRYPTOWORDS_ASAN       "AddressSanitizer + UBSan"     OFF)
-option(CRYPTOWORDS_TSAN       "ThreadSanitizer"              OFF)
+option(CRYPTOWORDS_PCH        "Precompiled Headers"           ON)
+option(CRYPTOWORDS_LTO        "Link-Time Optimization"        ON)
+option(CRYPTOWORDS_WERROR     "Warnings como erros"           OFF)
+option(CRYPTOWORDS_ASAN       "AddressSanitizer + UBSan"      OFF)
+option(CRYPTOWORDS_TSAN       "ThreadSanitizer"               OFF)
 
 set(CRYPTOWORDS_ARCH "native" CACHE STRING
-    "Microarquitetura alvo: native, x86-64-v4, x86-64-v3, x86-64-v2, generic")
-set_property(CACHE CRYPTOWORDS_ARCH PROPERTY STRINGS "native" "x86-64-v4" "x86-64-v3" "x86-64-v2" "generic")
+    "Microarquitetura alvo: native, x86-64-v4, x86-64-v3, x86-64-v2, generic, armv8.2-a")
+set_property(CACHE CRYPTOWORDS_ARCH PROPERTY STRINGS "native" "x86-64-v4" "x86-64-v3" "x86-64-v2" "generic" "armv8.2-a")
 
 set(CRYPTOWORDS_PGO "OFF" CACHE STRING "PGO: OFF, GENERATE, USE")
 set_property(CACHE CRYPTOWORDS_PGO PROPERTY STRINGS "OFF" "GENERATE" "USE")
@@ -69,13 +68,18 @@ set(CRYPTOWORDS_PGO_DIR "${CMAKE_BINARY_DIR}/pgo_profile" CACHE PATH "Diretório
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
 
 # =========================================================================
-# Arquitetura: x86 vs ARM64 (Termux)
+# Arquitetura: Detecção robusta (PC x86 vs Android/ARM64)
 # =========================================================================
 set(CW_X86 FALSE)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i386|i686")
+set(CW_ARM64 FALSE)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i386|i686)$" OR ANDROID_ABI MATCHES "^(x86_64|x86)$")
   set(CW_X86 TRUE)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$" OR ANDROID_ABI MATCHES "^(arm64-v8a|armeabi-v7a)$")
+  set(CW_ARM64 TRUE)
 endif()
-message(STATUS "Arch: ${CMAKE_SYSTEM_PROCESSOR} (x86=${CW_X86})")
+
+message(STATUS "Plataforma Detectada: OS=${CMAKE_SYSTEM_NAME}, Arch=${CMAKE_SYSTEM_PROCESSOR} (x86=${CW_X86}, ARM64=${CW_ARM64})")
 
 # =========================================================================
 # Linker de alta velocidade
@@ -108,7 +112,7 @@ if(CRYPTOWORDS_LTO)
 endif()
 
 # =========================================================================
-# GMP
+# GMP e CLI11
 # =========================================================================
 include(FetchContent)
 find_package(GMP QUIET)
@@ -122,9 +126,6 @@ if(NOT GMP_LIBRARIES)
 endif()
 message(STATUS "GMP: ${GMP_LIBRARIES}")
 
-# =========================================================================
-# CLI11
-# =========================================================================
 find_package(CLI11 QUIET)
 if(NOT CLI11_FOUND)
   FetchContent_Declare(CLI11
@@ -137,7 +138,7 @@ if(NOT CLI11_FOUND)
 endif()
 
 # =========================================================================
-# Backend HIP (AMD ROCm) — desabilitado em ARM/Termux
+# Backend HIP (AMD ROCm) — Desabilitado em ARM/Android
 # =========================================================================
 set(CRYPTOWORDS_HAVE_HIP  FALSE)
 set(CRYPTOWORDS_HIP_OBJECT "")
@@ -211,45 +212,74 @@ if(CRYPTOWORDS_ENABLE_HIP AND CW_X86)
     endif()
   endif()
 elseif(CRYPTOWORDS_ENABLE_HIP AND NOT CW_X86)
-  message(STATUS "HIP: desabilitado (arch ${CMAKE_SYSTEM_PROCESSOR} não é x86)")
+  message(STATUS "HIP: desabilitado (arquitetura não é x86)")
 endif()
 
 # =========================================================================
-# Detecção SIMD (só em x86; ARM usa fallback escalar do SSE)
+# Detecção SIMD e Crypto Extensions (PC e Android)
 # =========================================================================
 include(CheckCXXCompilerFlag)
 
-set(HAVE_SSE41  FALSE)
-set(HAVE_AVX2   FALSE)
-set(HAVE_AVX512 FALSE)
-set(HAVE_SHA_NI FALSE)
+set(HAVE_SSE41      FALSE)
+set(HAVE_AVX2       FALSE)
+set(HAVE_AVX512     FALSE)
+set(HAVE_X86_SHA    FALSE)
+set(HAVE_X86_SHA512 FALSE)
+
+set(HAVE_ARM_NEON   FALSE)
+set(HAVE_ARM_SHA2   FALSE)
+set(HAVE_ARM_SHA512 FALSE)
 
 if(CW_X86)
   check_cxx_compiler_flag("-msse4.1"  _SSE41_OK)
   check_cxx_compiler_flag("-mavx2"    _AVX2_OK)
   check_cxx_compiler_flag("-mavx512f" _AVX512_OK)
-  check_cxx_compiler_flag("-msha"     _SHA_OK)
+  check_cxx_compiler_flag("-msha"     _X86_SHA_OK)
+  check_cxx_compiler_flag("-msha512"  _X86_SHA512_OK)
+
   if(_SSE41_OK)
     set(HAVE_SSE41 TRUE)
   endif()
+
   if(_AVX2_OK)
     set(HAVE_AVX2 TRUE)
   endif()
+
   if(_AVX512_OK)
     set(HAVE_AVX512 TRUE)
   endif()
-  if(_SHA_OK)
-    set(HAVE_SHA_NI TRUE)
+
+  if(_X86_SHA_OK)
+    set(HAVE_X86_SHA TRUE)
   endif()
-else()
-  # Termux/ARM64: único "backend" é o 4-lane escalar (nome histórico: SSE).
-  set(HAVE_SSE41 TRUE)
+
+  if(_X86_SHA512_OK)
+    set(HAVE_X86_SHA512 TRUE)
+  endif()
+
+elseif(CW_ARM64)
+  check_cxx_compiler_flag("-march=armv8-a+simd"    _ARM_NEON_OK)
+  check_cxx_compiler_flag("-march=armv8-a+crypto"  _ARM_SHA2_OK)
+  check_cxx_compiler_flag("-march=armv8.2-a+sha3"  _ARM_SHA512_OK)
+
+  if(_ARM_NEON_OK)
+    set(HAVE_ARM_NEON TRUE)
+  endif()
+
+  if(_ARM_SHA2_OK)
+    set(HAVE_ARM_SHA2 TRUE)
+  endif()
+
+  if(_ARM_SHA512_OK)
+    set(HAVE_ARM_SHA512 TRUE)
+  endif()
 endif()
 
-message(STATUS "SIMD: SSE4.1=${HAVE_SSE41}  AVX2=${HAVE_AVX2}  AVX512=${HAVE_AVX512}  SHA-NI=${HAVE_SHA_NI}")
+message(STATUS "Extensões PC  -> SSE4.1:${HAVE_SSE41} AVX2:${HAVE_AVX2} AVX512:${HAVE_AVX512} SHA:${HAVE_X86_SHA} SHA512:${HAVE_X86_SHA512}")
+message(STATUS "Extensões ARM -> NEON:${HAVE_ARM_NEON} SHA256:${HAVE_ARM_SHA2} SHA512:${HAVE_ARM_SHA512}")
 
 # =========================================================================
-# Flags de compilação
+# Flags de compilação Globais
 # =========================================================================
 set(WARN_FLAGS -Wall -Wextra -Wpedantic -Wno-ignored-attributes)
 if(CRYPTOWORDS_WERROR)
@@ -273,29 +303,22 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
   endif()
 endif()
 
+# Sintonia fina por arquitetura
 if(CW_X86)
   if(CRYPTOWORDS_ARCH STREQUAL "native")
     list(APPEND PERF_FLAGS -march=native -mtune=native)
-    message(STATUS "Microarquitetura: native (x86)")
-  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v4")
-    list(APPEND PERF_FLAGS -march=x86-64-v4)
-  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v3")
-    list(APPEND PERF_FLAGS -march=x86-64-v3)
-  elseif(CRYPTOWORDS_ARCH STREQUAL "x86-64-v2")
-    list(APPEND PERF_FLAGS -march=x86-64-v2)
-  elseif(CRYPTOWORDS_ARCH STREQUAL "generic")
-    message(STATUS "Microarquitetura: generic")
+  elseif(CRYPTOWORDS_ARCH MATCHES "x86-64-v[2-4]")
+    list(APPEND PERF_FLAGS -march=${CRYPTOWORDS_ARCH})
   endif()
-else()
-  # ARM64 / Termux: usa tuning nativo quando disponível.
+elseif(CW_ARM64)
   if(CRYPTOWORDS_ARCH STREQUAL "native")
-    include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-mcpu=native" HAS_MCPU_NATIVE)
-    if(HAS_MCPU_NATIVE)
+    if(HAS_MCPU_NATIVE AND NOT ANDROID_ABI)
       list(APPEND PERF_FLAGS -mcpu=native -mtune=native)
     endif()
+  elseif(CRYPTOWORDS_ARCH STREQUAL "armv8.2-a")
+    list(APPEND PERF_FLAGS -march=armv8.2-a+crypto)
   endif()
-  message(STATUS "Microarquitetura: ARM (${CMAKE_SYSTEM_PROCESSOR})")
 endif()
 
 # ---------- PGO ----------
@@ -328,122 +351,143 @@ elseif(CRYPTOWORDS_TSAN)
 endif()
 
 # =========================================================================
-# Núcleo
+# Núcleo do Projeto
 # =========================================================================
 set(CORE_SOURCES
-
-    src/cli/parser.cpp
-    src/cli/wordlist.cpp
-    src/cli/validator.cpp
-
-    src/search/optimizer.cpp
-    src/search/reporter.cpp
-    src/search/odometer.cpp
-    src/search/pipeline.cpp
-    src/search/engine.cpp
-    src/search/checkpoint.cpp
-
-    src/simd/factory.cpp
-
-    src/hardware/host_probe.cpp
-    src/hardware/hardware_advisor.cpp
-
-    src/gpu/gpu_backend.cpp
-
-    src/crypto/base58.cpp
-    src/crypto/bip39.cpp
-    src/crypto/ripemd160.cpp
-    src/crypto/sha256.cpp
-    src/crypto/keccak256.cpp
+    src/cli/parser.cpp src/cli/wordlist.cpp src/cli/validator.cpp
+    src/search/optimizer.cpp src/search/reporter.cpp src/search/odometer.cpp
+    src/search/pipeline.cpp src/search/engine.cpp src/search/checkpoint.cpp
+    src/simd/factory.cpp src/hardware/host_probe.cpp src/hardware/hardware_advisor.cpp
+    src/gpu/gpu_backend.cpp src/crypto/base58.cpp src/crypto/bip39.cpp
+    src/crypto/ripemd160.cpp src/crypto/sha256.cpp src/crypto/keccak256.cpp
     src/crypto/hmac_sha512.cpp
 )
 
 add_library(criptowords_core OBJECT ${CORE_SOURCES})
-
 target_include_directories(criptowords_core PUBLIC include)
 target_include_directories(criptowords_core PRIVATE ${CMAKE_SOURCE_DIR}/include/gpu/hip)
-
-target_link_libraries(criptowords_core PUBLIC
-    CLI11::CLI11
-    ${GMP_LIBRARIES}
-)
-
+target_link_libraries(criptowords_core PUBLIC CLI11::CLI11 ${GMP_LIBRARIES})
 target_compile_options(criptowords_core PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
 
 if(CRYPTOWORDS_HAVE_HIP)
   target_compile_definitions(criptowords_core PRIVATE CRYPTOWORDS_HAVE_HIP=1)
 endif()
 
+# Repassando as definições para o C++
 if(HAVE_SSE41)
   target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_SSE41=1)
 endif()
+
 if(HAVE_AVX2)
   target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_AVX2=1)
 endif()
+
 if(HAVE_AVX512)
   target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_AVX512=1)
+endif()
+
+if(HAVE_X86_SHA512)
+  target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_X86_SHA512=1)
+endif()
+
+if(HAVE_ARM_NEON)
+  target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_ARM_NEON=1)
+endif()
+
+if(HAVE_ARM_SHA2)
+  target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_ARM_SHA2=1)
+endif()
+
+if(HAVE_ARM_SHA512)
+  target_compile_definitions(criptowords_core PUBLIC CRYPTOWORDS_HAVE_ARM_SHA512=1)
 endif()
 
 if(CRYPTOWORDS_PCH)
   message(STATUS "PCH: ativado")
   target_precompile_headers(criptowords_core PRIVATE
-        <algorithm>
-        <array>
-        <atomic>
-        <chrono>
-        <cstdint>
-        <cstring>
-        <format>
-        <iostream>
-        <memory>
-        <optional>
-        <print>
-        <span>
-        <string>
-        <string_view>
-        <utility>
-        <vector>
+        <algorithm> <array> <atomic> <chrono> <cstdint> <cstring>
+        <format> <iostream> <memory> <optional> <print> <span>
+        <string> <string_view> <utility> <vector>
     )
 endif()
 
 # =========================================================================
-# Objetos SIMD especializados
+# Objetos SIMD & Crypto Especializados (À prova de falhas)
 # =========================================================================
 set(SIMD_OBJECTS "")
 
+# --- PC / x86 ---
 if(HAVE_SSE41)
-    add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
-    target_include_directories(simd_sse PRIVATE include)
-    target_link_libraries(simd_sse PRIVATE ${GMP_LIBRARIES})
-    if(CW_X86)
-      target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
-    else()
-      # ARM/Termux: sem -msse4.1; o template usa fallback escalar interno.
-      target_compile_options(simd_sse PRIVATE ${WARN_FLAGS} ${PERF_FLAGS})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_sse.cpp")
+        add_library(simd_sse OBJECT src/simd/factory_sse.cpp)
+        target_include_directories(simd_sse PRIVATE include)
+        target_link_libraries(simd_sse PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_sse PRIVATE -msse4.1 ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
     endif()
-    list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_sse>)
 endif()
 
 if(HAVE_AVX2)
-    add_library(simd_avx2 OBJECT src/simd/factory_avx2.cpp)
-    target_include_directories(simd_avx2 PRIVATE include)
-    target_link_libraries(simd_avx2 PRIVATE ${GMP_LIBRARIES})
-    target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${WARN_FLAGS} ${PERF_FLAGS})
-    list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx2>)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_avx2.cpp")
+        add_library(simd_avx2 OBJECT src/simd/factory_avx2.cpp)
+        target_include_directories(simd_avx2 PRIVATE include)
+        target_link_libraries(simd_avx2 PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_avx2 PRIVATE -mavx2 -mfma -mbmi -mbmi2 ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx2>)
+    endif()
 endif()
 
 if(HAVE_AVX512)
-    add_library(simd_avx512 OBJECT src/simd/factory_avx512.cpp)
-    target_include_directories(simd_avx512 PRIVATE include)
-    target_link_libraries(simd_avx512 PRIVATE ${GMP_LIBRARIES})
-    target_compile_options(simd_avx512 PRIVATE
-        -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd
-        ${WARN_FLAGS} ${PERF_FLAGS})
-    list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx512>)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_avx512.cpp")
+        add_library(simd_avx512 OBJECT src/simd/factory_avx512.cpp)
+        target_include_directories(simd_avx512 PRIVATE include)
+        target_link_libraries(simd_avx512 PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_avx512 PRIVATE
+            -mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512cd
+            ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_avx512>)
+    endif()
+endif()
+
+if(HAVE_X86_SHA512)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_x86_sha512.cpp")
+        add_library(simd_x86_sha512 OBJECT src/simd/factory_x86_sha512.cpp)
+        target_include_directories(simd_x86_sha512 PRIVATE include)
+        target_link_libraries(simd_x86_sha512 PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_x86_sha512 PRIVATE -msha512 ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_x86_sha512>)
+    else()
+        message(WARNING "[Opcional] Suporte a SHA512 nativo (PC) detectado, mas src/simd/factory_x86_sha512.cpp não existe. Ignorando.")
+    endif()
+endif()
+
+# --- Android / ARM64 ---
+if(HAVE_ARM_NEON)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_arm_neon.cpp")
+        add_library(simd_arm_neon OBJECT src/simd/factory_arm_neon.cpp)
+        target_include_directories(simd_arm_neon PRIVATE include)
+        target_link_libraries(simd_arm_neon PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_arm_neon PRIVATE -march=armv8-a+simd ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_arm_neon>)
+    else()
+        message(WARNING "[Opcional] Suporte a ARM NEON detectado, mas src/simd/factory_arm_neon.cpp não existe. Ignorando.")
+    endif()
+endif()
+
+if(HAVE_ARM_SHA512)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/simd/factory_arm_sha512.cpp")
+        add_library(simd_arm_sha512 OBJECT src/simd/factory_arm_sha512.cpp)
+        target_include_directories(simd_arm_sha512 PRIVATE include)
+        target_link_libraries(simd_arm_sha512 PRIVATE ${GMP_LIBRARIES})
+        target_compile_options(simd_arm_sha512 PRIVATE -march=armv8.2-a+sha3 ${WARN_FLAGS} ${PERF_FLAGS})
+        list(APPEND SIMD_OBJECTS $<TARGET_OBJECTS:simd_arm_sha512>)
+    else()
+        message(WARNING "[Opcional] Suporte a ARM Crypto SHA512 detectado, mas src/simd/factory_arm_sha512.cpp não existe. Ignorando.")
+    endif()
 endif()
 
 # =========================================================================
-# Executável
+# Executável Final e Instalação
 # =========================================================================
 add_executable(criptowords
     src/main.cpp

@@ -6,6 +6,7 @@
 #include <print>
 #include <span>
 #include <string>
+#include <iostream>
 
 #include "../../include/cli/ui.hpp"
 #include "../../include/crypto/bip39.hpp"
