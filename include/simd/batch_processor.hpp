@@ -428,7 +428,7 @@ class SimdBatchProcessor : public IBatchProcessor {
                                               : static_cast<uint8_t>(s2.state[0][b - 8] >> 24);
                     process_one(b, h);
                 }
-            } else {
+            } else if constexpr (Arch == SimdArch::SSE) {
                 SHA256_SSE_State s1, s2;
                 sha256_init_sse(&s1);
                 sha256_init_sse(&s2);
@@ -449,6 +449,15 @@ class SimdBatchProcessor : public IBatchProcessor {
                     const uint8_t h = (b < 4) ? static_cast<uint8_t>(s1.state[0][b] >> 24)
                                               : static_cast<uint8_t>(s2.state[0][b - 4] >> 24);
                     process_one(b, h);
+                }
+            } else {
+                // Fallback ARM / Escalar
+                for (size_t b = 0; b < cb.size; ++b) {
+                    alignas(64) std::array<uint8_t, 64> block;
+                    setup_filter_block(block, cb, b, opt);
+                    alignas(64) std::array<uint8_t, 32> hash;
+                    crypto::SHA256::hash(block.data(), opt.entropy_bytes, hash.data());
+                    process_one(b, hash[0]);
                 }
             }
             cb.size = 0;

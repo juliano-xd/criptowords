@@ -13,7 +13,6 @@ namespace cryptowords {
 
 namespace {
 
-// Melhor arquitetura que o binário contém. Compilado uma vez por execução.
 constexpr SimdArch compiled_best() noexcept {
 #if defined(CRYPTOWORDS_HAVE_AVX512)
     return SimdArch::AVX512;
@@ -21,16 +20,23 @@ constexpr SimdArch compiled_best() noexcept {
     return SimdArch::AVX2;
 #elif defined(CRYPTOWORDS_HAVE_SSE41)
     return SimdArch::SSE;
+#elif defined(CRYPTOWORDS_HAVE_ARM_SHA512)
+    return SimdArch::ARM_SHA512;
+#elif defined(CRYPTOWORDS_HAVE_ARM_NEON)
+    return SimdArch::ARM_NEON;
 #else
-    return SimdArch::SSE;
+    return SimdArch::SCALAR;
 #endif
 }
 
 constexpr const char* arch_name(SimdArch a) noexcept {
     switch (a) {
-        case SimdArch::AVX512: return "AVX512";
-        case SimdArch::AVX2:   return "AVX2";
-        case SimdArch::SSE:    return "SSE4.1";
+        case SimdArch::AVX512:     return "AVX512";
+        case SimdArch::AVX2:       return "AVX2";
+        case SimdArch::SSE:        return "SSE4.1";
+        case SimdArch::ARM_SHA512: return "ARMv8.2 SHA-512";
+        case SimdArch::ARM_NEON:   return "ARM NEON";
+        case SimdArch::SCALAR:     return "Scalar";
     }
     return "?";
 }
@@ -38,7 +44,7 @@ constexpr const char* arch_name(SimdArch a) noexcept {
 }  // namespace
 
 SimdArch detect_best_simd() {
-    SimdArch cpu_best = SimdArch::SSE;
+    SimdArch cpu_best = SimdArch::SCALAR;
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     unsigned eax, ebx, ecx, edx;
@@ -59,12 +65,25 @@ SimdArch detect_best_simd() {
     if (has_avx512)     cpu_best = SimdArch::AVX512;
     else if (has_avx2)  cpu_best = SimdArch::AVX2;
     else if (has_sse41) cpu_best = SimdArch::SSE;
+#elif defined(__aarch64__) || defined(__arm__)
+    cpu_best = SimdArch::ARM_NEON;
+    if (cpu::has_intel_sha512()) { // No ARM, esta função avalia o HWCAP_SHA512 via getauxval
+        cpu_best = SimdArch::ARM_SHA512;
+    }
 #endif
 
     const SimdArch compiled  = compiled_best();
-    const SimdArch effective = (cpu_best < compiled) ? cpu_best : compiled;
+    SimdArch effective = compiled;
 
-    if (effective != cpu_best) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    if (cpu_best < compiled) effective = cpu_best;
+#elif defined(__aarch64__) || defined(__arm__)
+    if (compiled == SimdArch::ARM_SHA512 && cpu_best == SimdArch::ARM_NEON) {
+        effective = SimdArch::ARM_NEON;
+    }
+#endif
+
+    if (effective != cpu_best && effective != compiled) {
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -87,13 +106,18 @@ std::unique_ptr<IBatchProcessor> make_simd_processor(const AppConfig& cfg,
     if (arch == SimdArch::AVX2)   return detail::make_simd_processor_avx2(cfg, opt);
 #endif
 #ifdef CRYPTOWORDS_HAVE_SSE41
-    (void)arch;
-    return detail::make_simd_processor_sse(cfg, opt);
-#else
+    if (arch == SimdArch::SSE)    return detail::make_simd_processor_sse(cfg, opt);
+#endif
+#ifdef CRYPTOWORDS_HAVE_ARM_SHA512
+    if (arch == SimdArch::ARM_SHA512) return detail::make_simd_processor_arm_sha512(cfg, opt);
+#endif
+#ifdef CRYPTOWORDS_HAVE_ARM_NEON
+    if (arch == SimdArch::ARM_NEON) return detail::make_simd_processor_arm_neon(cfg, opt);
+#endif
+
     (void)cfg; (void)opt; (void)arch;
     throw std::runtime_error(
-        "Nenhum backend SIMD compilado. Compile com -DCRYPTOWORDS_HAVE_SSE41 (ou AVX2/AVX512).");
-#endif
+        "Nenhum backend SIMD compilado. Verifique as macros do CMake.");
 }
 
 }  // namespace cryptowords
