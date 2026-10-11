@@ -386,20 +386,20 @@ class SHA512 {
     }
 
     static void compress_padded_block64(const word iv[8], word W[16], word out[8]) noexcept {
-        if (native_compressor() != nullptr) {
-            std::array<word, 16> words{};
-            for (unsigned i = 0; i < 8; ++i)
-                words[i] = W[i];
-            words[8] = 0x8000000000000000ULL;
-            words[15] = 512;
-            std::array<word, 8> state;
-            for (unsigned i = 0; i < 8; ++i)
-                state[i] = iv[i];
-            compress_words(state, words.data());
-            for (unsigned i = 0; i < 8; ++i)
-                out[i] = state[i];
-            return;
-        }
+        // if (native_compressor() != nullptr) {
+        //     std::array<word, 16> words{};
+        //     for (unsigned i = 0; i < 8; ++i)
+        //         words[i] = W[i];
+        //     words[8] = 0x8000000000000000ULL;
+        //     words[15] = 512;
+        //     std::array<word, 8> state;
+        //     for (unsigned i = 0; i < 8; ++i)
+        //         state[i] = iv[i];
+        //     compress_words(state, words.data());
+        //     for (unsigned i = 0; i < 8; ++i)
+        //         out[i] = state[i];
+        //     return;
+        // }
         constexpr word K_FUSED_8 = 0xd807aa98a3030242ULL + 0x8000000000000000ULL;
         constexpr word K_FUSED_15 = 0xc19bf174cf692694ULL + 0x0000000000000600ULL;
         constexpr word C_S1_W15 = 0x00c0000000003018ULL;
@@ -557,17 +557,17 @@ class SHA512 {
 
     template <word PAD>
     static void compress_pad128_32bytekey(const word key_words[4], word out[8]) noexcept {
-        if (native_compressor() != nullptr) {
-            std::array<word, 16> words;
-            words.fill(PAD);
-            for (unsigned i = 0; i < 4; ++i)
-                words[i] = key_words[i] ^ PAD;
-            auto state = IV_;
-            compress_words(state, words.data());
-            for (unsigned i = 0; i < 8; ++i)
-                out[i] = state[i];
-            return;
-        }
+        // if (native_compressor() != nullptr) {
+        //     std::array<word, 16> words;
+        //     words.fill(PAD);
+        //     for (unsigned i = 0; i < 4; ++i)
+        //         words[i] = key_words[i] ^ PAD;
+        //     auto state = IV_;
+        //     compress_words(state, words.data());
+        //     for (unsigned i = 0; i < 8; ++i)
+        //         out[i] = state[i];
+        //     return;
+        // }
         constexpr word C_S0_PAD = (std::rotr(PAD, 1) ^ std::rotr(PAD, 8) ^ (PAD >> 7));
         constexpr word C_S1_PAD = (std::rotr(PAD, 19) ^ std::rotr(PAD, 61) ^ (PAD >> 6));
         constexpr word C_PAD_PLUS_S1 = PAD + C_S1_PAD;
@@ -899,28 +899,28 @@ class SHA512 {
             return;
         }
 
-        if (native_compressor() != nullptr) {
-            alignas(64) std::array<byte, block_size> block{};
-            if (buffer_size_ != 0)
-                std::memcpy(block.data(), buffer_.data(), buffer_size_);
-            if (suffix_len != 0)
-                std::memcpy(block.data() + buffer_size_, suffix, suffix_len);
+        // if (native_compressor() != nullptr) {
+        //     alignas(64) std::array<byte, block_size> block{};
+        //     if (buffer_size_ != 0)
+        //         std::memcpy(block.data(), buffer_.data(), buffer_size_);
+        //     if (suffix_len != 0)
+        //         std::memcpy(block.data() + buffer_size_, suffix, suffix_len);
 
-            const std::size_t used = buffer_size_ + suffix_len;
-            block[used] = 0x80;
+        //     const std::size_t used = buffer_size_ + suffix_len;
+        //     block[used] = 0x80;
 
-            const std::uint64_t bytes = total_lo_ + static_cast<std::uint64_t>(suffix_len);
-            const std::uint64_t high_bytes = total_hi_ + (bytes < total_lo_ ? 1u : 0u);
-            const std::uint64_t bit_lo = bytes << 3;
-            const std::uint64_t bit_hi = (high_bytes << 3) | (bytes >> 61);
-            store_be64(block.data() + 112, bit_hi);
-            store_be64(block.data() + 120, bit_lo);
+        //     const std::uint64_t bytes = total_lo_ + static_cast<std::uint64_t>(suffix_len);
+        //     const std::uint64_t high_bytes = total_hi_ + (bytes < total_lo_ ? 1u : 0u);
+        //     const std::uint64_t bit_lo = bytes << 3;
+        //     const std::uint64_t bit_hi = (high_bytes << 3) | (bytes >> 61);
+        //     store_be64(block.data() + 112, bit_hi);
+        //     store_be64(block.data() + 120, bit_lo);
 
-            auto state = h_;
-            compress(state, block.data());
-            write_digest(state, out);
-            return;
-        }
+        //     auto state = h_;
+        //     compress(state, block.data());
+        //     write_digest(state, out);
+        //     return;
+        // }
 
         alignas(64) std::array<word, 16> w = template_w_;
 
@@ -1556,10 +1556,10 @@ class SHA512 {
 #endif
 
     void complete_batch(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
-        if (native_compressor() != nullptr) {
-            complete_batch_scalar(suffixes, stride, out, count);
-            return;
-        }
+        // if (native_compressor() != nullptr) {
+        //     complete_batch_scalar(suffixes, stride, out, count);
+        //     return;
+        // }
         if (!template_single_block_ || count == 0) {
             complete_batch_scalar(suffixes, stride, out, count);
             return;
