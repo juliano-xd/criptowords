@@ -1326,3 +1326,261 @@ inline void pbkdf2_hmac_sha512_16way_avx512(
 #undef s1_AVX512
 
 #endif  // x86
+
+#if defined(__aarch64__) || defined(__arm__)
+
+#include <arm_neon.h>
+
+namespace pbkdf2_simd_detail {
+    struct K512_NEON_Table {
+        alignas(16) uint64_t data[80][2];
+        constexpr K512_NEON_Table() : data{} {
+            for (int i = 0; i < 80; ++i) { uint64_t v = K512[i]; data[i][0] = v; data[i][1] = v; }
+        }
+    };
+    inline constexpr K512_NEON_Table g_k512_neon_table{};
+
+    struct IV_NEON_Table {
+        alignas(16) uint64_t data[8][2];
+        constexpr IV_NEON_Table() : data{} {
+            for (int i = 0; i < 8; ++i) { uint64_t v = IV[i]; data[i][0] = v; data[i][1] = v; }
+        }
+    };
+    inline constexpr IV_NEON_Table g_iv_neon_table{};
+
+    inline constexpr uint64_t C_S1_W15_VAL = 0x00c0000000003018ULL;
+    inline constexpr uint64_t C_S0_W8_VAL = 0x4180000000000000ULL;
+    inline constexpr uint64_t C_S0_W15_VAL = 0x000000000000030aULL;
+    inline constexpr uint64_t C_W8_VAL = 0x8000000000000000ULL;
+    inline constexpr uint64_t C_W15_VAL = 0x0000000000000600ULL;
+    inline constexpr uint64_t K_FUSED_8_VAL = 0xd807aa98a3030242ULL + 0x8000000000000000ULL;
+    inline constexpr uint64_t K_FUSED_15_VAL = 0xc19bf174cf692694ULL + 0x0000000000000600ULL;
+}
+
+[[gnu::always_inline]] static inline const uint64x2_t* get_k512_neon() noexcept {
+    return reinterpret_cast<const uint64x2_t*>(pbkdf2_simd_detail::g_k512_neon_table.data);
+}
+[[gnu::always_inline]] static inline const uint64x2_t* get_iv_neon() noexcept {
+    return reinterpret_cast<const uint64x2_t*>(pbkdf2_simd_detail::g_iv_neon_table.data);
+}
+
+#define ROR64x2(x, n) veorq_u64(vshrq_n_u64((x), (n)), vshlq_n_u64((x), 64 - (n)))
+#define CH_NEON(x, y, z) veorq_u64((z), vandq_u64((x), veorq_u64((y), (z))))
+#define MAJ_NEON(x, y, z) veorq_u64(vandq_u64((x), (y)), vandq_u64((z), veorq_u64((x), (y))))
+#define S0_NEON(x) veorq_u64(veorq_u64(ROR64x2((x), 28), ROR64x2((x), 34)), ROR64x2((x), 39))
+#define S1_NEON(x) veorq_u64(veorq_u64(ROR64x2((x), 14), ROR64x2((x), 18)), ROR64x2((x), 41))
+#define s0_NEON(x) veorq_u64(veorq_u64(ROR64x2((x), 1), ROR64x2((x), 8)), vshrq_n_u64((x), 7))
+#define s1_NEON(x) veorq_u64(veorq_u64(ROR64x2((x), 19), ROR64x2((x), 61)), vshrq_n_u64((x), 6))
+
+[[gnu::always_inline]]
+static inline void sha512_block64_neon(const uint64x2_t iv[8], uint64x2_t W[16], uint64x2_t out[8]) {
+    uint64x2_t a = iv[0], b = iv[1], c = iv[2], d = iv[3], e = iv[4], f = iv[5], g = iv[6], h = iv[7];
+    const uint64x2_t* k_tbl = get_k512_neon();
+#pragma GCC unroll 5
+    for (int r = 0; r < 5; ++r) {
+#pragma GCC unroll 16
+        for (int i = 0; i < 16; ++i) {
+            uint64x2_t kw = vaddq_u64(k_tbl[r * 16 + i], W[i]);
+            uint64x2_t h_kw = vaddq_u64(h, kw);
+            uint64x2_t e_terms = vaddq_u64(S1_NEON(e), CH_NEON(e, f, g));
+            uint64x2_t T1 = vaddq_u64(h_kw, e_terms);
+            uint64x2_t T2 = vaddq_u64(S0_NEON(a), MAJ_NEON(a, b, c));
+            h = g; g = f; f = e; e = vaddq_u64(d, T1);
+            d = c; c = b; b = a; a = vaddq_u64(T1, T2);
+            if (r < 4) {
+                W[i] = vaddq_u64(vaddq_u64(W[i], W[(i + 9) & 15]),
+                                 vaddq_u64(s0_NEON(W[(i + 1) & 15]), s1_NEON(W[(i + 14) & 15])));
+            }
+        }
+    }
+    out[0] = vaddq_u64(iv[0], a); out[1] = vaddq_u64(iv[1], b);
+    out[2] = vaddq_u64(iv[2], c); out[3] = vaddq_u64(iv[3], d);
+    out[4] = vaddq_u64(iv[4], e); out[5] = vaddq_u64(iv[5], f);
+    out[6] = vaddq_u64(iv[6], g); out[7] = vaddq_u64(iv[7], h);
+}
+
+[[gnu::always_inline]]
+static inline void sha512_padded_block64_neon(const uint64x2_t iv[8], uint64x2_t W[16], uint64x2_t out[8]) {
+    const uint64x2_t C_S1_W15 = vdupq_n_u64(pbkdf2_simd_detail::C_S1_W15_VAL);
+    const uint64x2_t C_S0_W8 = vdupq_n_u64(pbkdf2_simd_detail::C_S0_W8_VAL);
+    const uint64x2_t C_S0_W15 = vdupq_n_u64(pbkdf2_simd_detail::C_S0_W15_VAL);
+    const uint64x2_t C_W8 = vdupq_n_u64(pbkdf2_simd_detail::C_W8_VAL);
+    const uint64x2_t C_W15 = vdupq_n_u64(pbkdf2_simd_detail::C_W15_VAL);
+    const uint64x2_t K_FUSED_8 = vdupq_n_u64(pbkdf2_simd_detail::K_FUSED_8_VAL);
+    const uint64x2_t K_FUSED_15 = vdupq_n_u64(pbkdf2_simd_detail::K_FUSED_15_VAL);
+
+    uint64x2_t a = iv[0], b = iv[1], c = iv[2], d = iv[3], e = iv[4], f = iv[5], g = iv[6], h = iv[7];
+    const uint64x2_t* k_tbl = get_k512_neon();
+
+#define STEP_NEON(k_term, w_val) \
+    do { \
+        uint64x2_t kw = vaddq_u64((k_term), (w_val)); \
+        uint64x2_t h_kw = vaddq_u64(h, kw); \
+        uint64x2_t e_terms = vaddq_u64(S1_NEON(e), CH_NEON(e, f, g)); \
+        uint64x2_t T1 = vaddq_u64(h_kw, e_terms); \
+        uint64x2_t T2 = vaddq_u64(S0_NEON(a), MAJ_NEON(a, b, c)); \
+        h = g; g = f; f = e; e = vaddq_u64(d, T1); \
+        d = c; c = b; b = a; a = vaddq_u64(T1, T2); \
+    } while (0)
+#define STEP_FUSED_NEON(k_fused) \
+    do { \
+        uint64x2_t h_kw = vaddq_u64(h, (k_fused)); \
+        uint64x2_t e_terms = vaddq_u64(S1_NEON(e), CH_NEON(e, f, g)); \
+        uint64x2_t T1 = vaddq_u64(h_kw, e_terms); \
+        uint64x2_t T2 = vaddq_u64(S0_NEON(a), MAJ_NEON(a, b, c)); \
+        h = g; g = f; f = e; e = vaddq_u64(d, T1); \
+        d = c; c = b; b = a; a = vaddq_u64(T1, T2); \
+    } while (0)
+
+    STEP_NEON(k_tbl[0], W[0]); W[0] = vaddq_u64(W[0], s0_NEON(W[1]));
+    STEP_NEON(k_tbl[1], W[1]); W[1] = vaddq_u64(W[1], vaddq_u64(s0_NEON(W[2]), C_S1_W15));
+    STEP_NEON(k_tbl[2], W[2]); W[2] = vaddq_u64(W[2], vaddq_u64(s0_NEON(W[3]), s1_NEON(W[0])));
+    STEP_NEON(k_tbl[3], W[3]); W[3] = vaddq_u64(W[3], vaddq_u64(s0_NEON(W[4]), s1_NEON(W[1])));
+    STEP_NEON(k_tbl[4], W[4]); W[4] = vaddq_u64(W[4], vaddq_u64(s0_NEON(W[5]), s1_NEON(W[2])));
+    STEP_NEON(k_tbl[5], W[5]); W[5] = vaddq_u64(W[5], vaddq_u64(s0_NEON(W[6]), s1_NEON(W[3])));
+    STEP_NEON(k_tbl[6], W[6]); W[6] = vaddq_u64(W[6], vaddq_u64(vaddq_u64(s0_NEON(W[7]), C_W15), s1_NEON(W[4])));
+    STEP_NEON(k_tbl[7], W[7]); W[7] = vaddq_u64(W[7], vaddq_u64(vaddq_u64(C_S0_W8, W[0]), s1_NEON(W[5])));
+
+    STEP_FUSED_NEON(K_FUSED_8); W[8] = vaddq_u64(C_W8, vaddq_u64(W[1], s1_NEON(W[6])));
+    STEP_FUSED_NEON(k_tbl[9]); W[9] = vaddq_u64(W[2], s1_NEON(W[7]));
+    STEP_FUSED_NEON(k_tbl[10]); W[10] = vaddq_u64(W[3], s1_NEON(W[8]));
+    STEP_FUSED_NEON(k_tbl[11]); W[11] = vaddq_u64(W[4], s1_NEON(W[9]));
+    STEP_FUSED_NEON(k_tbl[12]); W[12] = vaddq_u64(W[5], s1_NEON(W[10]));
+    STEP_FUSED_NEON(k_tbl[13]); W[13] = vaddq_u64(W[6], s1_NEON(W[11]));
+    STEP_FUSED_NEON(k_tbl[14]); W[14] = vaddq_u64(C_S0_W15, vaddq_u64(W[7], s1_NEON(W[12])));
+    STEP_FUSED_NEON(K_FUSED_15); W[15] = vaddq_u64(vaddq_u64(C_W15, s0_NEON(W[0])), vaddq_u64(W[8], s1_NEON(W[13])));
+
+#undef STEP_NEON
+#undef STEP_FUSED_NEON
+
+#pragma GCC unroll 4
+    for (int r = 1; r < 5; ++r) {
+#pragma GCC unroll 16
+        for (int i = 0; i < 16; ++i) {
+            uint64x2_t kw = vaddq_u64(k_tbl[r * 16 + i], W[i]);
+            uint64x2_t h_kw = vaddq_u64(h, kw);
+            uint64x2_t e_terms = vaddq_u64(S1_NEON(e), CH_NEON(e, f, g));
+            uint64x2_t T1 = vaddq_u64(h_kw, e_terms);
+            uint64x2_t T2 = vaddq_u64(S0_NEON(a), MAJ_NEON(a, b, c));
+            h = g; g = f; f = e; e = vaddq_u64(d, T1);
+            d = c; c = b; b = a; a = vaddq_u64(T1, T2);
+            if (r < 4) {
+                W[i] = vaddq_u64(vaddq_u64(W[i], W[(i + 9) & 15]),
+                                 vaddq_u64(s0_NEON(W[(i + 1) & 15]), s1_NEON(W[(i + 14) & 15])));
+            }
+        }
+    }
+    out[0] = vaddq_u64(iv[0], a); out[1] = vaddq_u64(iv[1], b);
+    out[2] = vaddq_u64(iv[2], c); out[3] = vaddq_u64(iv[3], d);
+    out[4] = vaddq_u64(iv[4], e); out[5] = vaddq_u64(iv[5], f);
+    out[6] = vaddq_u64(iv[6], g); out[7] = vaddq_u64(iv[7], h);
+}
+
+[[gnu::always_inline]]
+static inline void pbkdf2_2lane_fused_stream_neon(const uint64x2_t ipad_iv[8], const uint64x2_t opad_iv[8],
+                                                  const uint64x2_t initial_digest[8], uint64x2_t T[8], uint32_t iterations) {
+    uint64x2_t W[16];
+#pragma GCC unroll 8
+    for (int i = 0; i < 8; ++i) W[i] = initial_digest[i];
+
+    uint32_t it = 1;
+    for (; it + 4 <= iterations; it += 4) {
+#pragma GCC unroll 4
+        for (int j = 0; j < 4; ++j) {
+            sha512_padded_block64_neon(ipad_iv, W, W);
+            sha512_padded_block64_neon(opad_iv, W, W);
+#pragma GCC unroll 8
+            for (int i = 0; i < 8; ++i) T[i] = veorq_u64(T[i], W[i]);
+        }
+    }
+    for (; it < iterations; ++it) {
+        sha512_padded_block64_neon(ipad_iv, W, W);
+        sha512_padded_block64_neon(opad_iv, W, W);
+#pragma GCC unroll 8
+        for (int i = 0; i < 8; ++i) T[i] = veorq_u64(T[i], W[i]);
+    }
+}
+
+[[gnu::always_inline]]
+static inline void sha512_salt_fastforward_neon(const uint64x2_t iv[8], const uint64_t kw_salt[80], uint64x2_t out[8]) {
+    uint64x2_t a = iv[0], b = iv[1], c = iv[2], d = iv[3], e = iv[4], f = iv[5], g = iv[6], h = iv[7];
+    for (int i = 0; i < 80; ++i) {
+        uint64x2_t kw = vdupq_n_u64(kw_salt[i]);
+        uint64x2_t h_kw = vaddq_u64(h, kw);
+        uint64x2_t e_terms = vaddq_u64(S1_NEON(e), CH_NEON(e, f, g));
+        uint64x2_t T1 = vaddq_u64(h_kw, e_terms);
+        uint64x2_t T2 = vaddq_u64(S0_NEON(a), MAJ_NEON(a, b, c));
+        h = g; g = f; f = e; e = vaddq_u64(d, T1);
+        d = c; c = b; b = a; a = vaddq_u64(T1, T2);
+    }
+    out[0] = vaddq_u64(iv[0], a); out[1] = vaddq_u64(iv[1], b);
+    out[2] = vaddq_u64(iv[2], c); out[3] = vaddq_u64(iv[3], d);
+    out[4] = vaddq_u64(iv[4], e); out[5] = vaddq_u64(iv[5], f);
+    out[6] = vaddq_u64(iv[6], g); out[7] = vaddq_u64(iv[7], h);
+}
+
+inline void pbkdf2_hmac_sha512_4way_neon(const char* p1, size_t l1, const char* p2, size_t l2, const char* p3, size_t l3,
+                                         const char* p4, size_t l4, const uint8_t* salt, size_t salt_len,
+                                         uint32_t iterations, uint8_t out1[64], uint8_t out2[64], uint8_t out3[64],
+                                         uint8_t out4[64], const uint64_t* precomputed_salt_blk64 = nullptr,
+                                         const uint64_t* precomputed_kw_salt = nullptr) {
+    using namespace pbkdf2_simd_detail;
+    const void* passes[4] = {p1, p2, p3, p4};
+    const size_t lens[4] = {l1, l2, l3, l4};
+    alignas(16) uint64_t ipad_all[16][4], opad_all[16][4];
+    prepare_pads<4>(passes, lens, ipad_all, opad_all);
+
+    uint64x2_t ipad_iv_lo[8], ipad_iv_hi[8], opad_iv_lo[8], opad_iv_hi[8], W[16];
+    for (int i = 0; i < 16; ++i) W[i] = vld1q_u64(&ipad_all[i][0]);
+    sha512_block64_neon(get_iv_neon(), W, ipad_iv_lo);
+    for (int i = 0; i < 16; ++i) W[i] = vld1q_u64(&ipad_all[i][2]);
+    sha512_block64_neon(get_iv_neon(), W, ipad_iv_hi);
+    for (int i = 0; i < 16; ++i) W[i] = vld1q_u64(&opad_all[i][0]);
+    sha512_block64_neon(get_iv_neon(), W, opad_iv_lo);
+    for (int i = 0; i < 16; ++i) W[i] = vld1q_u64(&opad_all[i][2]);
+    sha512_block64_neon(get_iv_neon(), W, opad_iv_hi);
+
+    uint64x2_t s_lo[8], s_hi[8];
+    if (precomputed_kw_salt) {
+        sha512_salt_fastforward_neon(ipad_iv_lo, precomputed_kw_salt, s_lo);
+        sha512_salt_fastforward_neon(ipad_iv_hi, precomputed_kw_salt, s_hi);
+    } else {
+        uint64_t salt_W[16];
+        if (precomputed_salt_blk64) for (int i = 0; i < 16; ++i) salt_W[i] = precomputed_salt_blk64[i];
+        else (void)prepare_salt_W(salt, salt_len, salt_W);
+        for (int i = 0; i < 16; ++i) W[i] = vdupq_n_u64(salt_W[i]);
+        sha512_block64_neon(ipad_iv_lo, W, s_lo);
+        for (int i = 0; i < 16; ++i) W[i] = vdupq_n_u64(salt_W[i]);
+        sha512_block64_neon(ipad_iv_hi, W, s_hi);
+    }
+
+    uint64x2_t T_lo[8], T_hi[8];
+    for (int i = 0; i < 8; ++i) W[i] = s_lo[i];
+    sha512_padded_block64_neon(opad_iv_lo, W, T_lo);
+    for (int i = 0; i < 8; ++i) W[i] = s_hi[i];
+    sha512_padded_block64_neon(opad_iv_hi, W, T_hi);
+
+    pbkdf2_2lane_fused_stream_neon(ipad_iv_lo, opad_iv_lo, T_lo, T_lo, iterations);
+    pbkdf2_2lane_fused_stream_neon(ipad_iv_hi, opad_iv_hi, T_hi, T_hi, iterations);
+
+    uint8_t* outs[4] = {out1, out2, out3, out4};
+    for (int i = 0; i < 8; ++i) {
+        alignas(16) uint64_t lo[2], hi[2];
+        vst1q_u64(lo, vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(T_lo[i]))));
+        vst1q_u64(hi, vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(T_hi[i]))));
+        for (int l = 0; l < 2; ++l) {
+            std::memcpy(outs[l] + i * 8, &lo[l], 8);
+            std::memcpy(outs[2 + l] + i * 8, &hi[l], 8);
+        }
+    }
+}
+
+#undef ROR64x2
+#undef CH_NEON
+#undef MAJ_NEON
+#undef S0_NEON
+#undef S1_NEON
+#undef s0_NEON
+#undef s1_NEON
+
+#endif // ARM
