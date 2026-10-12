@@ -255,52 +255,71 @@ class SHA512 {
     static __attribute__((target("arch=armv8.2-a+sha3"))) void compress_native_arm64(
         std::array<word, 8>& state, const word* input) noexcept {
 #endif
-        alignas(16) word w[16];
-        for (unsigned i = 0; i < 16; ++i)
-            w[i] = input[i];
+        // 1. Carrega as 16 palavras da mensagem inicial diretamente em 8 registadores NEON
+        uint64x2_t w0 = vld1q_u64(input + 0);
+        uint64x2_t w1 = vld1q_u64(input + 2);
+        uint64x2_t w2 = vld1q_u64(input + 4);
+        uint64x2_t w3 = vld1q_u64(input + 6);
+        uint64x2_t w4 = vld1q_u64(input + 8);
+        uint64x2_t w5 = vld1q_u64(input + 10);
+        uint64x2_t w6 = vld1q_u64(input + 12);
+        uint64x2_t w7 = vld1q_u64(input + 14);
 
+        // 2. Carrega o estado inicial do hash
         uint64x2_t q0 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data()));
         uint64x2_t q1 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 2));
         uint64x2_t q2 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 4));
         uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 6));
+
         const uint64x2_t q0_initial = q0;
         const uint64x2_t q1_initial = q1;
         const uint64x2_t q2_initial = q2;
         const uint64x2_t q3_initial = q3;
 
-        uint64x2_t* a0 = &q0;
-        uint64x2_t* a1 = &q1;
-        uint64x2_t* a2 = &q2;
-        uint64x2_t* a3 = &q3;
+        // Macro para processar duas rounds do SHA-512 e rodar os registos a0-a3
+        #define SHA512_ROUND_ARM(wa, wb, k_idx) \
+            do { \
+                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(&K_[k_idx])); \
+                uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
+                v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
+                uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
+                q1 = vaddq_u64(q1, v); \
+                q0 = q1; q1 = q2; q2 = q3; q3 = next_q3; \
+            } while (0)
 
-        for (unsigned t = 0; t < 80; t += 2) {
-            alignas(16) word wk[2];
-            for (unsigned j = 0; j < 2; ++j) {
-                const unsigned r = t + j;
-                const unsigned i = r & 15u;
-                if (r >= 16) {
-                    w[i] += small0(w[(i + 1) & 15u]) + w[(i + 9) & 15u] + small1(w[(i + 14) & 15u]);
-                }
-                wk[j] = w[i] + K_[r];
-            }
+        // Macro para expandir a mensagem (Message Schedule) para as próximas rounds
+        #define SHA512_SU_ARM(wa, wb, wc, wd, we) \
+            do { \
+                wa = vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1)); \
+            } while (0)
 
-            uint64x2_t v = vld1q_u64(reinterpret_cast<const uint64_t*>(wk));
-            v = vaddq_u64(vextq_u64(v, v, 1), *a3);
-            v = vsha512hq_u64(v, vextq_u64(*a2, *a3, 1), vextq_u64(*a1, *a2, 1));
-            *a3 = vsha512h2q_u64(v, *a1, *a0);
-            *a1 = vaddq_u64(*a1, v);
+        // Rounds 0-15 (Mensagem original sem expansão)
+        SHA512_ROUND_ARM(w0, w1, 0);  SHA512_ROUND_ARM(w1, w2, 2);
+        SHA512_ROUND_ARM(w2, w3, 4);  SHA512_ROUND_ARM(w3, w4, 6);
+        SHA512_ROUND_ARM(w4, w5, 8);  SHA512_ROUND_ARM(w5, w6, 10);
+        SHA512_ROUND_ARM(w6, w7, 12); SHA512_ROUND_ARM(w7, w0, 14);
 
-            uint64x2_t* previous_a0 = a0;
-            a0 = a3;
-            a3 = a2;
-            a2 = a1;
-            a1 = previous_a0;
+        // Rounds 16-79 (Expansão da mensagem entremeada com as rounds do hash)
+        for (unsigned t = 16; t < 80; t += 16) {
+            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, w1, t + 0);
+            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, w2, t + 2);
+            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, w3, t + 4);
+            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, w4, t + 6);
+            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, w5, t + 8);
+            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, w6, t + 10);
+            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, w7, t + 12);
+            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, w0, t + 14);
         }
 
+        #undef SHA512_ROUND_ARM
+        #undef SHA512_SU_ARM
+
+        // 3. Adiciona o estado final ao estado inicial (feed-forward)
         q0 = vaddq_u64(q0, q0_initial);
         q1 = vaddq_u64(q1, q1_initial);
         q2 = vaddq_u64(q2, q2_initial);
         q3 = vaddq_u64(q3, q3_initial);
+
         vst1q_u64(reinterpret_cast<uint64_t*>(state.data()), q0);
         vst1q_u64(reinterpret_cast<uint64_t*>(state.data() + 2), q1);
         vst1q_u64(reinterpret_cast<uint64_t*>(state.data() + 4), q2);
