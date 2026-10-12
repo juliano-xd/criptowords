@@ -190,16 +190,16 @@ class SimdBatchProcessor : public IBatchProcessor {
 #elif defined(__aarch64__) || defined(__arm__)
         // ARM64 / NEON: Pipeline 4-way acionado!
         if (count == BATCH_SIZE) {
-            pbkdf2_hmac_sha512_4way_neon(
-                work.pw.data() + 0 * PW_SLOT_SIZE, work.pw_len[0],
-                work.pw.data() + 1 * PW_SLOT_SIZE, work.pw_len[1],
-                work.pw.data() + 2 * PW_SLOT_SIZE, work.pw_len[2],
-                work.pw.data() + 3 * PW_SLOT_SIZE, work.pw_len[3],
-                salt.buf.data(), salt.len, rounds,
-                work.seed.data() + 0 * 64, work.seed.data() + 1 * 64,
-                work.seed.data() + 2 * 64, work.seed.data() + 3 * 64,
-                salt.block64.data(), salt.kw_salt.data());
-            return;
+            // pbkdf2_hmac_sha512_4way_neon(
+            //     work.pw.data() + 0 * PW_SLOT_SIZE, work.pw_len[0],
+            //     work.pw.data() + 1 * PW_SLOT_SIZE, work.pw_len[1],
+            //     work.pw.data() + 2 * PW_SLOT_SIZE, work.pw_len[2],
+            //     work.pw.data() + 3 * PW_SLOT_SIZE, work.pw_len[3],
+            //     salt.buf.data(), salt.len, rounds,
+            //     work.seed.data() + 0 * 64, work.seed.data() + 1 * 64,
+            //     work.seed.data() + 2 * 64, work.seed.data() + 3 * 64,
+            //     salt.block64.data(), salt.kw_salt.data());
+            // return;
         }
 #endif
         // Sobra do último lote OU caminho escalar completo.

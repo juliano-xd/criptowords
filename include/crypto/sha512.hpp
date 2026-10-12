@@ -248,38 +248,31 @@ class SHA512 {
 #endif
 
 #if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
+
 #if defined(__clang__)
     static __attribute__((target("sha3"))) void compress_native_arm64(
-        std::array<word, 8>& state, const word* input) noexcept {
 #else
     static __attribute__((target("arch=armv8.2-a+sha3"))) void compress_native_arm64(
-        std::array<word, 8>& state, const word* input) noexcept {
 #endif
-        // 1. Carrega as 16 palavras da mensagem inicial diretamente em 8 registadores NEON
-        uint64x2_t w0 = vld1q_u64(input + 0);
-        uint64x2_t w1 = vld1q_u64(input + 2);
-        uint64x2_t w2 = vld1q_u64(input + 4);
-        uint64x2_t w3 = vld1q_u64(input + 6);
-        uint64x2_t w4 = vld1q_u64(input + 8);
-        uint64x2_t w5 = vld1q_u64(input + 10);
-        uint64x2_t w6 = vld1q_u64(input + 12);
-        uint64x2_t w7 = vld1q_u64(input + 14);
+        std::array<word, 8>& state, const word* input) noexcept {
+        uint64x2_t w0 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 0));
+        uint64x2_t w1 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 2));
+        uint64x2_t w2 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 4));
+        uint64x2_t w3 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 6));
+        uint64x2_t w4 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 8));
+        uint64x2_t w5 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 10));
+        uint64x2_t w6 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 12));
+        uint64x2_t w7 = vld1q_u64(reinterpret_cast<const uint64_t*>(input + 14));
 
-        // 2. Carrega o estado inicial do hash
         uint64x2_t q0 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data()));
         uint64x2_t q1 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 2));
         uint64x2_t q2 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 4));
         uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 6));
+        const uint64x2_t q0_initial = q0, q1_initial = q1, q2_initial = q2, q3_initial = q3;
 
-        const uint64x2_t q0_initial = q0;
-        const uint64x2_t q1_initial = q1;
-        const uint64x2_t q2_initial = q2;
-        const uint64x2_t q3_initial = q3;
-
-        // Macro para processar duas rounds do SHA-512 e rodar os registos a0-a3
-        #define SHA512_ROUND_ARM(wa, wb, k_idx) \
+        #define SHA512_ROUND_ARM(wa, k_idx) \
             do { \
-                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(&K_[k_idx])); \
+                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(&K_[k_idx]))); \
                 uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
                 v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
                 uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
@@ -287,34 +280,29 @@ class SHA512 {
                 q0 = q1; q1 = q2; q2 = q3; q3 = next_q3; \
             } while (0)
 
-        // Macro para expandir a mensagem (Message Schedule) para as próximas rounds
         #define SHA512_SU_ARM(wa, wb, wc, wd, we) \
             do { \
                 wa = vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1)); \
             } while (0)
 
-        // Rounds 0-15 (Mensagem original sem expansão)
-        SHA512_ROUND_ARM(w0, w1, 0);  SHA512_ROUND_ARM(w1, w2, 2);
-        SHA512_ROUND_ARM(w2, w3, 4);  SHA512_ROUND_ARM(w3, w4, 6);
-        SHA512_ROUND_ARM(w4, w5, 8);  SHA512_ROUND_ARM(w5, w6, 10);
-        SHA512_ROUND_ARM(w6, w7, 12); SHA512_ROUND_ARM(w7, w0, 14);
+        SHA512_ROUND_ARM(w0, 0);  SHA512_ROUND_ARM(w1, 2);
+        SHA512_ROUND_ARM(w2, 4);  SHA512_ROUND_ARM(w3, 6);
+        SHA512_ROUND_ARM(w4, 8);  SHA512_ROUND_ARM(w5, 10);
+        SHA512_ROUND_ARM(w6, 12); SHA512_ROUND_ARM(w7, 14);
 
-        // Rounds 16-79 (Expansão da mensagem entremeada com as rounds do hash)
         for (unsigned t = 16; t < 80; t += 16) {
-            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, w1, t + 0);
-            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, w2, t + 2);
-            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, w3, t + 4);
-            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, w4, t + 6);
-            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, w5, t + 8);
-            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, w6, t + 10);
-            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, w7, t + 12);
-            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, w0, t + 14);
+            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, t + 0);
+            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, t + 2);
+            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, t + 4);
+            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, t + 6);
+            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, t + 8);
+            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, t + 10);
+            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, t + 12);
+            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, t + 14);
         }
-
         #undef SHA512_ROUND_ARM
         #undef SHA512_SU_ARM
 
-        // 3. Adiciona o estado final ao estado inicial (feed-forward)
         q0 = vaddq_u64(q0, q0_initial);
         q1 = vaddq_u64(q1, q1_initial);
         q2 = vaddq_u64(q2, q2_initial);
@@ -325,39 +313,35 @@ class SHA512 {
         vst1q_u64(reinterpret_cast<uint64_t*>(state.data() + 4), q2);
         vst1q_u64(reinterpret_cast<uint64_t*>(state.data() + 6), q3);
     }
-#endif
 
-#if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
 #if defined(__clang__)
-    static __attribute__((target("sha3"))) void compress_native_arm64_pad64(
+    static __attribute__((target("sha3"))) void compress_padded_block64_arm64(
 #else
-    static __attribute__((target("arch=armv8.2-a+sha3"))) void compress_native_arm64_pad64(
+    static __attribute__((target("arch=armv8.2-a+sha3"))) void compress_padded_block64_arm64(
 #endif
-        const word key_words[8], word out[8], word PAD) noexcept {
-
-        uint64x2_t q0 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data()));
-        uint64x2_t q1 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 2));
-        uint64x2_t q2 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 4));
-        uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 6));
+        const word iv[8], const word W[16], word out[8]) noexcept {
+        uint64x2_t q0 = vld1q_u64(reinterpret_cast<const uint64_t*>(iv));
+        uint64x2_t q1 = vld1q_u64(reinterpret_cast<const uint64_t*>(iv + 2));
+        uint64x2_t q2 = vld1q_u64(reinterpret_cast<const uint64_t*>(iv + 4));
+        uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(iv + 6));
         const uint64x2_t q0_initial = q0, q1_initial = q1, q2_initial = q2, q3_initial = q3;
 
-        uint64x2_t pad2 = vdupq_n_u64(PAD);
+        // O PBKDF2 injeta 64 bytes úteis. O hardware funda logo o padding sem tocar na memória.
+        uint64x2_t w0 = vld1q_u64(reinterpret_cast<const uint64_t*>(W + 0));
+        uint64x2_t w1 = vld1q_u64(reinterpret_cast<const uint64_t*>(W + 2));
+        uint64x2_t w2 = vld1q_u64(reinterpret_cast<const uint64_t*>(W + 4));
+        uint64x2_t w3 = vld1q_u64(reinterpret_cast<const uint64_t*>(W + 6));
 
-        uint64x2_t w0 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words)), pad2);
-        uint64x2_t w1 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words + 2)), pad2);
-        uint64x2_t w2 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words + 4)), pad2);
-        uint64x2_t w3 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words + 6)), pad2);
-
-        alignas(16) uint64_t buf4[2] = {0x8000000000000000ULL, PAD};
+        alignas(16) uint64_t buf4[2] = {0x8000000000000000ULL, 0};
         uint64x2_t w4 = vld1q_u64(buf4);
-        uint64x2_t w5 = pad2;
-        uint64x2_t w6 = pad2;
-        alignas(16) uint64_t buf7[2] = {PAD, 1024ULL};
+        uint64x2_t w5 = vdupq_n_u64(0);
+        uint64x2_t w6 = vdupq_n_u64(0);
+        alignas(16) uint64_t buf7[2] = {0, 1536ULL}; // 128 bytes iPad + 64 bytes texto = 1536 bits
         uint64x2_t w7 = vld1q_u64(buf7);
 
         #define SHA512_ROUND_ARM(wa, k_idx) \
             do { \
-                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(&K_[k_idx])); \
+                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(&K_[k_idx]))); \
                 uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
                 v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
                 uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
@@ -385,79 +369,6 @@ class SHA512 {
             SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, t + 12);
             SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, t + 14);
         }
-
-        #undef SHA512_ROUND_ARM
-        #undef SHA512_SU_ARM
-
-        q0 = vaddq_u64(q0, q0_initial);
-        q1 = vaddq_u64(q1, q1_initial);
-        q2 = vaddq_u64(q2, q2_initial);
-        q3 = vaddq_u64(q3, q3_initial);
-
-        vst1q_u64(reinterpret_cast<uint64_t*>(out), q0);
-        vst1q_u64(reinterpret_cast<uint64_t*>(out + 2), q1);
-        vst1q_u64(reinterpret_cast<uint64_t*>(out + 4), q2);
-        vst1q_u64(reinterpret_cast<uint64_t*>(out + 6), q3);
-    }
-
-#if defined(__clang__)
-    static __attribute__((target("sha3"))) void compress_native_arm64_pad32(
-#else
-    static __attribute__((target("arch=armv8.2-a+sha3"))) void compress_native_arm64_pad32(
-#endif
-        const word key_words[4], word out[8], word PAD) noexcept {
-
-        uint64x2_t q0 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data()));
-        uint64x2_t q1 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 2));
-        uint64x2_t q2 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 4));
-        uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(IV_.data() + 6));
-        const uint64x2_t q0_initial = q0, q1_initial = q1, q2_initial = q2, q3_initial = q3;
-
-        uint64x2_t pad2 = vdupq_n_u64(PAD);
-
-        uint64x2_t w0 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words)), pad2);
-        uint64x2_t w1 = veorq_u64(vld1q_u64(reinterpret_cast<const uint64_t*>(key_words + 2)), pad2);
-
-        alignas(16) uint64_t buf2[2] = {0x8000000000000000ULL, PAD};
-        uint64x2_t w2 = vld1q_u64(buf2);
-        uint64x2_t w3 = pad2;
-        uint64x2_t w4 = pad2;
-        uint64x2_t w5 = pad2;
-        uint64x2_t w6 = pad2;
-        alignas(16) uint64_t buf7[2] = {PAD, 768ULL};
-        uint64x2_t w7 = vld1q_u64(buf7);
-
-        #define SHA512_ROUND_ARM(wa, k_idx) \
-            do { \
-                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(&K_[k_idx])); \
-                uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
-                v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
-                uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
-                q1 = vaddq_u64(q1, v); \
-                q0 = q1; q1 = q2; q2 = q3; q3 = next_q3; \
-            } while (0)
-
-        #define SHA512_SU_ARM(wa, wb, wc, wd, we) \
-            do { \
-                wa = vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1)); \
-            } while (0)
-
-        SHA512_ROUND_ARM(w0, 0);  SHA512_ROUND_ARM(w1, 2);
-        SHA512_ROUND_ARM(w2, 4);  SHA512_ROUND_ARM(w3, 6);
-        SHA512_ROUND_ARM(w4, 8);  SHA512_ROUND_ARM(w5, 10);
-        SHA512_ROUND_ARM(w6, 12); SHA512_ROUND_ARM(w7, 14);
-
-        for (unsigned t = 16; t < 80; t += 16) {
-            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, t + 0);
-            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, t + 2);
-            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, t + 4);
-            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, t + 6);
-            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, t + 8);
-            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, t + 10);
-            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, t + 12);
-            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, t + 14);
-        }
-
         #undef SHA512_ROUND_ARM
         #undef SHA512_SU_ARM
 
@@ -551,20 +462,12 @@ class SHA512 {
     }
 
     static void compress_padded_block64(const word iv[8], word W[16], word out[8]) noexcept {
-        // if (native_compressor() != nullptr) {
-        //     std::array<word, 16> words{};
-        //     for (unsigned i = 0; i < 8; ++i)
-        //         words[i] = W[i];
-        //     words[8] = 0x8000000000000000ULL;
-        //     words[15] = 512;
-        //     std::array<word, 8> state;
-        //     for (unsigned i = 0; i < 8; ++i)
-        //         state[i] = iv[i];
-        //     compress_words(state, words.data());
-        //     for (unsigned i = 0; i < 8; ++i)
-        //         out[i] = state[i];
-        //     return;
-        // }
+#if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
+        if (native_compressor() != nullptr) {
+            compress_padded_block64_arm64(iv, W, out);
+            return;
+        }
+#endif
         constexpr word K_FUSED_8 = 0xd807aa98a3030242ULL + 0x8000000000000000ULL;
         constexpr word K_FUSED_15 = 0xc19bf174cf692694ULL + 0x0000000000000600ULL;
         constexpr word C_S1_W15 = 0x00c0000000003018ULL;
