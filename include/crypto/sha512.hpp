@@ -17,18 +17,7 @@
 #endif
 
 #if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
-// Alguns compiladores só expõem esses intrinsics quando o recurso está ligado
-// globalmente. A função acelerada abaixo tem target próprio, então habilitamos
-// as declarações somente durante a inclusão do header e restauramos a macro.
-#if !defined(__ARM_FEATURE_SHA512)
-#define CRYPTO_SHA512_DEFINED_ARM_FEATURE_SHA512
-#define __ARM_FEATURE_SHA512 1
-#endif
 #include <arm_neon.h>
-#if defined(CRYPTO_SHA512_DEFINED_ARM_FEATURE_SHA512)
-#undef __ARM_FEATURE_SHA512
-#undef CRYPTO_SHA512_DEFINED_ARM_FEATURE_SHA512
-#endif
 #if defined(__ANDROID__)
 #if !defined(__ANDROID_API__) || (__ANDROID_API__ >= 18)
 #include <sys/auxv.h>
@@ -111,23 +100,23 @@ class SHA512 {
         std::memcpy(p, &v, sizeof(v));
     }
 
-    static word ch(word x, word y, word z) noexcept { return z ^ (x & (y ^ z)); }
+    static constexpr word ch(word x, word y, word z) noexcept { return z ^ (x & (y ^ z)); }
 
-    static word maj(word x, word y, word z) noexcept { return (x & y) | (z & (x | y)); }
+    static constexpr word maj(word x, word y, word z) noexcept { return (x & y) | (z & (x | y)); }
 
-    static word big0(word x) noexcept {
+    static constexpr word big0(word x) noexcept {
         return std::rotr(x, 28) ^ std::rotr(x, 34) ^ std::rotr(x, 39);
     }
 
-    static word big1(word x) noexcept {
+    static constexpr word big1(word x) noexcept {
         return std::rotr(x, 14) ^ std::rotr(x, 18) ^ std::rotr(x, 41);
     }
 
-    static word small0(word x) noexcept { return std::rotr(x, 1) ^ std::rotr(x, 8) ^ (x >> 7); }
+    static constexpr word small0(word x) noexcept { return std::rotr(x, 1) ^ std::rotr(x, 8) ^ (x >> 7); }
 
-    static word small1(word x) noexcept { return std::rotr(x, 19) ^ std::rotr(x, 61) ^ (x >> 6); }
+    static constexpr word small1(word x) noexcept { return std::rotr(x, 19) ^ std::rotr(x, 61) ^ (x >> 6); }
 
-    static void round(word& a, word& b, word& c, word& d, word& e, word& f, word& g, word& h,
+    static constexpr void round(word& a, word& b, word& c, word& d, word& e, word& f, word& g, word& h,
                       word k, word w) noexcept {
         const word kw = k + w;
         const word h_kw = h + kw;
@@ -147,31 +136,59 @@ class SHA512 {
 
     using NativeCompress = void (*)(std::array<word, 8>&, const word*) noexcept;
 
-#if (defined(__x86_64__) || defined(__i386__)) && ((defined(__clang__) && __clang_major__ >= 17) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14))
-    static bool detect_x86_sha512() noexcept {
-        if (__get_cpuid_max(0, nullptr) < 7)
-            return false;
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+    struct X86Capabilities {
+        bool ssse3 = false;
+        bool sse41 = false;
+        bool avx2 = false;
+        bool avx512f = false;
+        bool avx512vl = false;
+        bool sha512 = false;
+    };
+
+    static X86Capabilities detect_x86_capabilities() noexcept {
+        X86Capabilities result{};
+        if (__get_cpuid_max(0, nullptr) < 1)
+            return result;
 
         unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
         __cpuid_count(1, 0, eax, ebx, ecx, edx);
+        result.ssse3 = (ecx & (1u << 9)) != 0;
+        result.sse41 = (ecx & (1u << 19)) != 0;
+
         constexpr unsigned osxsave = 1u << 27;
         constexpr unsigned avx = 1u << 28;
-        if ((ecx & (osxsave | avx)) != (osxsave | avx))
-            return false;
+        if ((ecx & (osxsave | avx)) != (osxsave | avx) || __get_cpuid_max(0, nullptr) < 7)
+            return result;
 
         std::uint32_t xcr0_lo = 0, xcr0_hi = 0;
         __asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
         const std::uint64_t xcr0 = (static_cast<std::uint64_t>(xcr0_hi) << 32) | xcr0_lo;
-        if ((xcr0 & 0x6u) != 0x6u) // O sistema operacional deve salvar XMM/YMM.
-            return false;
+        if ((xcr0 & 0x6u) != 0x6u)
+            return result;
 
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
-        if (eax < 1 || (ebx & (1u << 5)) == 0) // Subfolha 7.1 e AVX2.
-            return false;
+        const unsigned max_subleaf = eax;
+        result.avx2 = (ebx & (1u << 5)) != 0;
+        const bool avx512_os_state = (xcr0 & 0xE6u) == 0xE6u;
+        result.avx512f = avx512_os_state && (ebx & (1u << 16)) != 0;
+        result.avx512vl = avx512_os_state && (ebx & (1u << 31)) != 0;
 
-        __cpuid_count(7, 1, eax, ebx, ecx, edx);
-        return (eax & 1u) != 0; // CPUID.(7,1):EAX[0] = SHA512.
+        if (result.avx2 && max_subleaf >= 1) {
+            __cpuid_count(7, 1, eax, ebx, ecx, edx);
+            result.sha512 = (eax & 1u) != 0;
+        }
+        return result;
     }
+
+    static X86Capabilities x86_capabilities() noexcept {
+        static const X86Capabilities detected = detect_x86_capabilities();
+        return detected;
+    }
+#endif
+
+#if (defined(__x86_64__) || defined(__i386__)) && ((defined(__clang__) && __clang_major__ >= 17) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14))
+    static bool detect_x86_sha512() noexcept { return x86_capabilities().sha512; }
 #endif
 
 #if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
@@ -270,38 +287,37 @@ class SHA512 {
         uint64x2_t q3 = vld1q_u64(reinterpret_cast<const uint64_t*>(state.data() + 6));
         const uint64x2_t q0_initial = q0, q1_initial = q1, q2_initial = q2, q3_initial = q3;
 
-        #define SHA512_ROUND_ARM(wa, k_idx) \
-            do { \
-                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(&K_[k_idx]))); \
-                uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
-                v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
-                uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
-                q1 = vaddq_u64(q1, v); \
-                q0 = q1; q1 = q2; q2 = q3; q3 = next_q3; \
-            } while (0)
+        auto round_arm = [&](uint64x2_t wa, unsigned k_idx) __attribute__((target("sha3"))) noexcept {
+            const auto kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(K_.data() + k_idx)));
+            auto v = vaddq_u64(vextq_u64(kw, kw, 1), q3);
+            v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1));
+            const auto next_q3 = vsha512h2q_u64(v, q1, q0);
+            q1 = vaddq_u64(q1, v);
+            q0 = q1;
+            q1 = q2;
+            q2 = q3;
+            q3 = next_q3;
+        };
+        auto schedule_arm = [&](uint64x2_t wa, uint64x2_t wb, uint64x2_t wc,
+                               uint64x2_t wd, uint64x2_t we) __attribute__((target("sha3"))) noexcept {
+            return vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1));
+        };
 
-        #define SHA512_SU_ARM(wa, wb, wc, wd, we) \
-            do { \
-                wa = vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1)); \
-            } while (0)
-
-        SHA512_ROUND_ARM(w0, 0);  SHA512_ROUND_ARM(w1, 2);
-        SHA512_ROUND_ARM(w2, 4);  SHA512_ROUND_ARM(w3, 6);
-        SHA512_ROUND_ARM(w4, 8);  SHA512_ROUND_ARM(w5, 10);
-        SHA512_ROUND_ARM(w6, 12); SHA512_ROUND_ARM(w7, 14);
+        round_arm(w0, 0);  round_arm(w1, 2);
+        round_arm(w2, 4);  round_arm(w3, 6);
+        round_arm(w4, 8);  round_arm(w5, 10);
+        round_arm(w6, 12); round_arm(w7, 14);
 
         for (unsigned t = 16; t < 80; t += 16) {
-            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, t + 0);
-            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, t + 2);
-            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, t + 4);
-            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, t + 6);
-            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, t + 8);
-            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, t + 10);
-            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, t + 12);
-            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, t + 14);
+            w0 = schedule_arm(w0, w1, w7, w4, w5); round_arm(w0, t + 0);
+            w1 = schedule_arm(w1, w2, w0, w5, w6); round_arm(w1, t + 2);
+            w2 = schedule_arm(w2, w3, w1, w6, w7); round_arm(w2, t + 4);
+            w3 = schedule_arm(w3, w4, w2, w7, w0); round_arm(w3, t + 6);
+            w4 = schedule_arm(w4, w5, w3, w0, w1); round_arm(w4, t + 8);
+            w5 = schedule_arm(w5, w6, w4, w1, w2); round_arm(w5, t + 10);
+            w6 = schedule_arm(w6, w7, w5, w2, w3); round_arm(w6, t + 12);
+            w7 = schedule_arm(w7, w0, w6, w3, w4); round_arm(w7, t + 14);
         }
-        #undef SHA512_ROUND_ARM
-        #undef SHA512_SU_ARM
 
         q0 = vaddq_u64(q0, q0_initial);
         q1 = vaddq_u64(q1, q1_initial);
@@ -339,38 +355,37 @@ class SHA512 {
         alignas(16) uint64_t buf7[2] = {0, 1536ULL}; // 128 bytes iPad + 64 bytes texto = 1536 bits
         uint64x2_t w7 = vld1q_u64(buf7);
 
-        #define SHA512_ROUND_ARM(wa, k_idx) \
-            do { \
-                uint64x2_t kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(&K_[k_idx]))); \
-                uint64x2_t v = vaddq_u64(vextq_u64(kw, kw, 1), q3); \
-                v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1)); \
-                uint64x2_t next_q3 = vsha512h2q_u64(v, q1, q0); \
-                q1 = vaddq_u64(q1, v); \
-                q0 = q1; q1 = q2; q2 = q3; q3 = next_q3; \
-            } while (0)
+        auto round_arm = [&](uint64x2_t wa, unsigned k_idx) __attribute__((target("sha3"))) noexcept {
+            const auto kw = vaddq_u64(wa, vld1q_u64(reinterpret_cast<const uint64_t*>(K_.data() + k_idx)));
+            auto v = vaddq_u64(vextq_u64(kw, kw, 1), q3);
+            v = vsha512hq_u64(v, vextq_u64(q2, q3, 1), vextq_u64(q1, q2, 1));
+            const auto next_q3 = vsha512h2q_u64(v, q1, q0);
+            q1 = vaddq_u64(q1, v);
+            q0 = q1;
+            q1 = q2;
+            q2 = q3;
+            q3 = next_q3;
+        };
+        auto schedule_arm = [&](uint64x2_t wa, uint64x2_t wb, uint64x2_t wc,
+                               uint64x2_t wd, uint64x2_t we) __attribute__((target("sha3"))) noexcept {
+            return vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1));
+        };
 
-        #define SHA512_SU_ARM(wa, wb, wc, wd, we) \
-            do { \
-                wa = vsha512su1q_u64(vsha512su0q_u64(wa, wb), wc, vextq_u64(wd, we, 1)); \
-            } while (0)
-
-        SHA512_ROUND_ARM(w0, 0);  SHA512_ROUND_ARM(w1, 2);
-        SHA512_ROUND_ARM(w2, 4);  SHA512_ROUND_ARM(w3, 6);
-        SHA512_ROUND_ARM(w4, 8);  SHA512_ROUND_ARM(w5, 10);
-        SHA512_ROUND_ARM(w6, 12); SHA512_ROUND_ARM(w7, 14);
+        round_arm(w0, 0);  round_arm(w1, 2);
+        round_arm(w2, 4);  round_arm(w3, 6);
+        round_arm(w4, 8);  round_arm(w5, 10);
+        round_arm(w6, 12); round_arm(w7, 14);
 
         for (unsigned t = 16; t < 80; t += 16) {
-            SHA512_SU_ARM(w0, w1, w7, w4, w5); SHA512_ROUND_ARM(w0, t + 0);
-            SHA512_SU_ARM(w1, w2, w0, w5, w6); SHA512_ROUND_ARM(w1, t + 2);
-            SHA512_SU_ARM(w2, w3, w1, w6, w7); SHA512_ROUND_ARM(w2, t + 4);
-            SHA512_SU_ARM(w3, w4, w2, w7, w0); SHA512_ROUND_ARM(w3, t + 6);
-            SHA512_SU_ARM(w4, w5, w3, w0, w1); SHA512_ROUND_ARM(w4, t + 8);
-            SHA512_SU_ARM(w5, w6, w4, w1, w2); SHA512_ROUND_ARM(w5, t + 10);
-            SHA512_SU_ARM(w6, w7, w5, w2, w3); SHA512_ROUND_ARM(w6, t + 12);
-            SHA512_SU_ARM(w7, w0, w6, w3, w4); SHA512_ROUND_ARM(w7, t + 14);
+            w0 = schedule_arm(w0, w1, w7, w4, w5); round_arm(w0, t + 0);
+            w1 = schedule_arm(w1, w2, w0, w5, w6); round_arm(w1, t + 2);
+            w2 = schedule_arm(w2, w3, w1, w6, w7); round_arm(w2, t + 4);
+            w3 = schedule_arm(w3, w4, w2, w7, w0); round_arm(w3, t + 6);
+            w4 = schedule_arm(w4, w5, w3, w0, w1); round_arm(w4, t + 8);
+            w5 = schedule_arm(w5, w6, w4, w1, w2); round_arm(w5, t + 10);
+            w6 = schedule_arm(w6, w7, w5, w2, w3); round_arm(w6, t + 12);
+            w7 = schedule_arm(w7, w0, w6, w3, w4); round_arm(w7, t + 14);
         }
-        #undef SHA512_ROUND_ARM
-        #undef SHA512_SU_ARM
 
         q0 = vaddq_u64(q0, q0_initial);
         q1 = vaddq_u64(q1, q1_initial);
@@ -398,7 +413,7 @@ class SHA512 {
         return selected;
     }
 
-    static void compress_software_words(std::array<word, 8>& state, const word* input) noexcept {
+    static constexpr void compress_software_words(std::array<word, 8>& state, const word* input) noexcept {
         alignas(64) word w[16];
         for (unsigned i = 0; i < 16; ++i)
             w[i] = input[i];
@@ -625,12 +640,18 @@ class SHA512 {
 
     template <word PAD>
     static void compress_pad128_32bytekey(const word key_words[4], word out[8]) noexcept {
-#if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
         if (native_compressor() != nullptr) {
-            compress_native_arm64_pad32(key_words, out, PAD);
+            alignas(64) std::array<word, 16> words;
+            words.fill(PAD);
+            for (unsigned i = 0; i < 4; ++i)
+                words[i] = key_words[i] ^ PAD;
+
+            auto state = IV_;
+            compress_words(state, words.data());
+            for (unsigned i = 0; i < 8; ++i)
+                out[i] = state[i];
             return;
         }
-#endif
         constexpr word C_S0_PAD = (std::rotr(PAD, 1) ^ std::rotr(PAD, 8) ^ (PAD >> 7));
         constexpr word C_S1_PAD = (std::rotr(PAD, 19) ^ std::rotr(PAD, 61) ^ (PAD >> 6));
         constexpr word C_PAD_PLUS_S1 = PAD + C_S1_PAD;
@@ -709,12 +730,18 @@ class SHA512 {
 
     template <word PAD>
     static void compress_pad128_64bytekey(const word key_words[8], word out[8]) noexcept {
-#if defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9))
         if (native_compressor() != nullptr) {
-            compress_native_arm64_pad64(key_words, out, PAD);
+            alignas(64) std::array<word, 16> words;
+            words.fill(PAD);
+            for (unsigned i = 0; i < 8; ++i)
+                words[i] = key_words[i] ^ PAD;
+
+            auto state = IV_;
+            compress_words(state, words.data());
+            for (unsigned i = 0; i < 8; ++i)
+                out[i] = state[i];
             return;
         }
-#endif
         constexpr word C_S0_PAD = (std::rotr(PAD, 1) ^ std::rotr(PAD, 8) ^ (PAD >> 7));
         constexpr word C_S1_PAD = (std::rotr(PAD, 19) ^ std::rotr(PAD, 61) ^ (PAD >> 6));
         constexpr word C_PAD_PLUS_S0 = PAD + C_S0_PAD;
@@ -811,6 +838,57 @@ class SHA512 {
 
    public:
     SHA512() noexcept { reset(); }
+
+    // Disponibilidade do kernel no binário (tempo de compilação), distinta do suporte da CPU.
+    static constexpr bool native_sha512_kernel_compiled() noexcept {
+#if ((defined(__x86_64__) || defined(__i386__)) && ((defined(__clang__) && __clang_major__ >= 17) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14))) || \
+    (defined(__aarch64__) && ((defined(__clang__) && __clang_major__ >= 14) || (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9)))
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    static constexpr bool scalar_backend_compiled() noexcept { return true; }
+
+    static constexpr bool sse_backend_compiled() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    static constexpr bool avx2_backend_compiled() noexcept { return sse_backend_compiled(); }
+    static constexpr bool avx512_backend_compiled() noexcept { return sse_backend_compiled(); }
+    static constexpr bool batch_simd_kernels_compiled() noexcept { return sse_backend_compiled(); }
+
+    // Capacidades reais da CPU/sistema operacional, distintas dos kernels compilados.
+    static bool has_sse_backend() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        const auto cpu = x86_capabilities();
+        return cpu.sse41 && cpu.ssse3;
+#else
+        return false;
+#endif
+    }
+
+    static bool has_avx2_backend() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        return x86_capabilities().avx2;
+#else
+        return false;
+#endif
+    }
+
+    static bool has_avx512_backend() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        const auto cpu = x86_capabilities();
+        return cpu.avx512f && cpu.avx512vl;
+#else
+        return false;
+#endif
+    }
 
     // Disponibiliza a decisão do dispatcher para benchmarks e diagnósticos.
     static bool has_native_sha512() noexcept { return native_compressor() != nullptr; }
@@ -912,12 +990,12 @@ class SHA512 {
         ctx.finalize(out);
     }
 
-    void preset(const void* prefix, std::size_t prefix_len, const std::uint8_t suffix_len) noexcept {
+    void preset(const void* prefix, std::size_t prefix_len, std::size_t suffix_len) noexcept {
         reset();
         update(prefix, prefix_len);
         template_suffix_len_ = suffix_len;
 
-        if (suffix_len <= 111 - buffer_size_) {
+        if (buffer_size_ <= 111 && suffix_len <= 111 - buffer_size_) {
             template_single_block_ = true;
 
             alignas(64) std::array<byte, block_size> block{};
@@ -935,10 +1013,7 @@ class SHA512 {
             store_be64(block.data() + 112, bit_hi);
             store_be64(block.data() + 120, bit_lo);
 
-            if (native_compressor() == nullptr)
-                build_template_tables(block.data());
-            else
-                template_skip_ = 0;
+            build_template_tables(block.data());
         } else {
             template_single_block_ = false;
             template_skip_ = 0;
@@ -957,28 +1032,30 @@ class SHA512 {
             return;
         }
 
-        // if (native_compressor() != nullptr) {
-        //     alignas(64) std::array<byte, block_size> block{};
-        //     if (buffer_size_ != 0)
-        //         std::memcpy(block.data(), buffer_.data(), buffer_size_);
-        //     if (suffix_len != 0)
-        //         std::memcpy(block.data() + buffer_size_, suffix, suffix_len);
+        // O cache de rounds é software. Se houver SHA-512 nativo, monte o bloco
+        // final completo e deixe o dispatcher escolher o kernel de hardware.
+        if (native_compressor() != nullptr) {
+            alignas(64) std::array<byte, block_size> block{};
+            if (buffer_size_ != 0)
+                std::memcpy(block.data(), buffer_.data(), buffer_size_);
+            if (suffix_len != 0)
+                std::memcpy(block.data() + buffer_size_, suffix, suffix_len);
 
-        //     const std::size_t used = buffer_size_ + suffix_len;
-        //     block[used] = 0x80;
+            const std::size_t used = buffer_size_ + suffix_len;
+            block[used] = 0x80;
 
-        //     const std::uint64_t bytes = total_lo_ + static_cast<std::uint64_t>(suffix_len);
-        //     const std::uint64_t high_bytes = total_hi_ + (bytes < total_lo_ ? 1u : 0u);
-        //     const std::uint64_t bit_lo = bytes << 3;
-        //     const std::uint64_t bit_hi = (high_bytes << 3) | (bytes >> 61);
-        //     store_be64(block.data() + 112, bit_hi);
-        //     store_be64(block.data() + 120, bit_lo);
+            const std::uint64_t bytes = total_lo_ + static_cast<std::uint64_t>(suffix_len);
+            const std::uint64_t high_bytes = total_hi_ + (bytes < total_lo_ ? 1u : 0u);
+            const std::uint64_t bit_lo = bytes << 3;
+            const std::uint64_t bit_hi = (high_bytes << 3) | (bytes >> 61);
+            store_be64(block.data() + 112, bit_hi);
+            store_be64(block.data() + 120, bit_lo);
 
-        //     auto state = h_;
-        //     compress(state, block.data());
-        //     write_digest(state, out);
-        //     return;
-        // }
+            auto state = h_;
+            compress(state, block.data());
+            write_digest(state, out);
+            return;
+        }
 
         alignas(64) std::array<word, 16> w = template_w_;
 
@@ -1027,6 +1104,7 @@ class SHA512 {
         write_digest(state, out);
     }
 
+   public:
     void complete_batch_scalar(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
         const auto* base = static_cast<const byte*>(suffixes);
         std::size_t i = 0;
@@ -1038,7 +1116,8 @@ class SHA512 {
             complete(base + i * stride, out + i * digest_size);
     }
 
-#if defined(__SSE4_1__)
+   private:
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
     // Tabelas K512 pré-broadcastadas em tempo de compilação (zero inicialização por chamada).
     // Antes: 80/160/240 broadcasts _mm_set1_epi64x eram executados a cada invocação
     // de complete_batch_*. Agora as constantes residem diretas em .rodata alinhadas.
@@ -1052,7 +1131,7 @@ class SHA512 {
         }
     };
 
-    void complete_batch_sse(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
+    __attribute__((target("sse4.1"))) void complete_batch_sse(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
         static constexpr K512_SSE_Table k512_sse_tbl{K_};
         const auto* base = static_cast<const byte*>(suffixes);
         const std::size_t suffix_len = template_suffix_len_;
@@ -1090,29 +1169,29 @@ class SHA512 {
                                    _mm_set1_epi64x(h_[3]), _mm_set1_epi64x(h_[4]), _mm_set1_epi64x(h_[5]),
                                    _mm_set1_epi64x(h_[6]), _mm_set1_epi64x(h_[7])};
 
-        auto ror64 = [](__m128i x, int n) {
+        auto ror64 = [&](__m128i x, int n) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_srli_epi64(x, n), _mm_slli_epi64(x, 64 - n));
         };
-        auto ch_vec = [](__m128i x, __m128i y, __m128i z)
+        auto ch_vec = [&](__m128i x, __m128i y, __m128i z) __attribute__((target("sse4.1")))
                           { return _mm_xor_si128(z, _mm_and_si128(x, _mm_xor_si128(y, z))); };
-        auto maj_vec = [](__m128i x, __m128i y, __m128i z) {
+        auto maj_vec = [&](__m128i x, __m128i y, __m128i z) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_and_si128(x, y), _mm_and_si128(z, _mm_xor_si128(x, y)));
         };
-        auto s0_vec = [&](__m128i x) {
+        auto s0_vec = [&](__m128i x) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_xor_si128(ror64(x, 1), _mm_shuffle_epi8(x, v_shuf_ror8)), _mm_srli_epi64(x, 7));
         };
-        auto s1_vec = [&](__m128i x) {
+        auto s1_vec = [&](__m128i x) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_xor_si128(ror64(x, 19), ror64(x, 61)), _mm_srli_epi64(x, 6));
         };
-        auto big0_vec = [&](__m128i x) {
+        auto big0_vec = [&](__m128i x) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_xor_si128(ror64(x, 28), ror64(x, 34)), ror64(x, 39));
         };
-        auto big1_vec = [&](__m128i x) {
+        auto big1_vec = [&](__m128i x) __attribute__((target("sse4.1"))) {
             return _mm_xor_si128(_mm_xor_si128(ror64(x, 14), ror64(x, 18)), ror64(x, 41));
         };
 
         auto round_step = [&](__m128i& a, __m128i& b, __m128i& c, __m128i& d, __m128i& e, __m128i& f, __m128i& g,
-                              __m128i& h, __m128i k_term, __m128i w_val) {
+                              __m128i& h, __m128i k_term, __m128i w_val) __attribute__((target("sse4.1"))) {
             __m128i kw = _mm_add_epi64(k_term, w_val);
             __m128i h_kw = _mm_add_epi64(h, kw);
             __m128i e_terms = _mm_add_epi64(big1_vec(e), ch_vec(e, f, g));
@@ -1234,7 +1313,7 @@ class SHA512 {
     }
 #endif
 
-#if defined(__AVX2__)
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
     struct K512_AVX2_Table {
         alignas(32) std::uint64_t data[80][4];
         constexpr K512_AVX2_Table(const std::array<word, 80>& K) : data{} {
@@ -1244,7 +1323,7 @@ class SHA512 {
         }
     };
 
-    void complete_batch_avx2(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
+    __attribute__((target("avx2"))) void complete_batch_avx2(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
         static constexpr K512_AVX2_Table k512_avx2_tbl{K_};
         const auto* base = static_cast<const byte*>(suffixes);
         const std::size_t suffix_len = template_suffix_len_;
@@ -1282,31 +1361,31 @@ class SHA512 {
                                    _mm256_set1_epi64x(h_[3]), _mm256_set1_epi64x(h_[4]), _mm256_set1_epi64x(h_[5]),
                                    _mm256_set1_epi64x(h_[6]), _mm256_set1_epi64x(h_[7])};
 
-        auto ror64 = [](__m256i x, int n) {
+        auto ror64 = [&](__m256i x, int n) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_srli_epi64(x, n), _mm256_slli_epi64(x, 64 - n));
         };
-        auto ch_vec = [](__m256i x, __m256i y, __m256i z) {
+        auto ch_vec = [&](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(z, _mm256_and_si256(x, _mm256_xor_si256(y, z)));
         };
-        auto maj_vec = [](__m256i x, __m256i y, __m256i z) {
+        auto maj_vec = [&](__m256i x, __m256i y, __m256i z) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_and_si256(x, y), _mm256_and_si256(z, _mm256_xor_si256(x, y)));
         };
-        auto s0_vec = [&](__m256i x) {
+        auto s0_vec = [&](__m256i x) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_xor_si256(ror64(x, 1), _mm256_shuffle_epi8(x, v_shuf_ror8)),
                                     _mm256_srli_epi64(x, 7));
         };
-        auto s1_vec = [&](__m256i x) {
+        auto s1_vec = [&](__m256i x) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_xor_si256(ror64(x, 19), ror64(x, 61)), _mm256_srli_epi64(x, 6));
         };
-        auto big0_vec = [&](__m256i x) {
+        auto big0_vec = [&](__m256i x) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_xor_si256(ror64(x, 28), ror64(x, 34)), ror64(x, 39));
         };
-        auto big1_vec = [&](__m256i x) {
+        auto big1_vec = [&](__m256i x) __attribute__((target("avx2"))) {
             return _mm256_xor_si256(_mm256_xor_si256(ror64(x, 14), ror64(x, 18)), ror64(x, 41));
         };
 
         auto round_step = [&](__m256i& a, __m256i& b, __m256i& c, __m256i& d, __m256i& e, __m256i& f, __m256i& g,
-                              __m256i& h, __m256i k_term, __m256i w_val) {
+                              __m256i& h, __m256i k_term, __m256i w_val) __attribute__((target("avx2"))) {
             __m256i kw = _mm256_add_epi64(k_term, w_val);
             __m256i h_kw = _mm256_add_epi64(h, kw);
             __m256i e_terms = _mm256_add_epi64(big1_vec(e), ch_vec(e, f, g));
@@ -1435,7 +1514,7 @@ class SHA512 {
     }
 #endif
 
-#if defined(__AVX512F__) && defined(__AVX512VL__)
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
     struct K512_AVX512_Table {
         alignas(64) std::uint64_t data[80][8];
         constexpr K512_AVX512_Table(const std::array<word, 80>& K) : data{} {
@@ -1445,7 +1524,7 @@ class SHA512 {
         }
     };
 
-    void complete_batch_avx512(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
+    __attribute__((target("avx512f,avx512vl"))) void complete_batch_avx512(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
         static constexpr K512_AVX512_Table k512_avx512_tbl{K_};
         const auto* base = static_cast<const byte*>(suffixes);
         const std::size_t suffix_len = template_suffix_len_;
@@ -1475,29 +1554,29 @@ class SHA512 {
                                    _mm512_set1_epi64(h_[3]), _mm512_set1_epi64(h_[4]), _mm512_set1_epi64(h_[5]),
                                    _mm512_set1_epi64(h_[6]), _mm512_set1_epi64(h_[7])};
 
-        auto ch_vec = [](__m512i x, __m512i y, __m512i z)
+        auto ch_vec = [&](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl")))
                           { return _mm512_ternarylogic_epi64(x, y, z, 0xCA); };
-        auto maj_vec = [](__m512i x, __m512i y, __m512i z)
+        auto maj_vec = [&](__m512i x, __m512i y, __m512i z) __attribute__((target("avx512f,avx512vl")))
                            { return _mm512_ternarylogic_epi64(x, y, z, 0xE8); };
-        auto big0_vec = [](__m512i x) {
+        auto big0_vec = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
             return _mm512_ternarylogic_epi64(_mm512_ror_epi64(x, 28), _mm512_ror_epi64(x, 34), _mm512_ror_epi64(x, 39),
                                              0x96);
         };
-        auto big1_vec = [](__m512i x) {
+        auto big1_vec = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
             return _mm512_ternarylogic_epi64(_mm512_ror_epi64(x, 14), _mm512_ror_epi64(x, 18), _mm512_ror_epi64(x, 41),
                                              0x96);
         };
-        auto s0_vec = [](__m512i x) {
+        auto s0_vec = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
             return _mm512_ternarylogic_epi64(_mm512_ror_epi64(x, 1), _mm512_ror_epi64(x, 8), _mm512_srli_epi64(x, 7),
                                              0x96);
         };
-        auto s1_vec = [](__m512i x) {
+        auto s1_vec = [&](__m512i x) __attribute__((target("avx512f,avx512vl"))) {
             return _mm512_ternarylogic_epi64(_mm512_ror_epi64(x, 19), _mm512_ror_epi64(x, 61), _mm512_srli_epi64(x, 6),
                                              0x96);
         };
 
         auto round_step = [&](__m512i& a, __m512i& b, __m512i& c, __m512i& d, __m512i& e, __m512i& f, __m512i& g,
-                              __m512i& h, __m512i k_term, __m512i w_val) {
+                              __m512i& h, __m512i k_term, __m512i w_val) __attribute__((target("avx512f,avx512vl"))) {
             __m512i kw = _mm512_add_epi64(k_term, w_val);
             __m512i h_kw = _mm512_add_epi64(h, kw);
             __m512i e_terms = _mm512_add_epi64(big1_vec(e), ch_vec(e, f, g));
@@ -1613,49 +1692,57 @@ class SHA512 {
     }
 #endif
 
+   public:
     void complete_batch(const void* suffixes, std::size_t stride, byte* out, std::size_t count) const noexcept {
-        // if (native_compressor() != nullptr) {
-        //     complete_batch_scalar(suffixes, stride, out, count);
-        //     return;
-        // }
         if (!template_single_block_ || count == 0) {
             complete_batch_scalar(suffixes, stride, out, count);
             return;
         }
 
-#if defined(__AVX512F__) && defined(__AVX512VL__)
-        complete_batch_avx512(suffixes, stride, out, count);
-#elif defined(__AVX2__)
-        complete_batch_avx2(suffixes, stride, out, count);
-#elif defined(__SSE4_1__)
-        complete_batch_sse(suffixes, stride, out, count);
-#else
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        const auto cpu = x86_capabilities();
+        if (count >= 8 && cpu.avx512f && cpu.avx512vl) {
+            complete_batch_avx512(suffixes, stride, out, count);
+            return;
+        }
+        if (count >= 4 && cpu.avx2) {
+            complete_batch_avx2(suffixes, stride, out, count);
+            return;
+        }
+        if (count >= 2 && cpu.sse41 && cpu.ssse3) {
+            complete_batch_sse(suffixes, stride, out, count);
+            return;
+        }
+#endif
         complete_batch_scalar(suffixes, stride, out, count);
-#endif
     }
 
-    static constexpr unsigned simd_lanes() noexcept {
-#if defined(__AVX512F__) && defined(__AVX512VL__)
-        return 8;
-#elif defined(__AVX2__)
-        return 4;
-#elif defined(__SSE4_1__)
-        return 2;
-#else
+    // Maior largura disponível na CPU; complete_batch também considera o tamanho do lote.
+    static unsigned simd_lanes() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        const auto cpu = x86_capabilities();
+        if (cpu.avx512f && cpu.avx512vl)
+            return 8;
+        if (cpu.avx2)
+            return 4;
+        if (cpu.sse41 && cpu.ssse3)
+            return 2;
+#endif
         return 1;
-#endif
     }
 
-    static constexpr const char* simd_name() noexcept {
-#if defined(__AVX512F__) && defined(__AVX512VL__)
-        return "avx512";
-#elif defined(__AVX2__)
-        return "avx2";
-#elif defined(__SSE4_1__)
-        return "sse4.1";
-#else
-        return "scalar";
+    // Nome do backend SIMD máximo disponível, não necessariamente o usado em lotes pequenos.
+    static const char* simd_name() noexcept {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+        const auto cpu = x86_capabilities();
+        if (cpu.avx512f && cpu.avx512vl)
+            return "avx512f+vl";
+        if (cpu.avx2)
+            return "avx2";
+        if (cpu.sse41 && cpu.ssse3)
+            return "sse4.1+ssse3";
 #endif
+        return "scalar";
     }
 };
 }  // namespace crypto

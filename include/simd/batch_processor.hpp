@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -8,6 +10,7 @@
 
 #include "../config.hpp"
 #include "../crypto/bip39.hpp"
+#include "../crypto/sha512.hpp"
 #include "../crypto/hmac_sha512.hpp"
 #include "../crypto/pbkdf2_simd.hpp"
 #include "../crypto/sha256.hpp"
@@ -127,7 +130,8 @@ class SimdBatchProcessor : public IBatchProcessor {
     }
 
     // PBKDF2 SIMD. Dispatch por template (Arch é constexpr).
-    static void run_pbkdf2(Pbkdf2Work& work, const SaltCache& salt, uint32_t rounds, size_t count, bool is_flush) noexcept {
+    static void run_pbkdf2(Pbkdf2Work& work, const SaltCache& salt,
+                           uint32_t rounds, size_t count) noexcept {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
         if (count == BATCH_SIZE) {
             if constexpr (Arch == SimdArch::AVX512) {
@@ -187,22 +191,9 @@ class SimdBatchProcessor : public IBatchProcessor {
             }
             return;
         }
-#elif defined(__aarch64__) || defined(__arm__)
-        // ARM64 / NEON: Pipeline 4-way acionado!
-        if (count == BATCH_SIZE) {
-            // pbkdf2_hmac_sha512_4way_neon(
-            //     work.pw.data() + 0 * PW_SLOT_SIZE, work.pw_len[0],
-            //     work.pw.data() + 1 * PW_SLOT_SIZE, work.pw_len[1],
-            //     work.pw.data() + 2 * PW_SLOT_SIZE, work.pw_len[2],
-            //     work.pw.data() + 3 * PW_SLOT_SIZE, work.pw_len[3],
-            //     salt.buf.data(), salt.len, rounds,
-            //     work.seed.data() + 0 * 64, work.seed.data() + 1 * 64,
-            //     work.seed.data() + 2 * 64, work.seed.data() + 3 * 64,
-            //     salt.block64.data(), salt.kw_salt.data());
-            // return;
-        }
 #endif
-        // Sobra do último lote OU caminho escalar completo.
+        // Sobra do último lote ou backend sem kernel PBKDF2 SIMD.
+        // O fallback usa a API PBKDF2 existente, cujo HMAC usa crypto::SHA512.
         for (size_t b = 0; b < count; ++b)
             crypto::pbkdf2_hmac_sha512(work.pw.data() + b * PW_SLOT_SIZE,
                                        work.pw_len[b],
@@ -307,6 +298,14 @@ class SimdBatchProcessor : public IBatchProcessor {
     // ---------------------------------------------------------------------
     // Preparação do bloco BIP-39 para SHA-256 (K=1..N candidatos).
     // ---------------------------------------------------------------------
+    static uint32_t load_be32(const uint8_t* p) noexcept {
+        uint32_t value;
+        std::memcpy(&value, p, sizeof(value));
+        if constexpr (std::endian::native == std::endian::little)
+            value = std::byteswap(value);
+        return value;
+    }
+
     static void setup_filter_block(std::array<uint8_t, 64>& block,
                                    const CandidateBatch& cb, size_t b,
                                    const OptimizedMnemonics& opt) noexcept {
@@ -401,10 +400,10 @@ class SimdBatchProcessor : public IBatchProcessor {
                 for (int b = 0; b < 32; ++b) {
                     alignas(64) std::array<uint8_t, 64> block;
                     setup_filter_block(block, cb, b, opt);
-                    const uint32_t* W = reinterpret_cast<const uint32_t*>(block.data());
                     for (int w = 0; w < 16; ++w) {
-                        if (b < 16) blocks1[w][b]      = __builtin_bswap32(W[w]);
-                        else        blocks2[w][b - 16] = __builtin_bswap32(W[w]);
+                        const uint32_t value = load_be32(block.data() + w * sizeof(uint32_t));
+                        if (b < 16) blocks1[w][b]      = value;
+                        else        blocks2[w][b - 16] = value;
                     }
                 }
                 sha256_transform_avx512(&s1, blocks1);
@@ -423,10 +422,10 @@ class SimdBatchProcessor : public IBatchProcessor {
                 for (int b = 0; b < 16; ++b) {
                     alignas(64) std::array<uint8_t, 64> block;
                     setup_filter_block(block, cb, b, opt);
-                    const uint32_t* W = reinterpret_cast<const uint32_t*>(block.data());
                     for (int w = 0; w < 16; ++w) {
-                        if (b < 8) blocks1[w][b]     = __builtin_bswap32(W[w]);
-                        else       blocks2[w][b - 8] = __builtin_bswap32(W[w]);
+                        const uint32_t value = load_be32(block.data() + w * sizeof(uint32_t));
+                        if (b < 8) blocks1[w][b]     = value;
+                        else       blocks2[w][b - 8] = value;
                     }
                 }
                 sha256_transform_avx2(&s1, blocks1);
@@ -445,10 +444,10 @@ class SimdBatchProcessor : public IBatchProcessor {
                 for (int b = 0; b < 8; ++b) {
                     alignas(64) std::array<uint8_t, 64> block;
                     setup_filter_block(block, cb, b, opt);
-                    const uint32_t* W = reinterpret_cast<const uint32_t*>(block.data());
                     for (int w = 0; w < 16; ++w) {
-                        if (b < 4) blocks1[w][b]     = __builtin_bswap32(W[w]);
-                        else       blocks2[w][b - 4] = __builtin_bswap32(W[w]);
+                        const uint32_t value = load_be32(block.data() + w * sizeof(uint32_t));
+                        if (b < 4) blocks1[w][b]     = value;
+                        else       blocks2[w][b - 4] = value;
                     }
                 }
                 sha256_transform_sse(&s1, blocks1);
@@ -501,7 +500,7 @@ class SimdBatchProcessor : public IBatchProcessor {
         // Working set vive só aqui.
         Pbkdf2Work work;
         assemble_phrases(work, pb, opt);
-        run_pbkdf2(work, ctx.salt, cfg.pbkdf2_rounds, pb.size, is_flush);
+        run_pbkdf2(work, ctx.salt, cfg.pbkdf2_rounds, pb.size);
         verify_targets(work, pb, ctx, cfg, opt, found, result_mutex,
                        success, result_mnemonic);
 

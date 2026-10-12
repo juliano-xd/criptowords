@@ -186,7 +186,7 @@ if(CRYPTOWORDS_ENABLE_HIP AND CW_X86)
         add_custom_command(
             OUTPUT  ${HIP_OBJECT}
             COMMAND ${HIPCC_EXECUTABLE}
-                    -O2 -ffast-math
+                    -O3 -ffast-math
                     --offload-arch=${_HIP_NATIVE_ARCH}
                     -std=c++23 -fPIC
                     -Xclang -fno-cuda-host-device-constexpr
